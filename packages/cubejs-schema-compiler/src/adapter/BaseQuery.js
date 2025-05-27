@@ -418,7 +418,7 @@ export class BaseQuery {
 
   /**
    *
-   * @returns {Array<Array<string>>}
+   * @returns {Array<string | Array<string>>}
    */
   get allJoinHints() {
     if (!this.collectedJoinHints) {
@@ -2136,6 +2136,12 @@ export class BaseQuery {
     ));
   }
 
+  /**
+   *
+   * @param {string} cube
+   * @param {boolean} [isLeftJoinCondition]
+   * @returns {[string, string, string?]}
+   */
   rewriteInlineCubeSql(cube, isLeftJoinCondition) {
     const sql = this.cubeSql(cube);
     const cubeAlias = this.cubeAlias(cube);
@@ -2243,6 +2249,11 @@ export class BaseQuery {
     return this.filtersWithoutSubQueriesValue;
   }
 
+  /**
+   *
+   * @param {string} dimension
+   * @returns {{ prefix: string, subQuery: this, cubeName: string }}
+   */
   subQueryDescription(dimension) {
     const symbol = this.cubeEvaluator.dimensionByPath(dimension);
     const [cubeName, name] = this.cubeEvaluator.parsePath('dimensions', dimension);
@@ -2287,6 +2298,12 @@ export class BaseQuery {
     return { prefix, subQuery, cubeName };
   }
 
+  /**
+   *
+   * @param {string} cubeName
+   * @param {string} name
+   * @returns {string}
+   */
   subQueryName(cubeName, name) {
     return `${cubeName}_${name}_subquery`;
   }
@@ -2647,6 +2664,11 @@ export class BaseQuery {
     );
   }
 
+  /**
+   *
+   * @param {() => void} fn
+   * @returns {Array<string>}
+   */
   collectSubQueryDimensionsFor(fn) {
     const context = { subQueryDimensions: [] };
     this.evaluateSymbolSqlWithContext(
@@ -3209,6 +3231,11 @@ export class BaseQuery {
     return strings.join(' || ');
   }
 
+  /**
+   *
+   * @param {string} cubeName
+   * @returns {Array<string>}
+   */
   primaryKeyNames(cubeName) {
     const primaryKeys = this.cubeEvaluator.primaryKeys[cubeName];
     if (!primaryKeys || !primaryKeys.length) {
@@ -3715,8 +3742,8 @@ export class BaseQuery {
 
   /**
    *
-   * @param options
-   * @returns {BaseQuery}
+   * @param {unknown} options
+   * @returns {this}
    */
   newSubQuery(options) {
     const QueryClass = this.constructor;
