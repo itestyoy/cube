@@ -22,6 +22,7 @@ import { CompilerInterface } from './PrepareCompiler';
 import { YamlCompiler } from './YamlCompiler';
 import { CubeDictionary } from './CubeDictionary';
 import { CompilerCache } from './CompilerCache';
+import { perfTracker } from './PerfTracker';
 
 const NATIVE_IS_SUPPORTED = isNativeSupported();
 
@@ -206,127 +207,157 @@ export class DataSchemaCompiler {
   }
 
   protected async doCompile() {
-    const files = await this.repository.dataSchemaFiles();
+    // Start overall compilation timing
+    const compileTimer = perfTracker.start('doCompile', true);
 
-    this.pythonContext = await this.loadPythonContext(files, 'globals.py');
-    this.yamlCompiler.initFromPythonContext(this.pythonContext);
+    try {
+      const files = await this.repository.dataSchemaFiles();
 
-    const toCompile = files.filter((f) => !this.filesToCompile || !this.filesToCompile.length || this.filesToCompile.indexOf(f.fileName) !== -1);
+      console.log(`Compiling ${files.length} files...`);
 
-    const errorsReport = new ErrorReporter(null, [], this.errorReportOptions);
-    this.errorsReporter = errorsReport;
+      this.pythonContext = await this.loadPythonContext(files, 'globals.py');
+      this.yamlCompiler.initFromPythonContext(this.pythonContext);
 
-    const transpilationWorkerThreads = getEnv('transpilationWorkerThreads');
-    const transpilationNative = getEnv('transpilationNative');
-    const transpilationNativeThreadsCount = getThreadsCount();
-    const { compilerId } = this;
+      const toCompile = files.filter((f) => !this.filesToCompile || !this.filesToCompile.length || this.filesToCompile.indexOf(f.fileName) !== -1);
 
-    if (!transpilationNative && transpilationWorkerThreads) {
-      const wc = getEnv('transpilationWorkerThreadsCount');
-      this.workerPool = workerpool.pool(
-        path.join(__dirname, 'transpilers/transpiler_worker'),
-        wc > 0 ? { maxWorkers: wc } : undefined,
-      );
-    }
+      const errorsReport = new ErrorReporter(null, [], this.errorReportOptions);
+      this.errorsReporter = errorsReport;
 
-    const transpile = async (stage: CompileStage) => {
-      let cubeNames: string[] = [];
-      let cubeSymbols: Record<string, Record<string, boolean>> = {};
-      let transpilerNames: string[] = [];
-      let results;
+      const transpilationWorkerThreads = getEnv('transpilationWorkerThreads');
+      const transpilationNative = getEnv('transpilationNative');
+      const transpilationNativeThreadsCount = getThreadsCount();
+      const { compilerId } = this;
 
-      if (transpilationNative || transpilationWorkerThreads) {
-        cubeNames = Object.keys(this.cubeDictionary.byId);
-        // We need only cubes and all its member names for transpiling.
-        // Cubes doesn't change during transpiling, but are changed during compilation phase,
-        // so we can prepare them once for every phase.
-        // Communication between main and worker threads uses
-        // The structured clone algorithm (@see https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Structured_clone_algorithm)
-        // which doesn't allow passing any function objects, so we need to sanitize the symbols.
-        // Communication with native backend also involves deserialization.
-        cubeSymbols = Object.fromEntries(
-          Object.entries(this.cubeSymbols.symbols as Record<string, Record<string, any>>)
-            .map(
-              ([key, value]: [string, Record<string, any>]) => [key, Object.fromEntries(
-                Object.keys(value).map((k) => [k, true]),
-              )],
-            ),
+      if (!transpilationNative && transpilationWorkerThreads) {
+        const wc = getEnv('transpilationWorkerThreadsCount');
+        this.workerPool = workerpool.pool(
+          path.join(__dirname, 'transpilers/transpiler_worker'),
+          wc > 0 ? { maxWorkers: wc } : undefined,
         );
-
-        // Transpilers are the same for all files within phase.
-        transpilerNames = this.transpilers.map(t => t.constructor.name);
       }
 
-      if (transpilationNative) {
-        // Warming up swc compiler cache
-        const dummyFile = {
-          fileName: 'dummy.js',
-          content: ';',
-        };
+      const transpile = async (stage: CompileStage) => {
+      // Time transpilation stage
+        const transpileTimer = perfTracker.start(`transpilation-stage-${stage}`);
 
-        await this.transpileJsFile(dummyFile, errorsReport, { cubeNames, cubeSymbols, transpilerNames, contextSymbols: CONTEXT_SYMBOLS, compilerId, stage });
+        let cubeNames: string[] = [];
+        let cubeSymbols: Record<string, Record<string, boolean>> = {};
+        let transpilerNames: string[] = [];
+        let results;
 
-        const nonJsFilesTasks = toCompile.filter(file => !file.fileName.endsWith('.js'))
-          .map(f => this.transpileFile(f, errorsReport, { transpilerNames, compilerId }));
+        if (transpilationNative || transpilationWorkerThreads) {
+          cubeNames = Object.keys(this.cubeDictionary.byId);
+          // We need only cubes and all its member names for transpiling.
+          // Cubes doesn't change during transpiling, but are changed during compilation phase,
+          // so we can prepare them once for every phase.
+          // Communication between main and worker threads uses
+          // The structured clone algorithm (@see https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Structured_clone_algorithm)
+          // which doesn't allow passing any function objects, so we need to sanitize the symbols.
+          // Communication with native backend also involves deserialization.
+          cubeSymbols = Object.fromEntries(
+            Object.entries(this.cubeSymbols.symbols as Record<string, Record<string, any>>)
+              .map(
+                ([key, value]: [string, Record<string, any>]) => [key, Object.fromEntries(
+                  Object.keys(value).map((k) => [k, true]),
+                )],
+              ),
+          );
 
-        const jsFiles = toCompile.filter(file => file.fileName.endsWith('.js'));
-        let JsFilesTasks = [];
-
-        if (jsFiles.length > 0) {
-          let jsChunks;
-          if (jsFiles.length < transpilationNativeThreadsCount * transpilationNativeThreadsCount) {
-            jsChunks = [jsFiles];
-          } else {
-            const baseSize = Math.floor(jsFiles.length / transpilationNativeThreadsCount);
-            jsChunks = [];
-            for (let i = 0; i < transpilationNativeThreadsCount; i++) {
-              // For the last part, we take the remaining files so we don't lose the extra ones.
-              const start = i * baseSize;
-              const end = (i === transpilationNativeThreadsCount - 1) ? jsFiles.length : start + baseSize;
-              jsChunks.push(jsFiles.slice(start, end));
-            }
-          }
-          JsFilesTasks = jsChunks.map(chunk => this.transpileJsFilesBulk(chunk, errorsReport, { transpilerNames, compilerId }));
+          // Transpilers are the same for all files within phase.
+          transpilerNames = this.transpilers.map(t => t.constructor.name);
         }
 
-        results = (await Promise.all([...nonJsFilesTasks, ...JsFilesTasks])).flat();
-      } else if (transpilationWorkerThreads) {
-        results = await Promise.all(toCompile.map(f => this.transpileFile(f, errorsReport, { cubeNames, cubeSymbols, transpilerNames })));
-      } else {
-        results = await Promise.all(toCompile.map(f => this.transpileFile(f, errorsReport, {})));
-      }
-
-      return results.filter(f => !!f);
-    };
-
-    const compilePhase = async (compilers: CompileCubeFilesCompilers, stage: 0 | 1 | 2 | 3) => this.compileCubeFiles(compilers, await transpile(stage), errorsReport);
-
-    return compilePhase({ cubeCompilers: this.cubeNameCompilers }, 0)
-      .then(() => compilePhase({ cubeCompilers: this.preTranspileCubeCompilers.concat([this.viewCompilationGate]) }, 1))
-      .then(() => (this.viewCompilationGate.shouldCompileViews() ?
-        compilePhase({ cubeCompilers: this.viewCompilers }, 2)
-        : Promise.resolve()))
-      .then(() => compilePhase({
-        cubeCompilers: this.cubeCompilers,
-        contextCompilers: this.contextCompilers,
-      }, 3))
-      .then(() => {
         if (transpilationNative) {
-          // Clean up cache
+        // Warming up swc compiler cache
           const dummyFile = {
-            fileName: 'terminate.js',
+            fileName: 'dummy.js',
             content: ';',
           };
 
-          this.transpileJsFile(
-            dummyFile,
-            errorsReport,
-            { cubeNames: [], cubeSymbols: {}, transpilerNames: [], contextSymbols: {}, compilerId: this.compilerId, stage: 0 }
-          ).then(() => undefined);
-        } else if (transpilationWorkerThreads && this.workerPool) {
-          this.workerPool.terminate();
+          await this.transpileJsFile(dummyFile, errorsReport, { cubeNames, cubeSymbols, transpilerNames, contextSymbols: CONTEXT_SYMBOLS, compilerId, stage });
+
+          const nonJsFilesTasks = toCompile.filter(file => !file.fileName.endsWith('.js'))
+            .map(f => this.transpileFile(f, errorsReport, { transpilerNames, compilerId }));
+
+          const jsFiles = toCompile.filter(file => file.fileName.endsWith('.js'));
+          let JsFilesTasks = [];
+
+          if (jsFiles.length > 0) {
+            let jsChunks;
+            if (jsFiles.length < transpilationNativeThreadsCount * transpilationNativeThreadsCount) {
+              jsChunks = [jsFiles];
+            } else {
+              const baseSize = Math.floor(jsFiles.length / transpilationNativeThreadsCount);
+              jsChunks = [];
+              for (let i = 0; i < transpilationNativeThreadsCount; i++) {
+              // For the last part, we take the remaining files so we don't lose the extra ones.
+                const start = i * baseSize;
+                const end = (i === transpilationNativeThreadsCount - 1) ? jsFiles.length : start + baseSize;
+                jsChunks.push(jsFiles.slice(start, end));
+              }
+            }
+            JsFilesTasks = jsChunks.map(chunk => this.transpileJsFilesBulk(chunk, errorsReport, { transpilerNames, compilerId }));
+          }
+
+          results = (await Promise.all([...nonJsFilesTasks, ...JsFilesTasks])).flat();
+        } else if (transpilationWorkerThreads) {
+          results = await Promise.all(toCompile.map(f => this.transpileFile(f, errorsReport, { cubeNames, cubeSymbols, transpilerNames })));
+        } else {
+          results = await Promise.all(toCompile.map(f => this.transpileFile(f, errorsReport, {})));
         }
-      });
+
+        // End transpilation stage timing
+        transpileTimer.end();
+
+        return results.filter(f => !!f);
+      };
+
+      const compilePhase = async (compilers: CompileCubeFilesCompilers, stage: 0 | 1 | 2 | 3) => {
+        const compilePhaseTimer = perfTracker.start(`compilation-phase-${stage}`);
+        try {
+          return await this.compileCubeFiles(compilers, await transpile(stage), errorsReport);
+        } finally {
+          compilePhaseTimer.end();
+        }
+      };
+
+      return compilePhase({ cubeCompilers: this.cubeNameCompilers }, 0)
+        .then(() => compilePhase({ cubeCompilers: this.preTranspileCubeCompilers.concat([this.viewCompilationGate]) }, 1))
+        .then(() => (this.viewCompilationGate.shouldCompileViews() ?
+          compilePhase({ cubeCompilers: this.viewCompilers }, 2)
+          : Promise.resolve()))
+        .then(() => compilePhase({
+          cubeCompilers: this.cubeCompilers,
+          contextCompilers: this.contextCompilers,
+        }, 3))
+        .then(() => {
+          if (transpilationNative) {
+          // Clean up cache
+            const dummyFile = {
+              fileName: 'terminate.js',
+              content: ';',
+            };
+
+            this.transpileJsFile(
+              dummyFile,
+              errorsReport,
+              { cubeNames: [], cubeSymbols: {}, transpilerNames: [], contextSymbols: {}, compilerId: this.compilerId, stage: 0 }
+            ).then(() => undefined);
+          } else if (transpilationWorkerThreads && this.workerPool) {
+            this.workerPool.terminate();
+          }
+
+          // End overall compilation timing and print performance report
+          compileTimer.end();
+          setImmediate(() => {
+            perfTracker.printReport();
+          });
+        });
+    } catch (error) {
+      // End timing even on error
+      compileTimer.end();
+      throw error;
+    }
   }
 
   public compile() {
@@ -513,7 +544,9 @@ export class DataSchemaCompiler {
           asyncModules
         );
       });
+    const asyncModulesTimer = perfTracker.start('asyncModules.reduce (jinja)');
     await asyncModules.reduce((a: Promise<void>, b: CallableFunction) => a.then(() => b()), Promise.resolve());
+    asyncModulesTimer.end();
     return this.compileObjects(compilers.cubeCompilers || [], cubes, errorsReport)
       .then(() => this.compileObjects(compilers.contextCompilers || [], contexts, errorsReport));
   }
@@ -532,7 +565,9 @@ export class DataSchemaCompiler {
     compiledFiles[file.fileName] = true;
 
     if (file.fileName.endsWith('.js')) {
+      const compileJsFileTimer = perfTracker.start('compileJsFile');
       this.compileJsFile(file, errorsReport, cubes, contexts, exports, asyncModules, toCompile, compiledFiles, { doSyntaxCheck });
+      compileJsFileTimer.end();
     } else if (file.fileName.endsWith('.yml.jinja') || file.fileName.endsWith('.yaml.jinja') ||
       (
         file.fileName.endsWith('.yml') || file.fileName.endsWith('.yaml')
@@ -552,7 +587,9 @@ export class DataSchemaCompiler {
         this.pythonContext!
       ));
     } else if (file.fileName.endsWith('.yml') || file.fileName.endsWith('.yaml')) {
+      const compileYamlFileTimer = perfTracker.start('compileYamlFile');
       this.yamlCompiler.compileYamlFile(file, errorsReport, cubes, contexts, exports, asyncModules, toCompile, compiledFiles);
+      compileYamlFileTimer.end();
     }
   }
 
