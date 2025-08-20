@@ -1,5 +1,5 @@
 # Combined Dockerfile for Cube.js with native Linux build support
-FROM cubejs/rust-cross:x86_64-unknown-linux-gnu-31072025-python-3.11 AS native-builder
+FROM cubejs/rust-cross:aarch64-unknown-linux-gnu-31072025-python-3.11 AS native-builder
 
 # Install Node.js 22 (matching workflow requirements)
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
