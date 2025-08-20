@@ -1,14 +1,27 @@
-# Combined Dockerfile for Cube.js with native Linux build support
-FROM cubejs/rust-cross:aarch64-unknown-linux-gnu-31072025-python-3.11 AS native-builder
+# Start from official Rust image (Debian based)
+FROM rust:1.80-slim AS native-builder
 
-# Install Node.js 22 (matching workflow requirements)
+# Install required system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    build-essential \
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    python3-pip \
+    ca-certificates \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 22 (via NodeSource)
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Yarn and cargo-cp-artifact
+# Install Yarn and cargo-cp-artifact globally
 RUN npm install -g yarn@1.22.22 cargo-cp-artifact@0.1
 
-# Set environment variables for native build
+# Set environment variables for PyO3 and Rust build
 ENV PYTHON_VERSION_CURRENT=3.11
 ENV PYO3_PYTHON=python3.11
 ENV CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu
