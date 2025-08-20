@@ -24,7 +24,7 @@ RUN npm install -g yarn@1.22.22 cargo-cp-artifact@0.1
 # Set environment variables for PyO3 and Rust build
 ENV PYTHON_VERSION_CURRENT=3.11
 ENV PYO3_PYTHON=python3.11
-ENV CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu
+ENV CARGO_BUILD_TARGET=aarch64-unknown-linux-gnu
 
 WORKDIR /cubejs
 
