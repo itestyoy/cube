@@ -4,6 +4,10 @@ FROM rust:1.80-slim AS native-builder
 # Install required system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    pkg-config \
+    libssl-dev \
+    libssl3 \
+    openssl \
     build-essential \
     python3.11 \
     python3.11-dev \
