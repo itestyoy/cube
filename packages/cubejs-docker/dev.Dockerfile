@@ -19,6 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     libclang-dev \
     llvm-dev \
+    binutils \
+    gcc \
+    g++ \
+    libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 22 (via NodeSource)
