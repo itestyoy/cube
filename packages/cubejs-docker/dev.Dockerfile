@@ -15,6 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     ca-certificates \
     pkg-config \
+    clang \
+    libclang-dev \
+    llvm-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 22 (via NodeSource)
@@ -29,6 +32,16 @@ RUN npm install -g yarn@1.22.22 cargo-cp-artifact@0.1
 ENV PYTHON_VERSION_CURRENT=3.11
 ENV PYO3_PYTHON=python3.11
 ENV CARGO_BUILD_TARGET=aarch64-unknown-linux-gnu
+
+# OpenSSL configuration for cross-compilation
+ENV OPENSSL_DIR=/usr
+ENV OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
+ENV OPENSSL_INCLUDE_DIR=/usr/include/openssl
+ENV PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+# Clang configuration for bindgen
+ENV LIBCLANG_PATH=/usr/lib/aarch64-linux-gnu
+ENV BINDGEN_EXTRA_CLANG_ARGS="-I/usr/include"
+
 
 WORKDIR /cubejs
 
