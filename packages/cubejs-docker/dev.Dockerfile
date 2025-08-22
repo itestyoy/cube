@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     binutils \
     gcc \
     g++ \
+    ld \
     libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
