@@ -1,82 +1,3 @@
-# Start from official Rust image (Debian based)
-FROM rust:1.80-slim AS native-builder
-
-# Install required system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    pkg-config \
-    libssl-dev \
-    libssl3 \
-    openssl \
-    build-essential \
-    python3.11 \
-    python3.11-dev \
-    python3.11-venv \
-    python3-pip \
-    ca-certificates \
-    pkg-config \
-    clang \
-    cmake \
-    libclang-dev \
-    llvm-dev \
-    binutils \
-    gcc \
-    g++ \
-    ld \
-    libc6-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Node.js 22 (via NodeSource)
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Yarn and cargo-cp-artifact globally
-RUN npm install -g yarn@1.22.22 cargo-cp-artifact@0.1
-
-# Set environment variables for PyO3 and Rust build
-ENV PYTHON_VERSION_CURRENT=3.11
-ENV PYO3_PYTHON=python3.11
-ENV CARGO_BUILD_TARGET=aarch64-unknown-linux-gnu
-
-# OpenSSL configuration for cross-compilation
-ENV OPENSSL_DIR=/usr
-ENV OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
-ENV OPENSSL_INCLUDE_DIR=/usr/include/openssl
-ENV PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
-# Clang configuration for bindgen
-ENV LIBCLANG_PATH=/usr/lib/aarch64-linux-gnu
-ENV BINDGEN_EXTRA_CLANG_ARGS="-I/usr/include"
-
-
-WORKDIR /cubejs
-
-# Copy minimal files needed for native build
-COPY package.json lerna.json yarn.lock ./
-RUN yarn policies set-version v1.22.22
-
-# Copy only the native backend package for focused build
-COPY packages/cubejs-backend-native/ packages/cubejs-backend-native/
-COPY rust/ rust/
-
-# Build Cube Store
-WORKDIR /cubejs/rust/cubestore
-RUN cargo build --release -j 4 -p cubestore
-
-# Build other Rust components
-WORKDIR /cubejs/rust/cubeorchestrator
-RUN cargo build --release -j 4
-
-WORKDIR /cubejs/rust/cubenativeutils
-RUN cargo build --release -j 4
-
-WORKDIR /cubejs/rust/cubesqlplanner/cubesqlplanner
-RUN cargo build --release -j 4
-
-# Build native component
-WORKDIR /cubejs/packages/cubejs-backend-native
-RUN yarn run native:build-release-python
-
 FROM node:20.17.0-bookworm-slim AS base
 
 ARG IMAGE_VERSION=dev
@@ -188,12 +109,6 @@ RUN yarn install --prod --ignore-scripts
 FROM base as build
 
 RUN yarn install
-
-# Copy pre-built native component from native-builder stage
-COPY --from=native-builder /cubejs/packages/cubejs-backend-native/index.node packages/cubejs-backend-native/
-
-# Copy built applications from previous stages
-COPY --from=native-builder /cubejs/rust/ rust/
 
 # Backend
 COPY rust/cubestore/ rust/cubestore/
