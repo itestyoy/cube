@@ -50,9 +50,6 @@ RUN cargo build --release -j 4
 WORKDIR /cubejs/rust/cubeshared
 RUN cargo build --release -j 4
 
-WORKDIR /cubejs/rust/cubeshared
-RUN cargo build --release -j 4
-
 WORKDIR /cubejs/rust/cubesql
 RUN cargo build --release -j 4
 
