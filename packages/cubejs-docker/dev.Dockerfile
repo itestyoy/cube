@@ -47,6 +47,18 @@ RUN cargo build --release -j 4
 WORKDIR /cubejs/rust/cubesqlplanner/cubesqlplanner
 RUN cargo build --release -j 4
 
+WORKDIR /cubejs/rust/cubesqlplanner/nativebridge
+RUN cargo build --release -j 4
+
+WORKDIR /cubejs/rust/cubeshared
+RUN cargo build --release -j 4
+
+WORKDIR /cubejs/rust/cubeshared
+RUN cargo build --release -j 4
+
+WORKDIR /cubejs/rust/cubesql
+RUN cargo build --release -j 4
+
 # Build native component
 WORKDIR /cubejs/packages/cubejs-backend-native
 RUN yarn run native:build-release-python
@@ -170,8 +182,7 @@ COPY --from=native-builder /cubejs/packages/cubejs-backend-native/index.node pac
 COPY --from=native-builder /cubejs/rust/ rust/
 
 # Backend
-COPY rust/cubestore/ rust/cubestore/
-COPY rust/cubesql/ rust/cubesql/
+COPY rust/ rust/
 COPY packages/cubejs-backend-shared/ packages/cubejs-backend-shared/
 COPY packages/cubejs-base-driver/ packages/cubejs-base-driver/
 COPY packages/cubejs-backend-native/ packages/cubejs-backend-native/
