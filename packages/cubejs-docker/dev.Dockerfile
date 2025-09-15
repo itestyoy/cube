@@ -8,6 +8,16 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # Install Yarn and cargo-cp-artifact
 RUN npm install -g yarn@1.22.22 cargo-cp-artifact@0.1
 
+# Install Rust and Cargo (if not present or not in PATH)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && echo 'source $HOME/.cargo/env' >> $HOME/.bashrc
+
+# Add Cargo to PATH for current session
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Verify Rust installation
+RUN cargo --version && rustc --version
+
 # Set environment variables for native build
 ENV PYTHON_VERSION_CURRENT=3.11
 ENV PYO3_PYTHON=python3.11
