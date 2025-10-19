@@ -155,15 +155,15 @@ RUN yarn config set network-timeout 120000 -g
 # We are doing version bump without updating lock files for the docker package.
 #RUN yarn install --frozen-lockfile
 
-FROM base as prod_base_dependencies
-COPY packages/cubejs-databricks-jdbc-driver/package.json packages/cubejs-databricks-jdbc-driver/package.json
-RUN mkdir packages/cubejs-databricks-jdbc-driver/bin
-RUN echo '#!/usr/bin/env node' > packages/cubejs-databricks-jdbc-driver/bin/post-install
-RUN yarn install --prod
+# FROM base as prod_base_dependencies
+# COPY packages/cubejs-databricks-jdbc-driver/package.json packages/cubejs-databricks-jdbc-driver/package.json
+# RUN mkdir packages/cubejs-databricks-jdbc-driver/bin
+# RUN echo '#!/usr/bin/env node' > packages/cubejs-databricks-jdbc-driver/bin/post-install
+# RUN yarn install --prod
 
-FROM prod_base_dependencies as prod_dependencies
-COPY packages/cubejs-databricks-jdbc-driver/bin packages/cubejs-databricks-jdbc-driver/bin
-RUN yarn install --prod --ignore-scripts
+# FROM prod_base_dependencies as prod_dependencies
+# COPY packages/cubejs-databricks-jdbc-driver/bin packages/cubejs-databricks-jdbc-driver/bin
+# RUN yarn install --prod --ignore-scripts
 
 FROM base as build
 
