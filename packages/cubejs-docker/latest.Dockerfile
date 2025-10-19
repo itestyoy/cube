@@ -23,7 +23,7 @@ ENV PYTHON_VERSION_CURRENT=3.11
 ENV PYO3_PYTHON=python3.11
 ENV CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu
 
-WORKDIR /cube
+WORKDIR /cubejs
 
 # Copy minimal files needed for native build
 COPY package.json lerna.json yarn.lock ./
@@ -33,87 +33,78 @@ RUN yarn policies set-version v1.22.22
 COPY . .
 
 # Build Cube Store
-WORKDIR /cube/rust/cubestore
+WORKDIR /cubejs/rust/cubestore
 RUN cargo build --release -j 4 -p cubestore
 
-# Build other Rust components
-WORKDIR /cube/rust/cubeorchestrator
-RUN cargo build --release -j 4
-
-WORKDIR /cube/rust/cubenativeutils
-RUN cargo build --release -j 4
-
-WORKDIR /cube/rust/cubesqlplanner/cubesqlplanner
-RUN cargo build --release -j 4
-
-WORKDIR /cube/rust/cubeshared
-RUN cargo build --release -j 4
-
-WORKDIR /cube/rust/cubesql
-RUN cargo build --release -j 4
-
 # Build native component
-WORKDIR /cube/packages/cubejs-backend-native
+WORKDIR /cubejs/packages/cubejs-backend-native
 RUN yarn run native:build-release-python
 
+FROM node:20.17.0-bookworm-slim AS base
 
+ARG IMAGE_VERSION=unknown
 
-FROM node:20.17.0-bookworm-slim AS builder
+ENV CUBEJS_DOCKER_IMAGE_VERSION=$IMAGE_VERSION
+ENV CUBEJS_DOCKER_IMAGE_TAG=unknown
+ENV CI=0
+
+RUN DEBIAN_FRONTEND=noninteractive \
+    && apt-get update \
+    # python3 package is necessary to install `python3` executable for node-gyp
+    && apt-get install -y --no-install-recommends libssl3 curl \
+       cmake python3 python3.11 libpython3.11-dev gcc g++ make cmake openjdk-17-jdk-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- --profile minimal --default-toolchain nightly-2022-03-08 -y
 
 ENV CUBESTORE_SKIP_POST_INSTALL=true
-ENV NODE_ENV=production
+ENV NODE_ENV=development
 
-WORKDIR /cube
+WORKDIR /cubejs
 
-# Copy pre-built native component from native-builder stage
-COPY --from=native-builder /cube .
+COPY . .
 
 RUN yarn policies set-version v1.22.22
 # Yarn v1 uses aggressive timeouts with summing time spending on fs, https://github.com/yarnpkg/yarn/issues/4890
 RUN yarn config set network-timeout 120000 -g
 
-# Required for node-oracledb to buld on ARM64
-RUN apt-get update \
-    # python3 package is necessary to install `python3` executable for node-gyp
-    # libpython3-dev is needed to trigger post-installer to download native with python
-    && apt-get install -y python3 python3.11 libpython3.11-dev gcc g++ make cmake \
-    && rm -rf /var/lib/apt/lists/*
+# There is a problem with release process.
+# We are doing version bump without updating lock files for the docker package.
+#RUN yarn install --frozen-lockfile
 
-# We are copying root yarn.lock file to the context folder during the Publish GH
-# action. So, a process will use the root lock file here.
-RUN yarn install --prod \
-    # Remove DuckDB sources to reduce image size
-    && rm -rf /cube/node_modules/duckdb/src \
-    && yarn cache clean
+FROM base as build
+
+RUN yarn install --prod
+
+# Copy pre-built native component from native-builder stage
+COPY --from=native-builder /cubejs .
 
 RUN yarn build
 RUN yarn lerna run build
 
-FROM node:20.17.0-bookworm-slim
+RUN find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
 
-ARG IMAGE_VERSION=unknown
+FROM base AS final
 
-ENV CUBEJS_DOCKER_IMAGE_VERSION=$IMAGE_VERSION
-ENV CUBEJS_DOCKER_IMAGE_TAG=latest
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y ca-certificates python3.11 libpython3.11-dev \
+    && apt-get clean
 
-RUN DEBIAN_FRONTEND=noninteractive \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends libssl3 python3.11 libpython3.11-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN yarn policies set-version v1.22.22
-
-WORKDIR /cube
-
-COPY --from=builder /cube .
+COPY --from=build /cubejs .
 
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
 
 # By default Node dont search in parent directory from /cube/conf, @todo Reaserch a little bit more
-ENV NODE_PATH=/cube/conf/node_modules:/cube/node_modules
+ENV NODE_PATH /cube/conf/node_modules:/cube/node_modules
 ENV PYTHONUNBUFFERED=1
-RUN ln -s  /cube/packages/cubejs-docker /cube
-RUN ln -s  /cube/rust/cubestore/bin/cubestore-dev /usr/local/bin/cubestore-dev
+RUN ln -s  /cubejs/packages/cubejs-docker /cube
+RUN ln -s  /cubejs/rust/cubestore/bin/cubestore-dev /usr/local/bin/cubestore-dev
 
 WORKDIR /cube/conf
 
