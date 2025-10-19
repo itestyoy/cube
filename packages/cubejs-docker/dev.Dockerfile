@@ -243,7 +243,7 @@ RUN apt-get update \
     && apt-get clean
 
 COPY --from=build /cubejs .
-COPY --from=prod_dependencies /cubejs .
+# COPY --from=prod_dependencies /cubejs .
 
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
 
