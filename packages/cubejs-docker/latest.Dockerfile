@@ -83,8 +83,9 @@ RUN yarn install --prod \
     && rm -rf /cube/node_modules/duckdb/src \
     && yarn cache clean
 
+RUN yarn build
+RUN yarn lerna run build
 
-    
 FROM node:20.17.0-bookworm-slim
 
 ARG IMAGE_VERSION=unknown
