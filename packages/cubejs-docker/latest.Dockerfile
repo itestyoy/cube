@@ -30,8 +30,7 @@ COPY package.json lerna.json yarn.lock ./
 RUN yarn policies set-version v1.22.22
 
 # Copy only the native backend package for focused build
-COPY packages/cubejs-backend-native/ packages/cubejs-backend-native/
-COPY rust/ rust/
+COPY . .
 
 # Build Cube Store
 WORKDIR /cube/rust/cubestore
@@ -57,15 +56,14 @@ RUN cargo build --release -j 4
 WORKDIR /cube/packages/cubejs-backend-native
 RUN yarn run native:build-release-python
 
+
+
 FROM node:20.17.0-bookworm-slim AS builder
 
 WORKDIR /cube
-COPY . .
 
 # Copy pre-built native component from native-builder stage
-COPY --from=native-builder /cube/packages/ packages/
-# Copy built applications from previous stages
-COPY --from=native-builder /cube/rust/ rust/
+COPY --from=native-builder /cube .
 
 RUN yarn policies set-version v1.22.22
 # Yarn v1 uses aggressive timeouts with summing time spending on fs, https://github.com/yarnpkg/yarn/issues/4890
@@ -85,6 +83,8 @@ RUN yarn install --prod \
     && rm -rf /cube/node_modules/duckdb/src \
     && yarn cache clean
 
+
+    
 FROM node:20.17.0-bookworm-slim
 
 ARG IMAGE_VERSION=unknown
@@ -105,11 +105,13 @@ WORKDIR /cube
 
 COPY --from=builder /cube .
 
+COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
+
 # By default Node dont search in parent directory from /cube/conf, @todo Reaserch a little bit more
 ENV NODE_PATH=/cube/conf/node_modules:/cube/node_modules
 ENV PYTHONUNBUFFERED=1
-RUN ln -s /cube/node_modules/.bin/cubejs /usr/local/bin/cubejs
-RUN ln -s /cube/node_modules/.bin/cubestore-dev /usr/local/bin/cubestore-dev
+RUN ln -s  /cube/packages/cubejs-docker /cube
+RUN ln -s  /cube/rust/cubestore/bin/cubestore-dev /usr/local/bin/cubestore-dev
 
 WORKDIR /cube/conf
 
