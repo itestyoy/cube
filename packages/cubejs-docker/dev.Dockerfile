@@ -79,7 +79,7 @@ ENV PATH=/usr/local/cargo/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- --profile minimal --default-toolchain nightly-2022-03-08 -y
 
-# ENV CUBESTORE_SKIP_POST_INSTALL=true
+ENV CUBESTORE_SKIP_POST_INSTALL=true
 ENV NODE_ENV=production
 
 WORKDIR /cubejs
@@ -155,15 +155,15 @@ RUN yarn config set network-timeout 120000 -g
 # We are doing version bump without updating lock files for the docker package.
 #RUN yarn install --frozen-lockfile
 
-# FROM base as prod_base_dependencies
-# COPY packages/cubejs-databricks-jdbc-driver/package.json packages/cubejs-databricks-jdbc-driver/package.json
-# RUN mkdir packages/cubejs-databricks-jdbc-driver/bin
-# RUN echo '#!/usr/bin/env node' > packages/cubejs-databricks-jdbc-driver/bin/post-install
-# RUN yarn install --prod
+FROM base as prod_base_dependencies
+COPY packages/cubejs-databricks-jdbc-driver/package.json packages/cubejs-databricks-jdbc-driver/package.json
+RUN mkdir packages/cubejs-databricks-jdbc-driver/bin
+RUN echo '#!/usr/bin/env node' > packages/cubejs-databricks-jdbc-driver/bin/post-install
+RUN yarn install --prod
 
-# FROM prod_base_dependencies as prod_dependencies
-# COPY packages/cubejs-databricks-jdbc-driver/bin packages/cubejs-databricks-jdbc-driver/bin
-# RUN yarn install --prod --ignore-scripts
+FROM prod_base_dependencies as prod_dependencies
+COPY packages/cubejs-databricks-jdbc-driver/bin packages/cubejs-databricks-jdbc-driver/bin
+RUN yarn install --prod --ignore-scripts
 
 FROM base as build
 
@@ -243,7 +243,7 @@ RUN apt-get update \
     && apt-get clean
 
 COPY --from=build /cubejs .
-# COPY --from=prod_dependencies /cubejs .
+COPY --from=prod_dependencies /cubejs .
 
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
 
