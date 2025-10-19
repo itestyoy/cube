@@ -1,7 +1,72 @@
+# Combined Dockerfile for Cube.js with native Linux build support
+FROM cubejs/rust-cross:x86_64-unknown-linux-gnu-15082024-python-3.11 AS native-builder
+
+# Install Node.js 22 (matching workflow requirements)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs
+
+# Install Yarn and cargo-cp-artifact
+RUN npm install -g yarn@1.22.22 cargo-cp-artifact@0.1
+
+# Install Rust and Cargo (if not present or not in PATH)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && echo 'source $HOME/.cargo/env' >> $HOME/.bashrc
+
+# Add Cargo to PATH for current session
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Verify Rust installation
+RUN cargo --version && rustc --version
+
+# Set environment variables for native build
+ENV PYTHON_VERSION_CURRENT=3.11
+ENV PYO3_PYTHON=python3.11
+ENV CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu
+
+WORKDIR /cube
+
+# Copy minimal files needed for native build
+COPY package.json lerna.json yarn.lock ./
+RUN yarn policies set-version v1.22.22
+
+# Copy only the native backend package for focused build
+COPY packages/cubejs-backend-native/ packages/cubejs-backend-native/
+COPY rust/ rust/
+
+# Build Cube Store
+WORKDIR /cube/rust/cubestore
+RUN cargo build --release -j 4 -p cubestore
+
+# Build other Rust components
+WORKDIR /cube/rust/cubeorchestrator
+RUN cargo build --release -j 4
+
+WORKDIR /cube/rust/cubenativeutils
+RUN cargo build --release -j 4
+
+WORKDIR /cube/rust/cubesqlplanner/cubesqlplanner
+RUN cargo build --release -j 4
+
+WORKDIR /cube/rust/cubeshared
+RUN cargo build --release -j 4
+
+WORKDIR /cube/rust/cubesql
+RUN cargo build --release -j 4
+
+# Build native component
+WORKDIR /cube/packages/cubejs-backend-native
+RUN yarn run native:build-release-python
+
 FROM node:20.17.0-bookworm-slim AS builder
 
 WORKDIR /cube
 COPY . .
+
+# Copy pre-built native component from native-builder stage
+COPY --from=native-builder /cube/packages/cubejs-backend-native/index.node packages/cubejs-backend-native/
+
+# Copy built applications from previous stages
+COPY --from=native-builder /cube/rust/ rust/
 
 RUN yarn policies set-version v1.22.22
 # Yarn v1 uses aggressive timeouts with summing time spending on fs, https://github.com/yarnpkg/yarn/issues/4890
