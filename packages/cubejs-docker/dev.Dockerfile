@@ -80,7 +80,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- --profile minimal --default-toolchain nightly-2022-03-08 -y
 
 ENV CUBESTORE_SKIP_POST_INSTALL=true
-ENV NODE_ENV=production
+ENV NODE_ENV=development
 
 WORKDIR /cubejs
 
