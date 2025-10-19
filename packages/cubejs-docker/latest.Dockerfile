@@ -60,6 +60,9 @@ RUN yarn run native:build-release-python
 
 FROM node:20.17.0-bookworm-slim AS builder
 
+ENV CUBESTORE_SKIP_POST_INSTALL=true
+ENV NODE_ENV=production
+
 WORKDIR /cube
 
 # Copy pre-built native component from native-builder stage
@@ -99,8 +102,6 @@ RUN DEBIAN_FRONTEND=noninteractive \
     && rm -rf /var/lib/apt/lists/*
 
 RUN yarn policies set-version v1.22.22
-
-ENV NODE_ENV=production
 
 WORKDIR /cube
 
