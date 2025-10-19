@@ -79,7 +79,7 @@ RUN yarn config set network-timeout 120000 -g
 
 FROM base as build
 
-RUN yarn install --prod
+RUN yarn install
 
 # Copy pre-built native component from native-builder stage
 COPY --from=native-builder /cubejs .
