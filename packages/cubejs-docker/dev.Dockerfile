@@ -113,7 +113,6 @@ COPY packages/cubejs-server-core/package.json packages/cubejs-server-core/packag
 COPY packages/cubejs-snowflake-driver/package.json packages/cubejs-snowflake-driver/package.json
 COPY packages/cubejs-sqlite-driver/package.json packages/cubejs-sqlite-driver/package.json
 COPY packages/cubejs-ksql-driver/package.json packages/cubejs-ksql-driver/package.json
-COPY packages/cubejs-dbt-schema-extension/package.json packages/cubejs-dbt-schema-extension/package.json
 COPY packages/cubejs-jdbc-driver/package.json packages/cubejs-jdbc-driver/package.json
 COPY packages/cubejs-vertica-driver/package.json packages/cubejs-vertica-driver/package.json
 # Skip
@@ -184,7 +183,6 @@ COPY packages/cubejs-server-core/ packages/cubejs-server-core/
 COPY packages/cubejs-snowflake-driver/ packages/cubejs-snowflake-driver/
 COPY packages/cubejs-sqlite-driver/ packages/cubejs-sqlite-driver/
 COPY packages/cubejs-ksql-driver/ packages/cubejs-ksql-driver/
-COPY packages/cubejs-dbt-schema-extension/ packages/cubejs-dbt-schema-extension/
 COPY packages/cubejs-jdbc-driver/ packages/cubejs-jdbc-driver/
 COPY packages/cubejs-databricks-jdbc-driver/ packages/cubejs-databricks-jdbc-driver/
 COPY packages/cubejs-vertica-driver/ packages/cubejs-vertica-driver/
