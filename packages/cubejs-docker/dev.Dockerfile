@@ -76,6 +76,7 @@ COPY rollup.config.js .
 COPY packages/cubejs-linter packages/cubejs-linter
 
 # Backend
+
 COPY rust/cubestore/package.json rust/cubestore/package.json
 COPY rust/cubestore/bin rust/cubestore/bin
 COPY packages/cubejs-backend-shared/package.json packages/cubejs-backend-shared/package.json
@@ -103,6 +104,7 @@ COPY packages/cubejs-oracle-driver/package.json packages/cubejs-oracle-driver/pa
 COPY packages/cubejs-redshift-driver/package.json packages/cubejs-redshift-driver/package.json
 COPY packages/cubejs-postgres-driver/package.json packages/cubejs-postgres-driver/package.json
 COPY packages/cubejs-questdb-driver/package.json packages/cubejs-questdb-driver/package.json
+COPY packages/cubejs-materialize-driver/package.json packages/cubejs-materialize-driver/package.json
 COPY packages/cubejs-prestodb-driver/package.json packages/cubejs-prestodb-driver/package.json
 COPY packages/cubejs-trino-driver/package.json packages/cubejs-trino-driver/package.json
 COPY packages/cubejs-pinot-driver/package.json packages/cubejs-pinot-driver/package.json
@@ -113,6 +115,7 @@ COPY packages/cubejs-server-core/package.json packages/cubejs-server-core/packag
 COPY packages/cubejs-snowflake-driver/package.json packages/cubejs-snowflake-driver/package.json
 COPY packages/cubejs-sqlite-driver/package.json packages/cubejs-sqlite-driver/package.json
 COPY packages/cubejs-ksql-driver/package.json packages/cubejs-ksql-driver/package.json
+COPY packages/cubejs-dbt-schema-extension/package.json packages/cubejs-dbt-schema-extension/package.json
 COPY packages/cubejs-jdbc-driver/package.json packages/cubejs-jdbc-driver/package.json
 COPY packages/cubejs-vertica-driver/package.json packages/cubejs-vertica-driver/package.json
 # Skip
@@ -135,6 +138,16 @@ RUN yarn config set network-timeout 120000 -g
 # There is a problem with release process.
 # We are doing version bump without updating lock files for the docker package.
 #RUN yarn install --frozen-lockfile
+
+FROM base as prod_base_dependencies
+COPY packages/cubejs-databricks-jdbc-driver/package.json packages/cubejs-databricks-jdbc-driver/package.json
+RUN mkdir packages/cubejs-databricks-jdbc-driver/bin
+RUN echo '#!/usr/bin/env node' > packages/cubejs-databricks-jdbc-driver/bin/post-install
+RUN yarn install --prod
+
+FROM prod_base_dependencies as prod_dependencies
+COPY packages/cubejs-databricks-jdbc-driver/bin packages/cubejs-databricks-jdbc-driver/bin
+RUN yarn install --prod --ignore-scripts
 
 FROM base as build
 
@@ -173,6 +186,7 @@ COPY packages/cubejs-oracle-driver/ packages/cubejs-oracle-driver/
 COPY packages/cubejs-redshift-driver/ packages/cubejs-redshift-driver/
 COPY packages/cubejs-postgres-driver/ packages/cubejs-postgres-driver/
 COPY packages/cubejs-questdb-driver/ packages/cubejs-questdb-driver/
+COPY packages/cubejs-materialize-driver/ packages/cubejs-materialize-driver/
 COPY packages/cubejs-prestodb-driver/ packages/cubejs-prestodb-driver/
 COPY packages/cubejs-trino-driver/ packages/cubejs-trino-driver/
 COPY packages/cubejs-pinot-driver/ packages/cubejs-pinot-driver/
@@ -183,6 +197,7 @@ COPY packages/cubejs-server-core/ packages/cubejs-server-core/
 COPY packages/cubejs-snowflake-driver/ packages/cubejs-snowflake-driver/
 COPY packages/cubejs-sqlite-driver/ packages/cubejs-sqlite-driver/
 COPY packages/cubejs-ksql-driver/ packages/cubejs-ksql-driver/
+COPY packages/cubejs-dbt-schema-extension/ packages/cubejs-dbt-schema-extension/
 COPY packages/cubejs-jdbc-driver/ packages/cubejs-jdbc-driver/
 COPY packages/cubejs-databricks-jdbc-driver/ packages/cubejs-databricks-jdbc-driver/
 COPY packages/cubejs-vertica-driver/ packages/cubejs-vertica-driver/
@@ -212,6 +227,7 @@ RUN apt-get update \
     && apt-get clean
 
 COPY --from=build /cubejs .
+COPY --from=prod_dependencies /cubejs .
 
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
 
