@@ -37,22 +37,6 @@ COPY rust/ rust/
 WORKDIR /cubejs/rust/cubestore
 RUN cargo build --release -j 4 -p cubestore
 
-# Build other Rust components
-WORKDIR /cubejs/rust/cubeorchestrator
-RUN cargo build --release -j 4
-
-WORKDIR /cubejs/rust/cubenativeutils
-RUN cargo build --release -j 4
-
-WORKDIR /cubejs/rust/cubesqlplanner/cubesqlplanner
-RUN cargo build --release -j 4
-
-WORKDIR /cubejs/rust/cubeshared
-RUN cargo build --release -j 4
-
-WORKDIR /cubejs/rust/cubesql
-RUN cargo build --release -j 4
-
 # Build native component
 WORKDIR /cubejs/packages/cubejs-backend-native
 RUN yarn run native:build-release-python
