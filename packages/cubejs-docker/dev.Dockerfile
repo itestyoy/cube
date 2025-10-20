@@ -37,22 +37,6 @@ COPY rust/ rust/
 WORKDIR /cubejs/rust/cubestore
 RUN cargo build --release -j 4 -p cubestore
 
-# Build other Rust components
-WORKDIR /cubejs/rust/cubeorchestrator
-RUN cargo build --release -j 4
-
-WORKDIR /cubejs/rust/cubenativeutils
-RUN cargo build --release -j 4
-
-WORKDIR /cubejs/rust/cubesqlplanner/cubesqlplanner
-RUN cargo build --release -j 4
-
-WORKDIR /cubejs/rust/cubeshared
-RUN cargo build --release -j 4
-
-WORKDIR /cubejs/rust/cubesql
-RUN cargo build --release -j 4
-
 # Build native component
 WORKDIR /cubejs/packages/cubejs-backend-native
 RUN yarn run native:build-release-python
@@ -92,7 +76,6 @@ COPY rollup.config.js .
 COPY packages/cubejs-linter packages/cubejs-linter
 
 # Backend
-COPY rust/cubesql/package.json rust/cubesql/package.json
 COPY rust/cubestore/package.json rust/cubestore/package.json
 COPY rust/cubestore/bin rust/cubestore/bin
 COPY packages/cubejs-backend-shared/package.json packages/cubejs-backend-shared/package.json
@@ -154,16 +137,6 @@ RUN yarn config set network-timeout 120000 -g
 # There is a problem with release process.
 # We are doing version bump without updating lock files for the docker package.
 #RUN yarn install --frozen-lockfile
-
-FROM base as prod_base_dependencies
-COPY packages/cubejs-databricks-jdbc-driver/package.json packages/cubejs-databricks-jdbc-driver/package.json
-RUN mkdir packages/cubejs-databricks-jdbc-driver/bin
-RUN echo '#!/usr/bin/env node' > packages/cubejs-databricks-jdbc-driver/bin/post-install
-RUN yarn install --prod
-
-FROM prod_base_dependencies as prod_dependencies
-COPY packages/cubejs-databricks-jdbc-driver/bin packages/cubejs-databricks-jdbc-driver/bin
-RUN yarn install --prod --ignore-scripts
 
 FROM base as build
 
@@ -243,7 +216,6 @@ RUN apt-get update \
     && apt-get clean
 
 COPY --from=build /cubejs .
-COPY --from=prod_dependencies /cubejs .
 
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
 
