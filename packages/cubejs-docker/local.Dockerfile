@@ -41,11 +41,11 @@ ENV NODE_ENV=development
 
 RUN cd /cube-build/packages/cubejs-bigquery-driver/ && \
     yarn install --production=false && \
-    yarn build
+    yarn build && yarn link
 
 RUN cd /cube-build/packages/cubejs-server/ && \
     yarn install --production=false && \
-    yarn build
+    yarn build && yarn link
 
 RUN cd /cube-build/packages/cubejs-cli/ && \
     yarn install --production=false && \
