@@ -50,7 +50,7 @@ RUN find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
 ######################################################################
 # Final image                                                        #
 ######################################################################
-FROM base AS final
+FROM build AS final
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
