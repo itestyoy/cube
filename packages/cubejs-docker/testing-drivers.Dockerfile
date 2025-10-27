@@ -80,7 +80,7 @@ COPY packages/cubejs-vertica-driver/package.json packages/cubejs-vertica-driver/
 #COPY packages/cubejs-client-vue3/package.json packages/cubejs-client-vue3/package.json
 #COPY packages/cubejs-client-ngx/package.json packages/cubejs-client-ngx/package.json
 #COPY packages/cubejs-client-ws-transport/package.json packages/cubejs-client-ws-transport/package.json
-#COPY packages/cubejs-playground/package.json packages/cubejs-playground/package.json
+COPY packages/cubejs-playground/package.json packages/cubejs-playground/package.json
 
 RUN yarn policies set-version v1.22.22
 RUN yarn config set network-timeout 120000 -g
@@ -157,7 +157,7 @@ COPY packages/cubejs-vertica-driver/ packages/cubejs-vertica-driver/
 #COPY packages/cubejs-client-vue3/ packages/cubejs-client-vue3/
 #COPY packages/cubejs-client-ngx/ packages/cubejs-client-ngx/
 #COPY packages/cubejs-client-ws-transport/ packages/cubejs-client-ws-transport/
-#COPY packages/cubejs-playground/ packages/cubejs-playground/
+COPY packages/cubejs-playground/ packages/cubejs-playground/
 
 # As we don't need any UI to test drivers, it's enough to transpile ts only.
 RUN yarn lerna run build
