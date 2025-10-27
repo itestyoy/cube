@@ -35,14 +35,15 @@ RUN apt-get update \
     && apt-get install -y gcc g++ make cmake \
     && rm -rf /var/lib/apt/lists/*
 
+RUN cd /cube && \
+    yarn remove @cubejs-backend/bigquery-driver && \
+    rm -rf /cube/node_modules/@cubejs-backend/bigquery-driver && \
+    yarn link "@cubejs-backend/bigquery-driver"
+
 RUN cd /cube-build/packages/cubejs-bigquery-driver/ && \
     yarn install --production=false && \
     yarn build && \
     yarn link
-
-RUN yarn install --prod && yarn cache clean
-
-RUN rm -rf /cube/node_modules/@cubejs-backend/bigquery-driver
 
 RUN cd /cube && yarn link "@cubejs-backend/bigquery-driver"
 
