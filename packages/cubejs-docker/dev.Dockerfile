@@ -108,7 +108,7 @@ RUN yarn install --prod --ignore-scripts
 
 FROM base AS build
 
-RUN yarn install
+RUN yarn install --prod
 
 # Backend
 COPY rust/cubestore/ rust/cubestore/

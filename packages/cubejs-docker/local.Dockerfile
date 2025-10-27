@@ -21,9 +21,8 @@ COPY . .
 # Unlike latest.Dockerfile, this one doesn't install the latest cubejs from
 # npm, but rather copies all the artifacts from the dev image and links them to
 # the /cube directory
-COPY --from=build /cubejs /cube-build
+COPY --from=build /cube /cube-build
 RUN cd /cube-build && yarn run link:dev
-COPY package.json package.json
 
 RUN yarn policies set-version v1.22.22
 # Yarn v1 uses aggressive timeouts with summing time spending on fs, https://github.com/yarnpkg/yarn/issues/4890
