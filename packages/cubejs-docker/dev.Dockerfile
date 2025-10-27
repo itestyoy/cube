@@ -1,9 +1,9 @@
 FROM node:22.20.0-bookworm-slim AS base
 
-ARG IMAGE_VERSION=latest
+ARG IMAGE_VERSION=dev
 
 ENV CUBEJS_DOCKER_IMAGE_VERSION=$IMAGE_VERSION
-ENV CUBEJS_DOCKER_IMAGE_TAG=latest
+ENV CUBEJS_DOCKER_IMAGE_TAG=dev
 ENV CI=0
 
 RUN DEBIAN_FRONTEND=noninteractive \
@@ -21,6 +21,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- --profile minimal --default-toolchain nightly-2022-03-08 -y
 
 ENV CUBESTORE_SKIP_POST_INSTALL=true
+ENV NODE_ENV=development
 
 WORKDIR /cubejs
 
@@ -95,6 +96,16 @@ RUN yarn config set network-timeout 120000 -g
 # We are doing version bump without updating lock files for the docker package.
 #RUN yarn install --frozen-lockfile
 
+FROM base AS prod_base_dependencies
+COPY packages/cubejs-databricks-jdbc-driver/package.json packages/cubejs-databricks-jdbc-driver/package.json
+RUN mkdir packages/cubejs-databricks-jdbc-driver/bin
+RUN echo '#!/usr/bin/env node' > packages/cubejs-databricks-jdbc-driver/bin/post-install
+RUN yarn install --prod
+
+FROM prod_base_dependencies AS prod_dependencies
+COPY packages/cubejs-databricks-jdbc-driver/bin packages/cubejs-databricks-jdbc-driver/bin
+RUN yarn install --prod --ignore-scripts
+
 FROM base AS build
 
 RUN yarn install
@@ -157,7 +168,6 @@ COPY packages/cubejs-playground/ packages/cubejs-playground/
 
 RUN yarn build
 RUN yarn lerna run build
-RUN yarn cache clean
 
 RUN find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
 
@@ -168,9 +178,8 @@ RUN apt-get update \
     && apt-get install -y ca-certificates python3.11 libpython3.11-dev \
     && apt-get clean
 
-ENV NODE_ENV=production
-
 COPY --from=build /cubejs .
+COPY --from=prod_dependencies /cubejs .
 
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
 
