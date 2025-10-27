@@ -37,8 +37,8 @@ COPY rust/cubesql/package.json rust/cubesql/package.json
 COPY rust/cubestore/package.json rust/cubestore/package.json
 COPY rust/cubestore/bin rust/cubestore/bin
 
-COPY --from=latest /cube/bin/cubestore-dev /cubejs/rust/cubestore/bin/cubestore-dev
-COPY --from=latest /cube/bin/cubejs-dev /cubejs/packages/cubejs-docker/bin/cubejs-dev
+#COPY --from=latest /cube/bin/cubestore-dev /cubejs/rust/cubestore/bin/cubestore-dev
+#COPY --from=latest /cube/bin/cubejs-dev /cubejs/packages/cubejs-docker/bin/cubejs-dev
 
 COPY packages/cubejs-backend-shared/package.json packages/cubejs-backend-shared/package.json
 COPY packages/cubejs-base-driver/package.json packages/cubejs-base-driver/package.json
