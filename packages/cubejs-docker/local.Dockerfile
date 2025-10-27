@@ -18,14 +18,15 @@ ENV NODE_ENV=production
 WORKDIR /cube
 COPY --from=build /cube /cube
 
-COPY packages/cubejs-bigquery-driver/ /cube-build/packages/cubejs-bigquery-driver/
-
 COPY package.json /cube-build
 COPY lerna.json /cube-build
 COPY yarn.lock /cube-build
 COPY tsconfig.base.json /cube-build
 COPY rollup.config.js /cube-build
 COPY packages/cubejs-linter /cube-build/packages/cubejs-linter
+
+# Копируем ваш локальный драйвер BigQuery
+COPY packages/cubejs-bigquery-driver/ /cube-build/packages/cubejs-bigquery-driver/
 
 RUN yarn policies set-version v1.22.22
 RUN yarn config set network-timeout 120000 -g
@@ -35,17 +36,31 @@ RUN apt-get update \
     && apt-get install -y gcc g++ make cmake \
     && rm -rf /var/lib/apt/lists/*
 
-RUN cd /cube && \
-    yarn remove @cubejs-backend/bigquery-driver && \
-    rm -rf /cube/node_modules/@cubejs-backend/bigquery-driver && \
-    yarn link "@cubejs-backend/bigquery-driver"
+
+ENV NODE_ENV=development
 
 RUN cd /cube-build/packages/cubejs-bigquery-driver/ && \
     yarn install --production=false && \
-    yarn build && \
-    yarn link
+    yarn build
 
-RUN cd /cube && yarn link "@cubejs-backend/bigquery-driver"
+RUN cd /cube && \
+    node -e "\
+    const fs = require('fs'); \
+    const pkg = JSON.parse(fs.readFileSync('./package.json', 'utf8')); \
+    pkg.resolutions = pkg.resolutions || {}; \
+    pkg.resolutions['@cubejs-backend/bigquery-driver'] = 'file:/cube-build/packages/cubejs-bigquery-driver'; \
+    pkg.resolutions['**/@cubejs-backend/bigquery-driver'] = 'file:/cube-build/packages/cubejs-bigquery-driver'; \
+    fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2)); \
+    console.log('Updated package.json with resolutions:', pkg.resolutions);"
+
+# Возвращаем production режим
+ENV NODE_ENV=production
+
+# Удаляем старые node_modules и yarn.lock, затем переустанавливаем с учетом resolutions
+RUN cd /cube && \
+    rm -rf node_modules yarn.lock && \
+    yarn install --prod && \
+    yarn cache clean
 
 ENV NODE_PATH /cube/conf/node_modules:/cube/node_modules
 ENV PYTHONUNBUFFERED=1
