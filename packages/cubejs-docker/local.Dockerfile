@@ -53,13 +53,14 @@ RUN cd /cube-build/packages/cubejs-cli/ && \
 
 ENV NODE_ENV=production
 
-COPY package.json .
+COPY package.json package.json
 
 RUN cd /cube && \
     rm -rf node_modules yarn.lock && \
-    yarn run link:dev && \
     yarn install --prod && \
     yarn cache clean
+
+RUN yarn link @cubejs-backend/shared @cubejs-backend/server @cubejs-backend/server-core @cubejs-backend/api-gateway @cubejs-backend/schema-compiler @cubejs-backend/query-orchestrator @cubejs-client/ws-transport @cubejs-client/core @cubejs-backend/templates @cubejs-client/playground @cubejs-backend/bigquery-driver
 
 ENV NODE_PATH /cube/conf/node_modules:/cube/node_modules
 ENV PYTHONUNBUFFERED=1

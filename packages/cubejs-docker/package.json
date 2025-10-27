@@ -8,9 +8,6 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "scripts": {
-      "link:dev": "yarn link @cubejs-backend/shared @cubejs-backend/server @cubejs-backend/server-core @cubejs-backend/api-gateway @cubejs-backend/schema-compiler @cubejs-backend/query-orchestrator @cubejs-client/ws-transport @cubejs-client/core @cubejs-backend/templates @cubejs-client/playground @cubejs-backend/bigquery-driver"
-  },
   "dependencies": {
     "@cubejs-backend/athena-driver": "1.3.83",
     "@cubejs-backend/bigquery-driver": "file:/cube-build/packages/cubejs-bigquery-driver",
