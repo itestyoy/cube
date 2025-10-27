@@ -32,7 +32,12 @@ COPY rollup.config.js .
 COPY packages/cubejs-linter packages/cubejs-linter
 
 # Backend
-COPY --from=latest /cube/rust /cubejs/rust
+
+COPY rust/cubesql/package.json rust/cubesql/package.json
+COPY rust/cubestore/package.json rust/cubestore/package.json
+
+COPY --from=latest /cube/bin/cubestore-dev /cubejs/rust/cubestore/bin/cubestore-dev
+COPY --from=latest /cube/bin/cubejs-dev /cubejs/packages/cubejs-docker/bin/cubejs-dev
 
 COPY packages/cubejs-backend-shared/package.json packages/cubejs-backend-shared/package.json
 COPY packages/cubejs-base-driver/package.json packages/cubejs-base-driver/package.json
@@ -82,7 +87,6 @@ COPY packages/cubejs-client-vue/package.json packages/cubejs-client-vue/package.
 COPY packages/cubejs-client-vue3/package.json packages/cubejs-client-vue3/package.json
 COPY packages/cubejs-client-ngx/package.json packages/cubejs-client-ngx/package.json
 COPY packages/cubejs-client-ws-transport/package.json packages/cubejs-client-ws-transport/package.json
-
 COPY packages/cubejs-playground/package.json packages/cubejs-playground/package.json
 
 RUN yarn policies set-version v1.22.22
@@ -109,8 +113,8 @@ FROM base AS build
 RUN yarn install
 
 # Backend
-COPY --from=latest /cube/rust /cubejs/rust
-
+COPY rust/cubestore/ rust/cubestore/
+COPY rust/cubesql/ rust/cubesql/
 COPY packages/cubejs-backend-shared/ packages/cubejs-backend-shared/
 COPY packages/cubejs-base-driver/ packages/cubejs-base-driver/
 COPY packages/cubejs-backend-native/ packages/cubejs-backend-native/
@@ -160,7 +164,6 @@ COPY packages/cubejs-client-vue/ packages/cubejs-client-vue/
 COPY packages/cubejs-client-vue3/ packages/cubejs-client-vue3/
 COPY packages/cubejs-client-ngx/ packages/cubejs-client-ngx/
 COPY packages/cubejs-client-ws-transport/ packages/cubejs-client-ws-transport/
-
 COPY packages/cubejs-playground/ packages/cubejs-playground/
 
 # As we don't need any UI to test drivers, it's enough to transpile ts only.
