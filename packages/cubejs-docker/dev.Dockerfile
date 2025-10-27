@@ -178,6 +178,8 @@ RUN apt-get update \
     && apt-get install -y ca-certificates python3.11 libpython3.11-dev \
     && apt-get clean
 
+ENV NODE_ENV=production
+
 COPY --from=build /cubejs .
 COPY --from=prod_dependencies /cubejs .
 
