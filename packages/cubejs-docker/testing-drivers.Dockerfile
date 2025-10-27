@@ -3,10 +3,10 @@
 ######################################################################
 FROM node:22.20.0-bookworm-slim AS base
 
-ARG IMAGE_VERSION=dev
+ARG IMAGE_VERSION=latest
 
 ENV CUBEJS_DOCKER_IMAGE_VERSION=$IMAGE_VERSION
-ENV CUBEJS_DOCKER_IMAGE_TAG=dev
+ENV CUBEJS_DOCKER_IMAGE_TAG=latest
 ENV CUBEJS_DB_DATABRICKS_ACCEPT_POLICY=true
 ENV CI=0
 
