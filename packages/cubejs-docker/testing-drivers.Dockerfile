@@ -1,12 +1,15 @@
 ######################################################################
 # Base image                                                         #
 ######################################################################
+ARG DEV_BUILD_IMAGE=cubejs/cube:v1.3.83
+
+FROM $DEV_BUILD_IMAGE AS latest
 FROM node:22.20.0-bookworm-slim AS base
 
-ARG IMAGE_VERSION=dev
+ARG IMAGE_VERSION=v1.3.83
 
 ENV CUBEJS_DOCKER_IMAGE_VERSION=$IMAGE_VERSION
-ENV CUBEJS_DOCKER_IMAGE_TAG=dev
+ENV CUBEJS_DOCKER_IMAGE_TAG=v1.3.83
 ENV CUBEJS_DB_DATABRICKS_ACCEPT_POLICY=true
 ENV CI=0
 
@@ -29,9 +32,8 @@ COPY rollup.config.js .
 COPY packages/cubejs-linter packages/cubejs-linter
 
 # Backend
-COPY rust/cubesql/package.json rust/cubesql/package.json
-COPY rust/cubestore/package.json rust/cubestore/package.json
-COPY rust/cubestore/bin rust/cubestore/bin
+COPY --from=latest /cube/rust /cubejs/rust
+
 COPY packages/cubejs-backend-shared/package.json packages/cubejs-backend-shared/package.json
 COPY packages/cubejs-base-driver/package.json packages/cubejs-base-driver/package.json
 COPY packages/cubejs-backend-native/package.json packages/cubejs-backend-native/package.json
@@ -73,13 +75,14 @@ COPY packages/cubejs-jdbc-driver/package.json packages/cubejs-jdbc-driver/packag
 COPY packages/cubejs-vertica-driver/package.json packages/cubejs-vertica-driver/package.json
 
 # We dont need client libraries
-#COPY packages/cubejs-templates/package.json packages/cubejs-templates/package.json
-#COPY packages/cubejs-client-core/package.json packages/cubejs-client-core/package.json
-#COPY packages/cubejs-client-react/package.json packages/cubejs-client-react/package.json
-#COPY packages/cubejs-client-vue/package.json packages/cubejs-client-vue/package.json
-#COPY packages/cubejs-client-vue3/package.json packages/cubejs-client-vue3/package.json
-#COPY packages/cubejs-client-ngx/package.json packages/cubejs-client-ngx/package.json
-#COPY packages/cubejs-client-ws-transport/package.json packages/cubejs-client-ws-transport/package.json
+COPY packages/cubejs-templates/package.json packages/cubejs-templates/package.json
+COPY packages/cubejs-client-core/package.json packages/cubejs-client-core/package.json
+COPY packages/cubejs-client-react/package.json packages/cubejs-client-react/package.json
+COPY packages/cubejs-client-vue/package.json packages/cubejs-client-vue/package.json
+COPY packages/cubejs-client-vue3/package.json packages/cubejs-client-vue3/package.json
+COPY packages/cubejs-client-ngx/package.json packages/cubejs-client-ngx/package.json
+COPY packages/cubejs-client-ws-transport/package.json packages/cubejs-client-ws-transport/package.json
+
 COPY packages/cubejs-playground/package.json packages/cubejs-playground/package.json
 
 RUN yarn policies set-version v1.22.22
@@ -106,8 +109,8 @@ FROM base AS build
 RUN yarn install
 
 # Backend
-COPY rust/cubestore/ rust/cubestore/
-COPY rust/cubesql/ rust/cubesql/
+COPY --from=latest /cube/rust /cubejs/rust
+
 COPY packages/cubejs-backend-shared/ packages/cubejs-backend-shared/
 COPY packages/cubejs-base-driver/ packages/cubejs-base-driver/
 COPY packages/cubejs-backend-native/ packages/cubejs-backend-native/
@@ -150,13 +153,14 @@ COPY packages/cubejs-databricks-jdbc-driver/ packages/cubejs-databricks-jdbc-dri
 COPY packages/cubejs-vertica-driver/ packages/cubejs-vertica-driver/
 
 # We dont need client libraries
-#COPY packages/cubejs-templates/ packages/cubejs-templates/
-#COPY packages/cubejs-client-core/ packages/cubejs-client-core/
-#COPY packages/cubejs-client-react/ packages/cubejs-client-react/
-#COPY packages/cubejs-client-vue/ packages/cubejs-client-vue/
-#COPY packages/cubejs-client-vue3/ packages/cubejs-client-vue3/
-#COPY packages/cubejs-client-ngx/ packages/cubejs-client-ngx/
-#COPY packages/cubejs-client-ws-transport/ packages/cubejs-client-ws-transport/
+COPY packages/cubejs-templates/ packages/cubejs-templates/
+COPY packages/cubejs-client-core/ packages/cubejs-client-core/
+COPY packages/cubejs-client-react/ packages/cubejs-client-react/
+COPY packages/cubejs-client-vue/ packages/cubejs-client-vue/
+COPY packages/cubejs-client-vue3/ packages/cubejs-client-vue3/
+COPY packages/cubejs-client-ngx/ packages/cubejs-client-ngx/
+COPY packages/cubejs-client-ws-transport/ packages/cubejs-client-ws-transport/
+
 COPY packages/cubejs-playground/ packages/cubejs-playground/
 
 # As we don't need any UI to test drivers, it's enough to transpile ts only.
