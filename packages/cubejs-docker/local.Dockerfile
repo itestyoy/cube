@@ -15,21 +15,10 @@ RUN DEBIAN_FRONTEND=noninteractive \
 
 ENV NODE_ENV=production
 
-WORKDIR /cube
-COPY --from=build /cube /cube
+WORKDIR /cube-build
+# COPY --from=build /cube /cube
 
-COPY packages/cubejs-bigquery-driver/ /cube-build/packages/cubejs-bigquery-driver/
-COPY packages/cubejs-server/ /cube-build/packages/cubejs-server/
-COPY packages/cubejs-cli/ /cube-build/packages/cubejs-cli/
-COPY packages/cubejs-docker/package.json package.json
-COPY packages/cubejs-docker/package.json /cube-build/package.json
-
-COPY package.json /cube-build
-COPY lerna.json /cube-build
-COPY yarn.lock /cube-build
-COPY tsconfig.base.json /cube-build
-COPY rollup.config.js /cube-build
-COPY packages/cubejs-linter /cube-build/packages/cubejs-linter
+COPY . /cube-build
 
 RUN yarn policies set-version v1.22.22
 RUN yarn config set network-timeout 120000 -g
@@ -53,20 +42,22 @@ RUN cd /cube-build/packages/cubejs-cli/ && \
     yarn install --production=false && \
     yarn build && yarn link
 
+RUN cd /cube-build/ && \
+    yarn install --production=false && \
+    yarn build && yarn link
+
 ENV NODE_ENV=production
 
-RUN cd /cube && \
+RUN cd /cube-build/packages/cubejs-docker && \
     yarn install --prod && \
     yarn cache clean
 
-RUN yarn link @cubejs-backend/server @cubejs-backend/bigquery-driver cubejs-cli
-
-ENV NODE_PATH /cube/conf/node_modules:/cube/node_modules
+ENV NODE_PATH /cube-build/conf/node_modules:/cube-build/node_modules
 ENV PYTHONUNBUFFERED=1
-RUN ln -s /cube/node_modules/.bin/cubejs /usr/local/bin/cubejs
-RUN ln -s /cube/node_modules/.bin/cubestore-dev /usr/local/bin/cubestore-dev
+RUN ln -s /cube-build/node_modules/.bin/cubejs /usr/local/bin/cubejs
+RUN ln -s /cube-build/node_modules/.bin/cubestore-dev /usr/local/bin/cubestore-dev
 
-WORKDIR /cube/conf
+WORKDIR /cube-build/conf
 
 EXPOSE 4000
 
