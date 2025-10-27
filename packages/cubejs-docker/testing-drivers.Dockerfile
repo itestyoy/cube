@@ -4,12 +4,13 @@
 ARG DEV_BUILD_IMAGE=cubejs/cube:v1.3.83
 
 FROM $DEV_BUILD_IMAGE AS latest
+
 FROM node:22.20.0-bookworm-slim AS base
 
-ARG IMAGE_VERSION=v1.3.83
+ARG IMAGE_VERSION=dev
 
 ENV CUBEJS_DOCKER_IMAGE_VERSION=$IMAGE_VERSION
-ENV CUBEJS_DOCKER_IMAGE_TAG=v1.3.83
+ENV CUBEJS_DOCKER_IMAGE_TAG=dev
 ENV CUBEJS_DB_DATABRICKS_ACCEPT_POLICY=true
 ENV CI=0
 
@@ -32,13 +33,12 @@ COPY rollup.config.js .
 COPY packages/cubejs-linter packages/cubejs-linter
 
 # Backend
-
 COPY rust/cubesql/package.json rust/cubesql/package.json
 COPY rust/cubestore/package.json rust/cubestore/package.json
 COPY rust/cubestore/bin rust/cubestore/bin
 
-#COPY --from=latest /cube/bin/cubestore-dev /cubejs/rust/cubestore/bin/cubestore-dev
-#COPY --from=latest /cube/bin/cubejs-dev /cubejs/packages/cubejs-docker/bin/cubejs-dev
+COPY --from=latest /cube/bin/cubestore-dev /cubejs/rust/cubestore/bin/cubestore-dev
+COPY --from=latest /cube/bin/cubejs-dev /cubejs/packages/cubejs-docker/bin/cubejs-dev
 
 COPY packages/cubejs-backend-shared/package.json packages/cubejs-backend-shared/package.json
 COPY packages/cubejs-base-driver/package.json packages/cubejs-base-driver/package.json
@@ -92,6 +92,19 @@ COPY packages/cubejs-playground/package.json packages/cubejs-playground/package.
 
 RUN yarn policies set-version v1.22.22
 RUN yarn config set network-timeout 120000 -g
+
+######################################################################
+# Databricks driver dependencies                                     #
+######################################################################
+FROM base AS prod_base_dependencies
+COPY packages/cubejs-databricks-jdbc-driver/package.json packages/cubejs-databricks-jdbc-driver/package.json
+RUN mkdir packages/cubejs-databricks-jdbc-driver/bin
+RUN echo '#!/usr/bin/env node' > packages/cubejs-databricks-jdbc-driver/bin/post-install
+RUN yarn install --prod
+
+FROM prod_base_dependencies AS prod_dependencies
+COPY packages/cubejs-databricks-jdbc-driver/bin packages/cubejs-databricks-jdbc-driver/bin
+RUN yarn install --prod --ignore-scripts
 
 ######################################################################
 # Build dependencies                                                 #
@@ -155,7 +168,6 @@ COPY packages/cubejs-vertica-driver/ packages/cubejs-vertica-driver/
 COPY packages/cubejs-playground/ packages/cubejs-playground/
 
 # As we don't need any UI to test drivers, it's enough to transpile ts only.
-#RUN yarn build
 RUN yarn lerna run build
 
 RUN find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
@@ -171,8 +183,7 @@ RUN apt-get update \
     && apt-get clean
 
 COPY --from=build /cubejs .
-
-#ENV NODE_ENV=production
+COPY --from=prod_dependencies /cubejs .
 
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
 
