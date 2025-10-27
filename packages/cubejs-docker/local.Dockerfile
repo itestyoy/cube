@@ -17,13 +17,11 @@ RUN DEBIAN_FRONTEND=noninteractive \
 ENV NODE_ENV=production
 
 WORKDIR /cube
-COPY . .
+# COPY . .
 # Unlike latest.Dockerfile, this one doesn't install the latest cubejs from
 # npm, but rather copies all the artifacts from the dev image and links them to
 # the /cube directory
-COPY --from=build /cube /cube-build
-RUN cd /cube-build && yarn run link:dev
-COPY packages/cubejs-docker/package.json.local package.json
+COPY --from=build /cube /cube
 
 RUN yarn policies set-version v1.22.22
 # Yarn v1 uses aggressive timeouts with summing time spending on fs, https://github.com/yarnpkg/yarn/issues/4890
@@ -36,7 +34,7 @@ RUN apt-get update \
 
 # We are copying root yarn.lock file to the context folder during the Publish GH
 # action. So, a process will use the root lock file here.
-RUN yarn install --prod && yarn cache clean && yarn link:dev
+RUN yarn install --prod && yarn cache clean
 
 # By default Node dont search in parent directory from /cube/conf, @todo Reaserch a little bit more
 ENV NODE_PATH /cube/conf/node_modules:/cube/node_modules
