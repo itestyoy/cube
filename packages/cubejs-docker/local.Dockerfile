@@ -43,11 +43,11 @@ RUN cd /cube-build/packages/cubejs-bigquery-driver/ && \
     yarn install --production=false && \
     yarn build
 
-RUN cd /cube-build/packages/packages/cubejs-server/ && \
+RUN cd /cube-build/packages/cubejs-server/ && \
     yarn install --production=false && \
     yarn build
 
-RUN cd /cube-build/packages/packages/cubejs-cli/ && \
+RUN cd /cube-build/packages/cubejs-cli/ && \
     yarn install --production=false && \
     yarn build
 
