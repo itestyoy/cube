@@ -172,7 +172,7 @@ RUN apt-get update \
 
 COPY --from=build /cubejs .
 
-ENV NODE_ENV=production
+# ENV NODE_ENV=production
 
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
 
