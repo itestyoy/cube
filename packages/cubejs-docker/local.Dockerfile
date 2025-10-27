@@ -63,7 +63,7 @@ RUN yarn link @cubejs-backend/server @cubejs-backend/bigquery-driver cubejs-cli
 
 ENV NODE_PATH /cube/conf/node_modules:/cube/node_modules
 ENV PYTHONUNBUFFERED=1
-RUN ln -s /cube/node_modules/.bin/cubejs /usr/local/bin/cubejs
+# RUN ln -s /cube/node_modules/.bin/cubejs /usr/local/bin/cubejs
 RUN ln -s /cube/node_modules/.bin/cubestore-dev /usr/local/bin/cubestore-dev
 
 WORKDIR /cube/conf
