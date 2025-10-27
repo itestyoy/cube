@@ -19,6 +19,8 @@ WORKDIR /cube
 COPY --from=build /cube /cube
 
 COPY packages/cubejs-bigquery-driver/ /cube-build/packages/cubejs-bigquery-driver/
+COPY packages/cubejs-server/ /cube-build/packages/cubejs-server/
+COPY packages/cubejs-cli/ /cube-build/packages/cubejs-cli/
 
 COPY package.json /cube-build
 COPY lerna.json /cube-build
@@ -41,20 +43,18 @@ RUN cd /cube-build/packages/cubejs-bigquery-driver/ && \
     yarn install --production=false && \
     yarn build
 
-RUN cd /cube && \
-    node -e "\
-    const fs = require('fs'); \
-    const pkg = JSON.parse(fs.readFileSync('./package.json', 'utf8')); \
-    pkg.resolutions = pkg.resolutions || {}; \
-    pkg.resolutions['@cubejs-backend/bigquery-driver'] = 'file:/cube-build/packages/cubejs-bigquery-driver'; \
-    pkg.resolutions['**/@cubejs-backend/bigquery-driver'] = 'file:/cube-build/packages/cubejs-bigquery-driver'; \
-    fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2)); \
-    console.log('Updated package.json with resolutions:', pkg.resolutions);"
+RUN cd /cube-build/packages/packages/cubejs-server/ && \
+    yarn install --production=false && \
+    yarn build
 
-# Возвращаем production режим
+RUN cd /cube-build/packages/packages/cubejs-cli/ && \
+    yarn install --production=false && \
+    yarn build
+
 ENV NODE_ENV=production
 
-# Удаляем старые node_modules и yarn.lock, затем переустанавливаем с учетом resolutions
+COPY package.json .
+
 RUN cd /cube && \
     rm -rf node_modules yarn.lock && \
     yarn install --prod && \
