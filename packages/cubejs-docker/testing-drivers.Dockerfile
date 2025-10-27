@@ -177,6 +177,8 @@ RUN find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
 ######################################################################
 FROM base AS final
 
+ENV NODE_ENV=production
+
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y ca-certificates python3.11 libpython3.11-dev \
