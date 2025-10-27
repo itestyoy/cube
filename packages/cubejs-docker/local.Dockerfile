@@ -57,6 +57,7 @@ COPY package.json .
 
 RUN cd /cube && \
     rm -rf node_modules yarn.lock && \
+    yarn run link:dev && \
     yarn install --prod && \
     yarn cache clean
 
