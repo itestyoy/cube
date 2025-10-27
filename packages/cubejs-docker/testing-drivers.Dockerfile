@@ -1,7 +1,6 @@
 ######################################################################
 # Base image                                                         #
 ######################################################################
-FROM cubejs/cube:latest AS bases
 FROM cubejs/cube:latest AS base
 
 ARG IMAGE_VERSION=latest
@@ -20,10 +19,7 @@ RUN DEBIAN_FRONTEND=noninteractive \
 ENV CUBESTORE_SKIP_POST_INSTALL=true
 ENV NODE_ENV=development
 
-WORKDIR /cubejs
-
-# Backend
-COPY --from=bases /cube /cubejs
+WORKDIR /cube
 
 COPY packages/cubejs-bigquery-driver/package.json packages/cubejs-bigquery-driver/package.json
 
@@ -58,14 +54,14 @@ RUN apt-get update \
     && apt-get install -y ca-certificates python3.11 libpython3.11-dev \
     && apt-get clean
 
-COPY --from=build /cubejs .
+COPY --from=build /cube .
 
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
 
 # By default Node dont search in parent directory from /cube/conf, @todo Reaserch a little bit more
-ENV NODE_PATH /cube/conf/node_modules:/cube/node_modules
-RUN ln -s  /cubejs/packages/cubejs-docker /cube
-RUN ln -s  /cubejs/rust/cubestore/bin/cubestore-dev /usr/local/bin/cubestore-dev
+#ENV NODE_PATH /cube/conf/node_modules:/cube/node_modules
+#RUN ln -s  /cube/packages/cubejs-docker /cube
+#RUN ln -s  /cube/rust/cubestore/bin/cubestore-dev /usr/local/bin/cubestore-dev
 
 WORKDIR /cube/conf
 
