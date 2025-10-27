@@ -18,15 +18,14 @@ ENV NODE_ENV=production
 WORKDIR /cube
 COPY --from=build /cube /cube
 
+COPY packages/cubejs-bigquery-driver/ /cube-build/packages/cubejs-bigquery-driver/
+
 COPY package.json /cube-build
 COPY lerna.json /cube-build
 COPY yarn.lock /cube-build
 COPY tsconfig.base.json /cube-build
 COPY rollup.config.js /cube-build
 COPY packages/cubejs-linter /cube-build/packages/cubejs-linter
-
-# Копируем ваш локальный драйвер BigQuery
-COPY packages/cubejs-bigquery-driver/ /cube-build/packages/cubejs-bigquery-driver/
 
 RUN yarn policies set-version v1.22.22
 RUN yarn config set network-timeout 120000 -g
@@ -35,7 +34,6 @@ RUN yarn config set network-timeout 120000 -g
 RUN apt-get update \
     && apt-get install -y gcc g++ make cmake \
     && rm -rf /var/lib/apt/lists/*
-
 
 ENV NODE_ENV=development
 
