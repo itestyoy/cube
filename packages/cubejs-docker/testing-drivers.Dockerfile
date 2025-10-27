@@ -155,7 +155,7 @@ COPY packages/cubejs-vertica-driver/ packages/cubejs-vertica-driver/
 COPY packages/cubejs-playground/ packages/cubejs-playground/
 
 # As we don't need any UI to test drivers, it's enough to transpile ts only.
-RUN yarn build
+#RUN yarn build
 RUN yarn lerna run build
 
 RUN find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
