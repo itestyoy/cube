@@ -1,6 +1,7 @@
 ######################################################################
 # Base image                                                         #
 ######################################################################
+FROM cubejs/cube:latest AS bases
 FROM cubejs/cube:latest AS base
 
 ARG IMAGE_VERSION=latest
@@ -22,7 +23,7 @@ ENV NODE_ENV=development
 WORKDIR /cubejs
 
 # Backend
-COPY --from=base /cube /cubejs
+COPY --from=bases /cube /cubejs
 
 COPY packages/cubejs-bigquery-driver/package.json packages/cubejs-bigquery-driver/package.json
 
@@ -50,7 +51,7 @@ RUN find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
 ######################################################################
 # Final image                                                        #
 ######################################################################
-FROM build AS final
+FROM base AS final
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
@@ -62,11 +63,11 @@ COPY --from=build /cubejs .
 COPY packages/cubejs-docker/bin/cubejs-dev /usr/local/bin/cubejs
 
 # By default Node dont search in parent directory from /cube/conf, @todo Reaserch a little bit more
-ENV NODE_PATH /build/conf/node_modules:/build/node_modules
-RUN ln -s  /cubejs/packages/cubejs-docker /build
+ENV NODE_PATH /cube/conf/node_modules:/cube/node_modules
+RUN ln -s  /cubejs/packages/cubejs-docker /cube
 RUN ln -s  /cubejs/rust/cubestore/bin/cubestore-dev /usr/local/bin/cubestore-dev
 
-WORKDIR /build/conf
+WORKDIR /cube/conf
 
 EXPOSE 4000
 
