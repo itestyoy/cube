@@ -53,7 +53,7 @@ RUN cd /cube-build/packages/cubejs-cli/ && \
 
 ENV NODE_ENV=production
 
-COPY package.json package.json
+# COPY package.json package.json
 
 RUN cd /cube && \
     yarn install --prod && \
