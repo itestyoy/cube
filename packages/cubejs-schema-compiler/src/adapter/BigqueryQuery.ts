@@ -50,7 +50,9 @@ export class BigqueryQuery extends BaseQuery {
   }
 
   public dateTimeCast(value) {
-    return `DATETIME(TIMESTAMP(${value}))`;
+    // Use TIMESTAMP to match pre-aggregated column types (from timeGroupedColumn)
+    // This ensures filter parameters match column types when querying pre-aggregations
+    return `TIMESTAMP(${value})`;
   }
 
   public escapeColumnName(name) {
@@ -68,11 +70,13 @@ export class BigqueryQuery extends BaseQuery {
    */
   public dateBin(interval: string, source: string, origin: string): string {
     const [intervalFormatted, timeUnit] = this.formatInterval(interval);
-    const beginOfTime = this.dateTimeCast('\'1970-01-01T00:00:00\'');
+    // dateBin needs DATETIME for DATETIME_DIFF operations, so use explicit DATETIME cast
+    const toDateTime = (value: string) => `DATETIME(TIMESTAMP(${value}))`;
+    const beginOfTime = toDateTime('\'1970-01-01T00:00:00\'');
 
-    return `(${this.dateTimeCast(`'${origin}'`)} + INTERVAL ${intervalFormatted} *
+    return `(${toDateTime(`'${origin}'`)} + INTERVAL ${intervalFormatted} *
       CAST(FLOOR(
-        DATETIME_DIFF(${this.dateTimeCast(source)}, ${this.dateTimeCast(`'${origin}'`)}, ${timeUnit}) /
+        DATETIME_DIFF(${toDateTime(source)}, ${toDateTime(`'${origin}'`)}, ${timeUnit}) /
         DATETIME_DIFF(${beginOfTime} + INTERVAL ${intervalFormatted}, ${beginOfTime}, ${timeUnit})
       ) AS INT64))`;
   }
