@@ -21,7 +21,6 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- --profile minimal --default-toolchain nightly-2022-03-08 -y
 
 ENV CUBESTORE_SKIP_POST_INSTALL=true
-ENV NODE_ENV=production
 
 WORKDIR /cubejs
 
@@ -108,7 +107,7 @@ RUN yarn install --prod --ignore-scripts
 
 FROM base AS build
 
-RUN yarn install --prod
+RUN yarn install
 
 # Backend
 COPY rust/cubestore/ rust/cubestore/
@@ -177,6 +176,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y ca-certificates python3.11 libpython3.11-dev \
     && apt-get clean
+
+ENV NODE_ENV=production
 
 COPY --from=build /cubejs .
 COPY --from=prod_dependencies /cubejs .
