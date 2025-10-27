@@ -23,7 +23,6 @@ COPY --from=build lerna.json /cube-build
 COPY --from=build yarn.lock /cube-build
 COPY --from=build tsconfig.base.json /cube-build
 COPY --from=build rollup.config.js /cube-build
-COPY --from=build packages/cubejs-linter /cube-build/packages/cubejs-linter
 
 COPY packages/cubejs-bigquery-driver/ /cube-build/packages/cubejs-bigquery-driver/
 
