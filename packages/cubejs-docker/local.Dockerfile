@@ -30,7 +30,7 @@ RUN apt-get update \
 
 # Собираем ваш драйвер BigQuery и регистрируем его через yarn link
 RUN cd /cube-build/packages/cubejs-bigquery-driver/ && \
-    yarn install && \
+    yarn install --production=false && \
     yarn build && \
     yarn link
 
