@@ -93,19 +93,6 @@ RUN yarn policies set-version v1.22.22
 RUN yarn config set network-timeout 120000 -g
 
 ######################################################################
-# Databricks driver dependencies                                     #
-######################################################################
-FROM base AS prod_base_dependencies
-COPY packages/cubejs-databricks-jdbc-driver/package.json packages/cubejs-databricks-jdbc-driver/package.json
-RUN mkdir packages/cubejs-databricks-jdbc-driver/bin
-RUN echo '#!/usr/bin/env node' > packages/cubejs-databricks-jdbc-driver/bin/post-install
-RUN yarn install --prod
-
-FROM prod_base_dependencies AS prod_dependencies
-COPY packages/cubejs-databricks-jdbc-driver/bin packages/cubejs-databricks-jdbc-driver/bin
-RUN yarn install --prod --ignore-scripts
-
-######################################################################
 # Build dependencies                                                 #
 ######################################################################
 FROM base AS build
@@ -167,6 +154,7 @@ COPY packages/cubejs-client-ws-transport/ packages/cubejs-client-ws-transport/
 COPY packages/cubejs-playground/ packages/cubejs-playground/
 
 # As we don't need any UI to test drivers, it's enough to transpile ts only.
+RUN yarn build
 RUN yarn lerna run build
 
 RUN find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
@@ -182,7 +170,6 @@ RUN apt-get update \
     && apt-get clean
 
 COPY --from=build /cubejs .
-COPY --from=prod_dependencies /cubejs .
 
 ENV NODE_ENV=production
 
