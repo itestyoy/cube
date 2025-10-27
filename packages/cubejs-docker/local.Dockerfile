@@ -18,10 +18,12 @@ ENV NODE_ENV=production
 WORKDIR /cube
 COPY --from=build /cube /cube
 
-COPY --from=build package.json /cube-build
-COPY --from=build lerna.json /cube-build
-COPY --from=build yarn.lock /cube-build
-COPY --from=build tsconfig.base.json /cube-build
+COPY package.json /cube-build
+COPY lerna.json /cube-build
+COPY yarn.lock /cube-build
+COPY tsconfig.base.json /cube-build
+COPY rollup.config.js /cube-build
+COPY packages/cubejs-linter /cube-build/packages/cubejs-linter
 
 COPY packages/cubejs-bigquery-driver/ /cube-build/packages/cubejs-bigquery-driver/
 
