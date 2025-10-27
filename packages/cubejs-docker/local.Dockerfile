@@ -1,9 +1,9 @@
-ARG DEV_BUILD_IMAGE=cubejs/cube:build
+ARG DEV_BUILD_IMAGE=cubejs/cube:latest
 
 FROM $DEV_BUILD_IMAGE AS build
 FROM node:22.20.0-bookworm-slim
 
-ARG IMAGE_VERSION=dev
+ARG IMAGE_VERSION=latest
 
 ENV CUBEJS_DOCKER_IMAGE_VERSION=$IMAGE_VERSION
 ENV CUBEJS_DOCKER_IMAGE_TAG=latest
@@ -23,7 +23,7 @@ COPY . .
 # the /cube directory
 COPY --from=build /cubejs /cube-build
 RUN cd /cube-build && yarn run link:dev
-COPY package.json.local package.json
+COPY package.json package.json
 
 RUN yarn policies set-version v1.22.22
 # Yarn v1 uses aggressive timeouts with summing time spending on fs, https://github.com/yarnpkg/yarn/issues/4890

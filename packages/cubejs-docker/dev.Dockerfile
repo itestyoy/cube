@@ -3,7 +3,7 @@ FROM node:22.20.0-bookworm-slim AS base
 ARG IMAGE_VERSION=latest
 
 ENV CUBEJS_DOCKER_IMAGE_VERSION=$IMAGE_VERSION
-ENV CUBEJS_DOCKER_IMAGE_TAG=$IMAGE_VERSION
+ENV CUBEJS_DOCKER_IMAGE_TAG=latest
 ENV CI=0
 
 RUN DEBIAN_FRONTEND=noninteractive \
@@ -20,6 +20,7 @@ ENV PATH=/usr/local/cargo/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- --profile minimal --default-toolchain nightly-2022-03-08 -y
 
+ENV CUBESTORE_SKIP_POST_INSTALL=true
 ENV NODE_ENV=production
 
 WORKDIR /cubejs
@@ -107,7 +108,7 @@ RUN yarn install --prod --ignore-scripts
 
 FROM base AS build
 
-RUN yarn install --prod
+RUN yarn install
 
 # Backend
 COPY rust/cubestore/ rust/cubestore/
