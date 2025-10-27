@@ -49,18 +49,17 @@ RUN cd /cube-build/packages/cubejs-server/ && \
 
 RUN cd /cube-build/packages/cubejs-cli/ && \
     yarn install --production=false && \
-    yarn build
+    yarn build && yarn link
 
 ENV NODE_ENV=production
 
 COPY package.json package.json
 
 RUN cd /cube && \
-    rm -rf node_modules yarn.lock && \
     yarn install --prod && \
     yarn cache clean
 
-RUN yarn link @cubejs-backend/server @cubejs-backend/bigquery-driver
+RUN yarn link @cubejs-backend/server @cubejs-backend/bigquery-driver cubejs-cli
 
 ENV NODE_PATH /cube/conf/node_modules:/cube/node_modules
 ENV PYTHONUNBUFFERED=1
