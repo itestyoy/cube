@@ -21,6 +21,8 @@ COPY --from=build /cube /cube
 COPY packages/cubejs-bigquery-driver/ /cube-build/packages/cubejs-bigquery-driver/
 COPY packages/cubejs-server/ /cube-build/packages/cubejs-server/
 COPY packages/cubejs-cli/ /cube-build/packages/cubejs-cli/
+COPY packages/cubejs-docker/package.json package.json
+COPY packages/cubejs-docker/package.json /cube-build/package.json
 
 COPY package.json /cube-build
 COPY lerna.json /cube-build
@@ -53,8 +55,6 @@ RUN cd /cube-build/packages/cubejs-cli/ && \
 
 ENV NODE_ENV=production
 
-# COPY package.json package.json
-
 RUN cd /cube && \
     yarn install --prod && \
     yarn cache clean
@@ -63,7 +63,7 @@ RUN yarn link @cubejs-backend/server @cubejs-backend/bigquery-driver cubejs-cli
 
 ENV NODE_PATH /cube/conf/node_modules:/cube/node_modules
 ENV PYTHONUNBUFFERED=1
-# RUN ln -s /cube/node_modules/.bin/cubejs /usr/local/bin/cubejs
+RUN ln -s /cube/node_modules/.bin/cubejs /usr/local/bin/cubejs
 RUN ln -s /cube/node_modules/.bin/cubestore-dev /usr/local/bin/cubestore-dev
 
 WORKDIR /cube/conf
