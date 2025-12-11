@@ -2831,5 +2831,62 @@ describe('Class unit tests', () => {
       // The query should build successfully
       expect(() => query.buildSqlAndParams()).not.toThrow();
     });
+
+    it('applies all filters by default when filteredDimensions is not set', async () => {
+      const compilers = prepareYamlCompiler(
+        createSchemaYaml({
+          cubes: [{
+            name: 'Orders',
+            sql: 'select * from orders',
+            measures: [
+              {
+                name: 'count',
+                sql: 'id',
+                type: 'count',
+                multiStage: true
+                // filteredDimensions NOT specified - should apply all filters by default
+              }
+            ],
+            dimensions: [
+              {
+                name: 'status',
+                sql: 'status',
+                type: 'string'
+              },
+              {
+                name: 'country',
+                sql: 'country',
+                type: 'string'
+              }
+            ]
+          }]
+        })
+      );
+
+      await compilers.compiler.compile();
+
+      const query = new BaseQuery(compilers, {
+        measures: ['Orders.count'],
+        filters: [
+          {
+            member: 'Orders.status',
+            operator: 'equals',
+            values: ['completed']
+          },
+          {
+            member: 'Orders.country',
+            operator: 'equals',
+            values: ['US']
+          }
+        ]
+      });
+
+      // Verify that filteredDimensionsReferences is not set
+      const countMeasure = compilers.cubeEvaluator.byPath('Orders', 'count');
+      expect(countMeasure.filteredDimensionsReferences).toBeUndefined();
+
+      // The query should build successfully and apply all filters
+      expect(() => query.buildSqlAndParams()).not.toThrow();
+    });
   });
 });
