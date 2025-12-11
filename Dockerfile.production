@@ -1,0 +1,144 @@
+# =============================================================================
+# Cube Production Docker Image
+# =============================================================================
+# This Dockerfile creates a production-ready Cube image with all database drivers
+#
+# Build command:
+#   docker build -f Dockerfile.production -t cubejs/cube:latest .
+#
+# Multi-platform build:
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -f Dockerfile.production -t cubejs/cube:latest .
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Builder - Install and build dependencies
+# -----------------------------------------------------------------------------
+FROM node:22.20.0-bookworm-slim AS builder
+
+# Set working directory
+WORKDIR /cube
+
+# Copy package manager files
+COPY package.json yarn.lock ./
+COPY packages ./packages
+COPY lerna.json ./
+
+# Install Yarn v1 (specific version for reproducibility)
+RUN yarn policies set-version v1.22.22
+
+# Configure Yarn for better reliability
+RUN yarn config set network-timeout 120000 -g
+
+# Install system dependencies required for building native modules
+# - python3: Required for node-gyp to build native modules
+# - libpython3-dev: Required for Python bindings (oracle, duckdb, etc.)
+# - gcc, g++, make, cmake: Build tools for native modules
+# - ca-certificates: SSL certificates for HTTPS connections
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3 \
+        python3.11 \
+        libpython3.11-dev \
+        gcc \
+        g++ \
+        make \
+        cmake \
+        ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install production dependencies only
+# This includes all database drivers from packages/cubejs-docker/package.json
+RUN yarn install --frozen-lockfile --prod && \
+    # Clean up DuckDB sources to reduce image size (they're large and not needed at runtime)
+    rm -rf /cube/node_modules/duckdb/src && \
+    # Clean Yarn cache to reduce image size
+    yarn cache clean
+
+# -----------------------------------------------------------------------------
+# Stage 2: Production - Create minimal runtime image
+# -----------------------------------------------------------------------------
+FROM node:22.20.0-bookworm-slim
+
+# Build-time argument for version tracking
+ARG IMAGE_VERSION=unknown
+
+# Environment variables
+ENV CUBEJS_DOCKER_IMAGE_VERSION=$IMAGE_VERSION \
+    CUBEJS_DOCKER_IMAGE_TAG=latest \
+    NODE_ENV=production \
+    PYTHONUNBUFFERED=1
+
+# Install runtime dependencies
+# - libssl3: OpenSSL library for HTTPS connections
+# - python3.11: Python runtime for drivers that need it (DuckDB, Oracle)
+# - libpython3.11-dev: Python development headers for native modules
+RUN DEBIAN_FRONTEND=noninteractive && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libssl3 \
+        python3.11 \
+        libpython3.11-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Yarn v1 (for consistency)
+RUN yarn policies set-version v1.22.22
+
+# Set working directory
+WORKDIR /cube
+
+# Copy installed node_modules and application code from builder
+COPY --from=builder /cube .
+
+# Configure Node.js module resolution paths
+# This allows Cube to find modules in both /cube/node_modules and /cube/conf/node_modules
+ENV NODE_PATH=/cube/conf/node_modules:/cube/node_modules
+
+# Create symlinks for CLI tools
+RUN ln -s /cube/node_modules/.bin/cubejs /usr/local/bin/cubejs && \
+    ln -s /cube/node_modules/.bin/cubestore-dev /usr/local/bin/cubestore-dev
+
+# Set working directory to config directory
+# This is where users will mount their Cube configurations
+WORKDIR /cube/conf
+
+# Expose Cube API port
+EXPOSE 4000
+
+# Health check (optional, but recommended for production)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD node -e "require('http').get('http://localhost:4000/readyz', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+
+# Default command to start Cube server
+CMD ["cubejs", "server"]
+
+# =============================================================================
+# Usage Examples:
+# =============================================================================
+#
+# 1. Basic usage:
+#    docker run -p 4000:4000 -v $(pwd):/cube/conf cubejs/cube:latest
+#
+# 2. With environment variables:
+#    docker run -p 4000:4000 \
+#      -e CUBEJS_DB_TYPE=postgres \
+#      -e CUBEJS_DB_HOST=localhost \
+#      -e CUBEJS_DB_NAME=mydb \
+#      -v $(pwd):/cube/conf \
+#      cubejs/cube:latest
+#
+# 3. Docker Compose:
+#    services:
+#      cube:
+#        image: cubejs/cube:latest
+#        ports:
+#          - "4000:4000"
+#        environment:
+#          - CUBEJS_DB_TYPE=postgres
+#          - CUBEJS_DB_HOST=db
+#        volumes:
+#          - ./schema:/cube/conf/schema
+#        depends_on:
+#          - db
+#
+# =============================================================================
