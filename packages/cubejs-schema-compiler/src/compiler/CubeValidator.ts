@@ -782,6 +782,7 @@ const MeasuresSchema = Joi.object().pattern(identifierRegex, Joi.alternatives().
       groupBy: Joi.func(),
       reduceBy: Joi.func(),
       addGroupBy: Joi.func(),
+      filteredDimensions: Joi.func(),
       timeShift: Joi.alternatives().conditional(Joi.array().length(1), {
         then: Joi.array().items(timeShiftItemOptional),
         otherwise: Joi.array().items(timeShiftItemRequired)
@@ -864,6 +865,7 @@ const DimensionsSchema = Joi.object().pattern(identifierRegex, Joi.alternatives(
       multiStage: Joi.boolean().valid(true),
       sql: Joi.func().required(),
       addGroupBy: Joi.func(),
+      filteredDimensions: Joi.func(),
     }),
     // TODO should be valid only for calendar cubes, but this requires significant refactoring
     // of all schemas. Left for the future when we'll switch to zod.

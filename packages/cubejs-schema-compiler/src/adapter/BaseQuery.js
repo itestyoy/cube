@@ -1725,12 +1725,32 @@ export class BaseQuery {
         filters: this.keepFilters(queryContext.filters, filterMember => filterMember === memberPath),
       };
     } else {
-      queryContext = {
-        ...queryContext,
-        // TODO remove not related segments
-        // segments: queryContext.segments,
-        filters: this.keepFilters(queryContext.filters, filterMember => !this.memberInstanceByPath(filterMember).isMultiStage()),
-      };
+      // Check if filteredDimensionsReferences is defined
+      if (memberDef.filteredDimensionsReferences !== undefined) {
+        // If filteredDimensionsReferences is defined, apply only filters for those dimensions
+        const allowedDimensions = memberDef.filteredDimensionsReferences || [];
+        queryContext = {
+          ...queryContext,
+          // TODO remove not related segments
+          // segments: queryContext.segments,
+          filters: this.keepFilters(queryContext.filters, filterMember => {
+            // If allowedDimensions is empty array, keep no filters
+            if (allowedDimensions.length === 0) {
+              return false;
+            }
+            // Keep filter if it's in the allowed dimensions list
+            return allowedDimensions.includes(filterMember);
+          }),
+        };
+      } else {
+        // Default behavior: keep all filters except multiStage ones
+        queryContext = {
+          ...queryContext,
+          // TODO remove not related segments
+          // segments: queryContext.segments,
+          filters: this.keepFilters(queryContext.filters, filterMember => !this.memberInstanceByPath(filterMember).isMultiStage()),
+        };
+      }
     }
     return queryContext;
   }

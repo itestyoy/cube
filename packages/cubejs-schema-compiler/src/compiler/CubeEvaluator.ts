@@ -65,10 +65,12 @@ export type MeasureDefinition = {
   groupBy?: (...args: Array<unknown>) => Array<ToString>;
   reduceBy?: (...args: Array<unknown>) => Array<ToString>;
   addGroupBy?: (...args: Array<unknown>) => Array<ToString>;
+  filteredDimensions?: (...args: Array<unknown>) => Array<ToString>;
   timeShift?: TimeShiftDefinition[];
   groupByReferences?: string[];
   reduceByReferences?: string[];
   addGroupByReferences?: string[];
+  filteredDimensionsReferences?: string[];
   timeShiftReferences?: TimeShiftDefinitionReference[];
   patchedFrom?: { cubeName: string; name: string };
 };
@@ -415,6 +417,9 @@ export class CubeEvaluator extends CubeSymbols {
         }
         if (member.addGroupBy) {
           member.addGroupByReferences = this.evaluateReferences(cubeName, member.addGroupBy);
+        }
+        if (member.filteredDimensions) {
+          member.filteredDimensionsReferences = this.evaluateReferences(cubeName, member.filteredDimensions);
         }
         if (member.timeShift) {
           member.timeShiftReferences = member.timeShift.map((s): TimeShiftDefinitionReference => ({

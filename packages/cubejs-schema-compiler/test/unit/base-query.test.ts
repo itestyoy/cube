@@ -2760,4 +2760,76 @@ describe('Class unit tests', () => {
       expect(contextSymbols.queryMembers.all).toEqual([]);
     });
   });
+
+  describe('filteredDimensions for multi-stage measures', () => {
+    it('applies only specified dimension filters when filteredDimensions is set', async () => {
+      const compilers = prepareYamlCompiler(
+        createSchemaYaml({
+          cubes: [{
+            name: 'Users',
+            sql: 'select * from users',
+            measures: [
+              {
+                name: 'premium_users',
+                sql: 'user_id',
+                type: 'countDistinct',
+                multiStage: true,
+                // Only apply filters for category dimension
+                filteredDimensions: () => ['Users.category']
+              },
+              {
+                name: 'all_users',
+                sql: 'user_id',
+                type: 'countDistinct',
+                multiStage: true,
+                // Don't apply any filters
+                filteredDimensions: () => []
+              }
+            ],
+            dimensions: [
+              {
+                name: 'category',
+                sql: 'category',
+                type: 'string'
+              },
+              {
+                name: 'region',
+                sql: 'region',
+                type: 'string'
+              }
+            ]
+          }]
+        })
+      );
+
+      await compilers.compiler.compile();
+
+      // Test with filters on both category and region
+      const query = new BaseQuery(compilers, {
+        measures: ['Users.premium_users', 'Users.all_users'],
+        filters: [
+          {
+            member: 'Users.category',
+            operator: 'equals',
+            values: ['premium']
+          },
+          {
+            member: 'Users.region',
+            operator: 'equals',
+            values: ['US']
+          }
+        ]
+      });
+
+      // Verify that the measures have filteredDimensionsReferences
+      const premiumUsersMeasure = compilers.cubeEvaluator.byPath('Users', 'premium_users');
+      const allUsersMeasure = compilers.cubeEvaluator.byPath('Users', 'all_users');
+
+      expect(premiumUsersMeasure.filteredDimensionsReferences).toEqual(['Users.category']);
+      expect(allUsersMeasure.filteredDimensionsReferences).toEqual([]);
+
+      // The query should build successfully
+      expect(() => query.buildSqlAndParams()).not.toThrow();
+    });
+  });
 });
