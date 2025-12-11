@@ -1743,13 +1743,13 @@ export class BaseQuery {
           }),
         };
       } else {
-        // Default behavior when filteredDimensions is not set: apply all filters
+        // Default behavior when filteredDimensions is not set: use original logic
+        // Keep all filters except multiStage ones
         queryContext = {
           ...queryContext,
           // TODO remove not related segments
           // segments: queryContext.segments,
-          // Keep all filters when filteredDimensions is not specified
-          filters: queryContext.filters,
+          filters: this.keepFilters(queryContext.filters, filterMember => !this.memberInstanceByPath(filterMember).isMultiStage()),
         };
       }
     }

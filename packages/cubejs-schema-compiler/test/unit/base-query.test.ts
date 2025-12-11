@@ -2832,7 +2832,7 @@ describe('Class unit tests', () => {
       expect(() => query.buildSqlAndParams()).not.toThrow();
     });
 
-    it('applies all filters by default when filteredDimensions is not set', async () => {
+    it('uses original behavior when filteredDimensions is not set', async () => {
       const compilers = prepareYamlCompiler(
         createSchemaYaml({
           cubes: [{
@@ -2844,7 +2844,8 @@ describe('Class unit tests', () => {
                 sql: 'id',
                 type: 'count',
                 multiStage: true
-                // filteredDimensions NOT specified - should apply all filters by default
+                // filteredDimensions NOT specified - should use original behavior
+                // (apply all filters except multiStage ones)
               }
             ],
             dimensions: [
@@ -2885,7 +2886,7 @@ describe('Class unit tests', () => {
       const countMeasure = compilers.cubeEvaluator.byPath('Orders', 'count');
       expect(countMeasure.filteredDimensionsReferences).toBeUndefined();
 
-      // The query should build successfully and apply all filters
+      // The query should build successfully using original filter logic
       expect(() => query.buildSqlAndParams()).not.toThrow();
     });
   });
