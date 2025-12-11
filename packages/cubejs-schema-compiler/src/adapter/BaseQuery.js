@@ -4842,7 +4842,8 @@ export class BaseQuery {
         filterGroup: this.filterGroupFunction(),
         sqlUtils: {
           convertTz: this.convertTz.bind(this)
-        }
+        },
+        queryMembers: this.queryMembersProxy()
       }, R.map(
         (symbols) => this.contextSymbolsProxy(symbols),
         this.contextSymbols
@@ -4859,6 +4860,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
+      queryMembers: BaseQuery.queryMembersProxyFromQuery([], []),
     };
   }
 
@@ -4935,6 +4937,33 @@ export class BaseQuery {
       this.paramAllocator.allocateParam.bind(this.paramAllocator),
       this.newGroupFilter.bind(this),
     );
+  }
+
+  queryMembersProxy() {
+    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions);
+  }
+
+  static queryMembersProxyFromQuery(measures, dimensions) {
+    const measureNames = (measures || []).map(m => m.measure);
+    const dimensionNames = (dimensions || []).map(d => d.dimension);
+
+    return new Proxy({}, {
+      get: (_target, name) => {
+        if (name === '_objectWithResolvedProperties') {
+          return true;
+        }
+        if (name === 'measures') {
+          return measureNames;
+        }
+        if (name === 'dimensions') {
+          return dimensionNames;
+        }
+        if (name === 'all') {
+          return measureNames.concat(dimensionNames);
+        }
+        return undefined;
+      }
+    });
   }
 
   filterGroupFunctionForRust(usedFilters) {
