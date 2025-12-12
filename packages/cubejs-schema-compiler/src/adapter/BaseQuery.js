@@ -4881,7 +4881,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryMembers: BaseQuery.queryMembersProxyFromQuery([], [], [], [], [], [], []),
+      queryMembers: BaseQuery.queryMembersProxyFromQuery([], [], [], [], [], {}),
     };
   }
 
@@ -4961,35 +4961,47 @@ export class BaseQuery {
   }
 
   queryMembersProxy() {
-    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.measureFilters, this.flattenAllMembers(true));
+    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options);
   }
 
-  static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, measureFilters, members) {
+  static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options) {
+    const measureNames = (measures || []).map(m => m.measure);
+    const dimensionNames = (dimensions || []).map(d => d.dimension);
+    const timeDimensionNames = (timeDimensions || []).map(t => t.timeDimension);
+    const segmentNames = (segments || []).map(s => s.segment);
+    const filterNames = (filters || []).map(s => s.dimension);
+
+    const optionFilters = options.filters;
+    const optionTimeDimensions = options.timeDimensions;
+
     return new Proxy({}, {
       get: (_target, name) => {
         if (name === '_objectWithResolvedProperties') {
           return true;
         }
         if (name === 'measures') {
-          return measures.map(m => m.getMembers());
+          return measureNames;
         }
         if (name === 'dimensions') {
-          return dimensions.map(m => m.getMembers());
+          return dimensionNames;
         }
-        if (name === 'segments') {
-          return segments.map(m => m.getMembers());
+        if (name === 'dimensions') {
+          return dimensionNames;
         }
         if (name === 'timeDimensions') {
-          return timeDimensions.map(m => m.getMembers());
+          return timeDimensionNames;
         }
         if (name === 'filters') {
-          return filters.map(m => m.getMembers());
+          return filterNames;
         }
-        if (name === 'measureFilters') {
-          return measureFilters.map(m => m.getMembers());
+        if (name === 'optionFilters') {
+          return optionFilters;
+        }
+        if (name === 'optionTimeDimensions') {
+          return optionTimeDimensions;
         }
         if (name === 'members') {
-          return members;
+          return measureNames.concat(dimensionNames).concat(timeDimensionNames).concat(segmentNames);
         }
         return undefined;
       }
