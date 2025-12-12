@@ -4881,7 +4881,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryMembers: BaseQuery.queryMembersProxyFromQuery([], [], [], [], [], []),
+      queryMembers: BaseQuery.queryMembersProxyFromQuery([], [], [], [], [], [], []),
     };
   }
 
@@ -4961,10 +4961,10 @@ export class BaseQuery {
   }
 
   queryMembersProxy() {
-    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.measureFilters);
+    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.measureFilters, this.flattenAllMembers(true));
   }
 
-  static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, measureFilters) {
+  static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, measureFilters, members) {
     return new Proxy({}, {
       get: (_target, name) => {
         if (name === '_objectWithResolvedProperties') {
@@ -4989,7 +4989,7 @@ export class BaseQuery {
           return measureFilters;
         }
         if (name === 'members') {
-          return this.flattenAllMembers(true);
+          return members;
         }
         return undefined;
       }
