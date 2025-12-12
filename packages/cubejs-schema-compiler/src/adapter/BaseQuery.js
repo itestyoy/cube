@@ -4961,18 +4961,19 @@ export class BaseQuery {
   }
 
   queryMembersProxy() {
-    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options);
+    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.constructor, this.compilers);
   }
 
-  static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options) {
+  static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, constructor, compilers) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
-    const timeDimensionNames = (timeDimensions || []).map(t => t.timeDimension);
+    const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
     const segmentNames = (segments || []).map(s => s.segment);
     const filterNames = (filters || []).map(s => s.dimension);
 
-    const optionFilters = options.filters;
-    const optionTimeDimensions = options.timeDimensions;
+    const queryOptions = options;
+
+    const query = (options) => new QueryClass(compilers, { ...options, useNativeSqlPlanner: false });
 
     return new Proxy({}, {
       get: (_target, name) => {
@@ -4994,14 +4995,18 @@ export class BaseQuery {
         if (name === 'filters') {
           return filterNames;
         }
-        if (name === 'optionFilters') {
-          return optionFilters;
+        if (name === 'queryOptions') {
+          return queryOptions;
         }
-        if (name === 'optionTimeDimensions') {
-          return optionTimeDimensions;
+        if (name === 'query') {
+          return query;
         }
         if (name === 'members') {
-          return measureNames.concat(dimensionNames).concat(timeDimensionNames).concat(segmentNames);
+          return measureNames
+                  .concat(dimensionNames)
+                  .concat(timeDimensionNames)
+                  .concat(segmentNames)
+              .filter((e) => !!e);
         }
         return undefined;
       }
