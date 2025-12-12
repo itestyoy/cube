@@ -49,8 +49,7 @@ RUN apt-get update && \
 
 WORKDIR /cube
 
-# Copy Cargo workspace files
-COPY Cargo.toml Cargo.lock ./
+# Copy Rust projects (each has its own Cargo.toml and Cargo.lock)
 COPY rust ./rust
 
 # Install nightly toolchain as per workflow (line 628)
@@ -114,7 +113,6 @@ RUN npm install -g cargo-cp-artifact@0.1
 # Copy necessary files for native module build
 COPY packages/cubejs-backend-native ./packages/cubejs-backend-native
 COPY rust ./rust
-COPY Cargo.toml Cargo.lock ./
 
 # Determine Rust target
 ARG TARGETARCH
