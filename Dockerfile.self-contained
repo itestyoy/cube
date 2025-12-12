@@ -129,6 +129,8 @@ RUN case "$RUST_TARGET" in \
 # For fallback (no Python) version
 WORKDIR /cube/packages/cubejs-backend-native
 RUN export CARGO_BUILD_TARGET=$(cat /tmp/rust-target) && \
+    echo "Building for target: $CARGO_BUILD_TARGET" && \
+    npm install && \
     npm run native:build-release
 
 # The binary will be at: packages/cubejs-backend-native/index.node
@@ -160,8 +162,10 @@ RUN apt-get update && \
 
 WORKDIR /cube
 
-# Copy package files
+# Copy package files and build configuration
 COPY package.json yarn.lock lerna.json ./
+COPY tsconfig*.json ./
+COPY rollup.config.js ./
 COPY packages ./packages
 
 # Install Yarn v1.22.22 (exact workflow step from line 49)
@@ -185,13 +189,21 @@ RUN yarn build
 ENV NODE_OPTIONS=--max_old_space_size=4096
 RUN yarn lerna run --concurrency 1 build
 
+# Save the pre-built native module before production reinstall
+RUN mkdir -p /tmp/native-backup && \
+    cp packages/cubejs-backend-native/index.node /tmp/native-backup/index.node 2>/dev/null || true
+
 # Now install production dependencies only
 # This creates a clean node_modules for production
+# Skip building native modules - we'll restore the pre-built one
 RUN rm -rf node_modules packages/*/node_modules && \
-    yarn install --frozen-lockfile --prod && \
+    CUBESTORE_SKIP_POST_INSTALL=true yarn install --frozen-lockfile --prod && \
     # Remove DuckDB sources to reduce image size
     rm -rf /cube/node_modules/duckdb/src && \
     yarn cache clean
+
+# Restore the pre-built native module after production reinstall
+RUN cp /tmp/native-backup/index.node packages/cubejs-backend-native/index.node
 
 # -----------------------------------------------------------------------------
 # Stage 4: Production - Assemble final image
