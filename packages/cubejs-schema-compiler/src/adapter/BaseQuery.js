@@ -4881,7 +4881,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryMembers: BaseQuery.queryMembersProxyFromQuery([], [], [], []),
+      queryMembers: BaseQuery.queryMembersProxyFromQuery([], [], [], [], [], []),
     };
   }
 
@@ -4961,10 +4961,10 @@ export class BaseQuery {
   }
 
   queryMembersProxy() {
-    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments);
+    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.measureFilters);
   }
 
-  static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments) {
+  static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, measureFilters) {
     return new Proxy({}, {
       get: (_target, name) => {
         if (name === '_objectWithResolvedProperties') {
@@ -4982,8 +4982,19 @@ export class BaseQuery {
         if (name === 'timeDimensions') {
           return timeDimensions;
         }
+        if (name === 'filters') {
+          return filters;
+        }
+        if (name === 'measureFilters') {
+          return measureFilters;
+        }
         if (name === 'all') {
-          return measures.concat(dimensions).concat(timeDimensions).concat(segments);
+          return measures
+                  .concat(dimensions)
+                  .concat(timeDimensions)
+                  .concat(segments)
+                  .concat(filters)
+                  .concat(measureFilters);
         }
         return undefined;
       }
