@@ -25,8 +25,9 @@ ARG TARGETPLATFORM=linux/amd64
 # -----------------------------------------------------------------------------
 # Stage 1: CubeStore Builder - Build Rust OLAP engine
 # Replicates: cubestore_linux job (lines 584-664)
+# Note: Build on target platform to avoid cross-compilation issues
 # -----------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM rust:1.90.0-bookworm AS cubestore-builder
+FROM --platform=$TARGETPLATFORM rust:1.90.0-bookworm AS cubestore-builder
 
 # Set environment variables from workflow
 ENV OPENSSL_STATIC=1 \
@@ -57,27 +58,19 @@ COPY rust ./rust
 RUN rustup toolchain install nightly-2025-08-01 && \
     rustup component add rustfmt --toolchain nightly-2025-08-01
 
-# Determine target based on platform
-ARG TARGETARCH
-RUN case "$TARGETARCH" in \
-        "amd64") echo "x86_64-unknown-linux-gnu" > /tmp/rust-target ;; \
-        "arm64") echo "aarch64-unknown-linux-gnu" > /tmp/rust-target ;; \
-        *) echo "x86_64-unknown-linux-gnu" > /tmp/rust-target ;; \
-    esac
+# Build CubeStore (workflow command from line 640)
+# Building natively on target platform, no cross-compilation needed
+RUN cd rust/cubestore && \
+    cargo +nightly-2025-08-01 build --release -p cubestore
 
-# Build CubeStore (exact workflow command from line 640)
-RUN export RUST_TARGET=$(cat /tmp/rust-target) && \
-    rustup target add $RUST_TARGET --toolchain nightly-2025-08-01 && \
-    cd rust/cubestore && \
-    cargo +nightly-2025-08-01 build --release --target=$RUST_TARGET -p cubestore
-
-# The binary will be at: rust/cubestore/target/<target>/release/cubestored
+# The binary will be at: rust/cubestore/target/release/cubestored
 
 # -----------------------------------------------------------------------------
 # Stage 2: Native Module Builder - Build @cubejs-backend/native
 # Replicates: native_linux job (lines 71-150)
+# Note: Build on target platform to avoid cross-compilation issues
 # -----------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM node:22.20.0-bookworm AS native-builder
+FROM --platform=$TARGETPLATFORM node:22.20.0-bookworm AS native-builder
 
 # Install Rust (toolchain 1.90.0 as per workflow line 101)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
@@ -113,24 +106,11 @@ RUN npm install -g cargo-cp-artifact@0.1
 COPY packages/cubejs-backend-native ./packages/cubejs-backend-native
 COPY rust ./rust
 
-# Determine Rust target
-ARG TARGETARCH
-ENV RUST_TARGET=${TARGETARCH}
-RUN case "$RUST_TARGET" in \
-        "amd64") echo "x86_64-unknown-linux-gnu" > /tmp/rust-target ;; \
-        "arm64") echo "aarch64-unknown-linux-gnu" > /tmp/rust-target ;; \
-        *) echo "x86_64-unknown-linux-gnu" > /tmp/rust-target ;; \
-    esac && \
-    export CARGO_BUILD_TARGET=$(cat /tmp/rust-target) && \
-    echo "CARGO_BUILD_TARGET=$CARGO_BUILD_TARGET" >> /etc/environment
-
-# Build native module (exact workflow command from line 121)
+# Build native module (workflow command from line 121)
 # For fallback (no Python) version
+# Building natively on target platform, no cross-compilation needed
 WORKDIR /cube/packages/cubejs-backend-native
-RUN export CARGO_BUILD_TARGET=$(cat /tmp/rust-target) && \
-    echo "Building for target: $CARGO_BUILD_TARGET" && \
-    rustup target add $CARGO_BUILD_TARGET && \
-    npm install && \
+RUN npm install && \
     npm run native:build-release
 
 # The binary will be at: packages/cubejs-backend-native/index.node
@@ -138,8 +118,9 @@ RUN export CARGO_BUILD_TARGET=$(cat /tmp/rust-target) && \
 # -----------------------------------------------------------------------------
 # Stage 3: Node.js Builder - Build all packages
 # Replicates: npm job (lines 14-70)
+# Note: Build on target platform for consistency
 # -----------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM node:22.20.0-bookworm AS nodejs-builder
+FROM --platform=$TARGETPLATFORM node:22.20.0-bookworm AS nodejs-builder
 
 # Install Rust for potential native module builds during yarn install
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
@@ -243,14 +224,8 @@ COPY --from=nodejs-builder /cube/package.json ./package.json
 COPY --from=nodejs-builder /cube/yarn.lock ./yarn.lock
 COPY --from=nodejs-builder /cube/lerna.json ./lerna.json
 
-# Copy CubeStore binary from cubestore-builder
-RUN case "$TARGETARCH" in \
-        "amd64") echo "x86_64-unknown-linux-gnu" > /tmp/rust-target ;; \
-        "arm64") echo "aarch64-unknown-linux-gnu" > /tmp/rust-target ;; \
-        *) echo "x86_64-unknown-linux-gnu" > /tmp/rust-target ;; \
-    esac
-
-COPY --from=cubestore-builder /cube/rust/cubestore/target/*/release/cubestored /usr/local/bin/cubestored
+# Copy CubeStore binary from cubestore-builder (built natively on target platform)
+COPY --from=cubestore-builder /cube/rust/cubestore/target/release/cubestored /usr/local/bin/cubestored
 
 # Copy native module from native-builder
 COPY --from=native-builder /cube/packages/cubejs-backend-native/index.node \
