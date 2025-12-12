@@ -4965,30 +4965,25 @@ export class BaseQuery {
   }
 
   static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments) {
-    const measureNames = (measures || []).map(m => m.measure);
-    const dimensionNames = (dimensions || []).map(d => d.dimension);
-    const timeDimensionNames = (timeDimensions || []).map(t => t.timeDimensions);
-    const segmentNames = (segments || []).map(s => s.segments);
-
     return new Proxy({}, {
       get: (_target, name) => {
         if (name === '_objectWithResolvedProperties') {
           return true;
         }
         if (name === 'measures') {
-          return measureNames;
+          return measures;
         }
         if (name === 'dimensions') {
-          return dimensionNames;
+          return dimensions;
         }
         if (name === 'segments') {
-          return segmentNames;
+          return segments;
         }
         if (name === 'timeDimensions') {
-          return dimensionNames;
+          return timeDimensions;
         }
         if (name === 'all') {
-          return measureNames.concat(dimensionNames).concat(timeDimensionNames).concat(segmentNames);
+          return measures.concat(dimensions).concat(timeDimensions).concat(segments);
         }
         return undefined;
       }
