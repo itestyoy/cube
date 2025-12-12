@@ -4988,13 +4988,8 @@ export class BaseQuery {
         if (name === 'measureFilters') {
           return measureFilters;
         }
-        if (name === 'all') {
-          return measures
-                  .concat(dimensions)
-                  .concat(timeDimensions)
-                  .concat(segments)
-                  .concat(filters)
-                  .concat(measureFilters);
+        if (name === 'members') {
+          return this.flattenAllMembers(true);
         }
         return undefined;
       }
