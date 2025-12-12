@@ -4971,22 +4971,22 @@ export class BaseQuery {
           return true;
         }
         if (name === 'measures') {
-          return measures;
+          return measures.map(m => m.getMembers());
         }
         if (name === 'dimensions') {
-          return dimensions;
+          return dimensions.map(m => m.getMembers());
         }
         if (name === 'segments') {
-          return segments;
+          return segments.map(m => m.getMembers());
         }
         if (name === 'timeDimensions') {
-          return timeDimensions;
+          return timeDimensions.map(m => m.getMembers());
         }
         if (name === 'filters') {
-          return filters;
+          return filters.map(m => m.getMembers());
         }
         if (name === 'measureFilters') {
-          return measureFilters;
+          return measureFilters.map(m => m.getMembers());
         }
         if (name === 'members') {
           return members;
