@@ -4881,7 +4881,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryMembers: BaseQuery.queryMembersProxyFromQuery([], [], [], [], [], {}),
+      queryMembers: BaseQuery.queryMembersProxyFromQuery([], [], [], [], [], {}, BaseQuery, null),
     };
   }
 
@@ -4973,8 +4973,11 @@ export class BaseQuery {
 
     const queryOptions = options;
 
-    const query = (options) => new QueryClass(compilers, { ...options, useNativeSqlPlanner: false });
-
+    const query = (options) =>
+      (compilers && compilers.cubeEvaluator && compilers.joinGraph)
+        ? new constructor(compilers, { ...options, useNativeSqlPlanner: false })
+        : {};
+        
     return new Proxy({}, {
       get: (_target, name) => {
         if (name === '_objectWithResolvedProperties') {
