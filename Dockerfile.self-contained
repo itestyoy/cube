@@ -103,9 +103,8 @@ RUN apt-get update && \
 
 WORKDIR /cube
 
-# Install Yarn v1.22.22 (exact version from workflow)
-RUN npm install -g yarn && \
-    yarn policies set-version v1.22.22
+# Set Yarn version to v1.22.22 (yarn is already included in Node.js image)
+RUN yarn policies set-version v1.22.22
 
 # Install cargo-cp-artifact (exact version from workflow line 116)
 RUN npm install -g cargo-cp-artifact@0.1
