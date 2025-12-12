@@ -43,6 +43,8 @@ RUN apt-get update && \
         gcc \
         make \
         libssl-dev \
+        libclang-dev \
+        clang \
         pkg-config \
         ca-certificates \
         git && \
