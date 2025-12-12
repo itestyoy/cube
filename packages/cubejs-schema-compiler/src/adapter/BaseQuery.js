@@ -4881,7 +4881,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryMembers: BaseQuery.queryMembersProxyFromQuery([], []),
+      queryMembers: BaseQuery.queryMembersProxyFromQuery([], [], [], []),
     };
   }
 
@@ -4961,12 +4961,14 @@ export class BaseQuery {
   }
 
   queryMembersProxy() {
-    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions);
+    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments);
   }
 
-  static queryMembersProxyFromQuery(measures, dimensions) {
+  static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
+    const timeDimensionNames = (timeDimensions || []).map(t => t.timeDimensions);
+    const segmentNames = (segments || []).map(s => s.segments);
 
     return new Proxy({}, {
       get: (_target, name) => {
@@ -4979,8 +4981,14 @@ export class BaseQuery {
         if (name === 'dimensions') {
           return dimensionNames;
         }
+        if (name === 'segments') {
+          return segmentNames;
+        }
+        if (name === 'timeDimensions') {
+          return dimensionNames;
+        }
         if (name === 'all') {
-          return measureNames.concat(dimensionNames);
+          return measureNames.concat(dimensionNames).concat(timeDimensionNames).concat(segmentNames);
         }
         return undefined;
       }
