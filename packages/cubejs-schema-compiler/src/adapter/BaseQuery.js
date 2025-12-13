@@ -4881,7 +4881,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, null),
+      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, null, BaseQuery),
     };
   }
 
@@ -4961,10 +4961,10 @@ export class BaseQuery {
   }
 
   queryContextProxy() {
-    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compilers);
+    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compilers, this.constructor);
   }
 
-  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compilers) {
+  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compilers, constructor) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
     const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
@@ -4975,7 +4975,7 @@ export class BaseQuery {
 
     const query = (options) => {
       if (!compilers?.cubeEvaluator || !compilers?.joinGraph) return '';
-      return new BaseQuery(compilers, { ...options })
+      return new constructor(compilers, { ...options })
         .buildParamAnnotatedSql();
     };
     
