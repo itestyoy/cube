@@ -4864,7 +4864,7 @@ export class BaseQuery {
         sqlUtils: {
           convertTz: this.convertTz.bind(this)
         },
-        queryMembers: this.queryMembersProxy()
+        queryContext: this.queryContextProxy()
       }, R.map(
         (symbols) => this.contextSymbolsProxy(symbols),
         this.contextSymbols
@@ -4881,7 +4881,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryMembers: BaseQuery.queryMembersProxyFromQuery([], [], [], [], [], {}, null),
+      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, null),
     };
   }
 
@@ -4960,11 +4960,11 @@ export class BaseQuery {
     );
   }
 
-  queryMembersProxy() {
-    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compilers);
+  queryContextProxy() {
+    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compilers);
   }
 
-  static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compilers) {
+  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compilers) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
     const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);

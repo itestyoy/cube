@@ -228,7 +228,7 @@ export const CONTEXT_SYMBOLS = {
   FILTER_PARAMS: 'filterParams',
   FILTER_GROUP: 'filterGroup',
   SQL_UTILS: 'sqlUtils',
-  QUERY_MEMBERS: 'queryMembers'
+  CONTEXT: 'queryContext'
 };
 
 export const CURRENT_CUBE_CONSTANTS = ['CUBE', 'TABLE'];
