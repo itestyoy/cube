@@ -4881,7 +4881,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, null, BaseQuery),
+      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, null, BaseQuery, (cubeName) => cubeName),
     };
   }
 
@@ -4961,10 +4961,10 @@ export class BaseQuery {
   }
 
   queryContextProxy() {
-    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compilers, this.constructor);
+    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compilers, this.constructor, this.cubeAlias);
   }
 
-  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compilers, constructor) {
+  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compilers, constructor, cubeAlias) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
     const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
@@ -4972,6 +4972,8 @@ export class BaseQuery {
     const filterNames = (filters || []).map(s => s.dimension);
 
     const queryOptions = options;
+
+    const getcubeAlias = (cubeName) => cubeAlias(cubeName);
 
     const query = (options) => {
       if (!compilers?.cubeEvaluator || !compilers?.joinGraph) return '';
@@ -5000,6 +5002,9 @@ export class BaseQuery {
           return filterNames;
         }
         if (name === 'queryOptions') {
+          return queryOptions;
+        }
+        if (name === 'getcubeAlias') {
           return queryOptions;
         }
         if (name === 'query') {
