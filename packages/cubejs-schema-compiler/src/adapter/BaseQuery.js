@@ -4973,11 +4973,12 @@ export class BaseQuery {
 
     const queryOptions = options;
 
-    const query = (options) =>
-      (compilers && compilers.cubeEvaluator && compilers.joinGraph)
-        ? new BaseQuery(compilers, { ...options, useNativeSqlPlanner: false }).buildParamAnnotatedSql()
-        : '';
-        
+    const query = (options) => {
+      if (!compilers?.cubeEvaluator || !compilers?.joinGraph) return '';
+      return new BaseQuery(compilers, { ...options })
+        .buildParamAnnotatedSql();
+    };
+    
     return new Proxy({}, {
       get: (_target, name) => {
         if (name === '_objectWithResolvedProperties') {
