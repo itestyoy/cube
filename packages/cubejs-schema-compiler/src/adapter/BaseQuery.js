@@ -4974,8 +4974,9 @@ export class BaseQuery {
     const queryOptions = options;
 
     const query = (options) => {
-      if (!compilers?.cubeEvaluator || !compilers?.joinGraph) return '';
-      return new constructor(compilers, { ...options });
+      if (!compilers?.cubeEvaluator || !compilers?.joinGraph) return {};
+      return new constructor(compilers, { ...options })
+                  .buildSqlAndParams(false);
     };
 
     return new Proxy({}, {
