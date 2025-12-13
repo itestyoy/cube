@@ -5005,7 +5005,7 @@ export class BaseQuery {
           return queryOptions;
         }
         if (name === 'getcubeAlias') {
-          return queryOptions;
+          return getcubeAlias;
         }
         if (name === 'query') {
           return query;
