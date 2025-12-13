@@ -4881,7 +4881,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryMembers: BaseQuery.queryMembersProxyFromQuery([], [], [], [], [], {}, BaseQuery, null),
+      queryMembers: BaseQuery.queryMembersProxyFromQuery([], [], [], [], [], {}, null),
     };
   }
 
@@ -4961,10 +4961,10 @@ export class BaseQuery {
   }
 
   queryMembersProxy() {
-    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.constructor, this.compilers);
+    return BaseQuery.queryMembersProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compilers);
   }
 
-  static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, constructor, compilers) {
+  static queryMembersProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compilers) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
     const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
@@ -4975,8 +4975,8 @@ export class BaseQuery {
 
     const query = (options) =>
       (compilers && compilers.cubeEvaluator && compilers.joinGraph)
-        ? new constructor(compilers, { ...options, useNativeSqlPlanner: false })
-        : {};
+        ? new BaseQuery(compilers, { ...options, useNativeSqlPlanner: false }).buildParamAnnotatedSql()
+        : '';
         
     return new Proxy({}, {
       get: (_target, name) => {
