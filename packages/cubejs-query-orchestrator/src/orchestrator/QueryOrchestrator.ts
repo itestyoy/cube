@@ -214,6 +214,7 @@ export class QueryOrchestrator {
       preAggregationsTablesToTempTables,
       values,
     } = await this.preAggregations.loadAllPreAggregationsIfNeeded(queryBody);
+    let mergedPreAggregationsTablesToTempTables = preAggregationsTablesToTempTables;
 
     if (values) {
       queryBody = {
@@ -230,20 +231,21 @@ export class QueryOrchestrator {
       ];
       // Deduplicate by original table name (first element)
       const seen = new Set<string>();
+      mergedPreAggregationsTablesToTempTables = merged.filter(([tableName]) => {
+        if (seen.has(tableName)) {
+          return false;
+        }
+        seen.add(tableName);
+        return true;
+      });
       queryBody = {
         ...queryBody,
-        preAggregationsTablesToTempTables: merged.filter(([tableName]) => {
-          if (seen.has(tableName)) {
-            return false;
-          }
-          seen.add(tableName);
-          return true;
-        }),
+        preAggregationsTablesToTempTables: mergedPreAggregationsTablesToTempTables,
       };
     } else {
       queryBody = {
         ...queryBody,
-        preAggregationsTablesToTempTables
+        preAggregationsTablesToTempTables,
       };
     }
 
@@ -291,7 +293,7 @@ export class QueryOrchestrator {
 
     const result = await this.queryCache.cachedQueryResult(
       queryBody,
-      preAggregationsTablesToTempTables
+      mergedPreAggregationsTablesToTempTables
     );
 
     lastRefreshTimestamp = getLastUpdatedAtTimestamp([
