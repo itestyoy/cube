@@ -3982,19 +3982,6 @@ export class BaseQuery {
     return new QueryClass(this.compilers, this.subQueryOptions(options));
   }
 
-  registerSubQueryPreAggregations(subQuery) {
-    const desc = subQuery?.preAggregations?.preAggregationsDescription?.();
-    if (desc?.length) {
-      this.extraPreAggregations.push(...desc);
-    }
-  }
-
-  compileSubQueryWithPreAggregations(options, exportAnnotatedSql) {
-    const subQuery = this.newSubQuery(options);
-    this.registerSubQueryPreAggregations(subQuery);
-    return subQuery.buildSqlAndParams(exportAnnotatedSql);
-  }
-
   newSubQueryForCube(cube, options) {
     options = { ...options };
     if (this.options.queryFactory) {
@@ -4896,7 +4883,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, (q, f) => []),
+      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, null, BaseQuery, null),
     };
   }
 
@@ -4976,10 +4963,10 @@ export class BaseQuery {
   }
 
   queryContextProxy() {
-    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compileSubQueryWithPreAggregations);
+    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compilers, this.constructor, this.extraPreAggregations);
   }
 
-  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compileSubQueryWithPreAggregations) {
+  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compilers, constructor, extraPreAggregations) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
     const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
@@ -4988,8 +4975,17 @@ export class BaseQuery {
 
     const queryOptions = options;
 
-    const query = (options, exportAnnotatedSql) => {
-      return compileSubQueryWithPreAggregations(options, exportAnnotatedSql);
+    const query = (options) => {
+      if (!compilers?.cubeEvaluator || !compilers?.joinGraph) return { };
+      const item = new constructor(compilers, { ...options });
+
+      const desc = item?.preAggregations?.preAggregationsDescription?.();
+
+      if (desc?.length) {
+        extraPreAggregations?.push(...desc);
+      }
+
+      return item.buildSqlAndParams(false);
     };
 
     return new Proxy({}, {
