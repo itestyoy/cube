@@ -1744,10 +1744,16 @@ class ApiGateway {
     normalizedQuery: NormalizedQuery,
     sqlQuery: any,
   ): Promise<ResultWrapper> {
+    const sqlQueryWithPreAggregations = await this.applyPreAggregationsToSqlQuery(
+      sqlQuery,
+      normalizedQuery,
+      context
+    );
+
     const queries: QueryBody[] = [{
-      ...sqlQuery,
-      query: sqlQuery.sql[0],
-      values: sqlQuery.sql[1],
+      ...sqlQueryWithPreAggregations,
+      query: sqlQueryWithPreAggregations.sql[0],
+      values: sqlQueryWithPreAggregations.sql[1],
       cacheMode: normalizedQuery.cacheMode,
       requestId: context.requestId,
       context,
@@ -1767,10 +1773,15 @@ class ApiGateway {
         context,
         [normalizedTotal],
       );
+      const totalQueryWithPreAggregations = await this.applyPreAggregationsToSqlQuery(
+        totalQuery,
+        normalizedTotal,
+        context
+      );
       queries.push({
-        ...totalQuery,
-        query: totalQuery.sql[0],
-        values: totalQuery.sql[1],
+        ...totalQueryWithPreAggregations,
+        query: totalQueryWithPreAggregations.sql[0],
+        values: totalQueryWithPreAggregations.sql[1],
         cacheMode: normalizedTotal.cacheMode,
         requestId: context.requestId,
         context
