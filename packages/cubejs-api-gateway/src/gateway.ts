@@ -29,7 +29,7 @@ import type {
 } from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 
-import { QueryBody, QueryCache } from '@cubejs-backend/query-orchestrator';
+import { QueryBody, QueryCache, QueryWithParams } from '@cubejs-backend/query-orchestrator';
 import {
   QueryType,
   ApiScopes,
@@ -1364,7 +1364,9 @@ class ApiGateway {
       return sqlQuery;
     }
 
-    const sqlWithParams = Array.isArray(sqlQuery.sql) ? [...sqlQuery.sql] : [sqlQuery.sql];
+    const sqlWithParams: QueryWithParams = Array.isArray(sqlQuery.sql)
+      ? [...sqlQuery.sql] as QueryWithParams
+      : [sqlQuery.sql, sqlQuery.values || []];
 
     const queryBody: QueryBody = {
       ...sqlQuery,
