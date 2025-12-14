@@ -1695,15 +1695,20 @@ class ApiGateway {
               this.coerceForSqlQuery(normalizedQuery, context)
             );
           const sqlQuery = this.sanitizeSqlQuery(sqlQueryRaw);
+          const sqlWithPreAggregations = await this.applyPreAggregationsToSqlQuery(
+            sqlQuery,
+            normalizedQuery,
+            context
+          );
 
           this.log({
             type: 'Load Request SQL',
             duration: this.duration(loadRequestSQLStarted),
             query: this.sanitizeQueryForLogging(normalizedQueries[index]),
-            sqlQuery
+            sqlQuery: sqlWithPreAggregations
           }, context);
 
-          return sqlQuery;
+          return sqlWithPreAggregations;
         }
       )
     );
