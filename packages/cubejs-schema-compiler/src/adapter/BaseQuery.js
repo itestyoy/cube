@@ -4896,7 +4896,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, null, BaseQuery),
+      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, (q, f) => []),
     };
   }
 
@@ -4976,10 +4976,10 @@ export class BaseQuery {
   }
 
   queryContextProxy() {
-    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compilers, this.constructor);
+    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compileSubQueryWithPreAggregations);
   }
 
-  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compilers, constructor) {
+  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compileSubQueryWithPreAggregations) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
     const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
@@ -4988,9 +4988,8 @@ export class BaseQuery {
 
     const queryOptions = options;
 
-    const query = (options) => {
-      if (!compilers?.cubeEvaluator || !compilers?.joinGraph) return { buildSqlAndParams: (q) => [] };
-      return new constructor(compilers, { ...options });
+    const query = (options, exportAnnotatedSql) => {
+      return compileSubQueryWithPreAggregations(options, exportAnnotatedSql);
     };
 
     return new Proxy({}, {
