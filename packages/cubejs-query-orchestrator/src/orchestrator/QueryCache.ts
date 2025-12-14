@@ -80,6 +80,7 @@ export type QueryBody = {
   persistent?: boolean;
   query?: string;
   values?: string[];
+  preAggregationsTablesToTempTables?: PreAggTableToTempTable[];
   loadRefreshKeysOnly?: boolean;
   scheduledRefresh?: boolean;
   // @deprecated
@@ -216,7 +217,10 @@ export class QueryCache {
         )
       );
 
-    const query = replacePreAggregationTableNames(queryBody.query);
+    const query = QueryCache.replacePreAggregationTableNames(
+      queryBody.query,
+      queryBody.preAggregationsTablesToTempTables || preAggregationsTablesToTempTables
+    );
 
     const inlineTables = preAggregationsTablesToTempTables.flatMap(
       ([_, preAggregation]) => (
@@ -236,7 +240,10 @@ export class QueryCache {
 
     const cacheKeyQueries = this
       .cacheKeyQueriesFrom(queryBody)
-      .map(replacePreAggregationTableNames);
+      .map((q) => QueryCache.replacePreAggregationTableNames(
+        q,
+        queryBody.preAggregationsTablesToTempTables || preAggregationsTablesToTempTables
+      ));
 
     const renewalThreshold = queryBody.cacheKeyQueries?.renewalThreshold;
 
