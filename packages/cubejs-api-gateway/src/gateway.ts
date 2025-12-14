@@ -1403,6 +1403,7 @@ class ApiGateway {
       ...sqlQuery,
       sql,
       cacheKeyQueries,
+      preAggregationsTablesToTempTables,
     };
   }
 
@@ -1758,6 +1759,7 @@ class ApiGateway {
       requestId: context.requestId,
       context,
       persistent: false,
+      preAggregationsTablesToTempTables: sqlQueryWithPreAggregations.preAggregationsTablesToTempTables,
     }];
     if (normalizedQuery.total) {
       const normalizedTotal = structuredClone(normalizedQuery);
