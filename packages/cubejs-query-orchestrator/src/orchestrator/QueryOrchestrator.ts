@@ -221,6 +221,31 @@ export class QueryOrchestrator {
         values
       };
     }
+    if (queryBody.preAggregationsTablesToTempTables) {
+      // Merge pre-aggregation mappings coming from the client with ones we just built
+      // to ensure nested/manual subqueries keep their replacements.
+      const merged = [
+        ...queryBody.preAggregationsTablesToTempTables,
+        ...preAggregationsTablesToTempTables,
+      ];
+      // Deduplicate by original table name (first element)
+      const seen = new Set<string>();
+      queryBody = {
+        ...queryBody,
+        preAggregationsTablesToTempTables: merged.filter(([tableName]) => {
+          if (seen.has(tableName)) {
+            return false;
+          }
+          seen.add(tableName);
+          return true;
+        }),
+      };
+    } else {
+      queryBody = {
+        ...queryBody,
+        preAggregationsTablesToTempTables
+      };
+    }
 
     const usedPreAggregations = R.pipe<
       PreAggTableToTempTable[],
