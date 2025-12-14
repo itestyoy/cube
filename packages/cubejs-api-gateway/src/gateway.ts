@@ -29,7 +29,7 @@ import type {
 } from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 
-import { QueryBody } from '@cubejs-backend/query-orchestrator';
+import { QueryBody, QueryCache } from '@cubejs-backend/query-orchestrator';
 import {
   QueryType,
   ApiScopes,
@@ -1347,6 +1347,63 @@ class ApiGateway {
     }
   }
 
+  private async applyPreAggregationsToSqlQuery(
+    sqlQuery: any,
+    normalizedQuery: NormalizedQuery,
+    context: RequestContext,
+  ) {
+    if (!sqlQuery?.preAggregations?.length) {
+      return sqlQuery;
+    }
+
+    const orchestratorApi: any = await this.getAdapterApi(context);
+    const queryOrchestrator = orchestratorApi.getQueryOrchestrator && orchestratorApi.getQueryOrchestrator();
+    const preAggregations = queryOrchestrator?.getPreAggregations && queryOrchestrator.getPreAggregations();
+
+    if (!preAggregations) {
+      return sqlQuery;
+    }
+
+    const sqlWithParams = Array.isArray(sqlQuery.sql) ? [...sqlQuery.sql] : [sqlQuery.sql];
+
+    const queryBody: QueryBody = {
+      ...sqlQuery,
+      query: sqlQuery.query || sqlWithParams[0],
+      values: sqlQuery.values || sqlWithParams[1],
+      cacheMode: normalizedQuery.cacheMode,
+      renewQuery: normalizedQuery.renewQuery,
+      requestId: context.requestId,
+      context,
+    };
+
+    const {
+      preAggregationsTablesToTempTables,
+      values,
+    } = await preAggregations.loadAllPreAggregationsIfNeeded(queryBody);
+
+    if (values != null && Array.isArray(sqlWithParams)) {
+      sqlWithParams[1] = values;
+    }
+
+    const sql = QueryCache.replacePreAggregationTableNames(
+      sqlWithParams,
+      preAggregationsTablesToTempTables
+    );
+
+    const cacheKeyQueries = (sqlQuery.cacheKeyQueries || []).map(
+      (cacheKeyQuery) => QueryCache.replacePreAggregationTableNames(
+        cacheKeyQuery,
+        preAggregationsTablesToTempTables
+      )
+    );
+
+    return {
+      ...sqlQuery,
+      sql,
+      cacheKeyQueries,
+    };
+  }
+
   public async sql({
     query,
     context,
@@ -1367,12 +1424,16 @@ class ApiGateway {
         await this.getNormalizedQueries(query, context, disableLimitEnforcing, memberExpressions);
 
       const sqlQueries = await Promise.all<any>(
-        normalizedQueries.map(async (normalizedQuery) => (await this.getCompilerApi(context)).getSql(
-          this.coerceForSqlQuery({ ...normalizedQuery, memberToAlias, expressionParams, disableExternalPreAggregations }, context),
-          {
-            includeDebugInfo: getEnv('devMode') || context.signedWithPlaygroundAuthSecret,
-            exportAnnotatedSql,
-          }
+        normalizedQueries.map(async (normalizedQuery) => this.applyPreAggregationsToSqlQuery(
+          await (await this.getCompilerApi(context)).getSql(
+            this.coerceForSqlQuery({ ...normalizedQuery, memberToAlias, expressionParams, disableExternalPreAggregations }, context),
+            {
+              includeDebugInfo: getEnv('devMode') || context.signedWithPlaygroundAuthSecret,
+              exportAnnotatedSql,
+            }
+          ),
+          normalizedQuery,
+          context
         ))
       );
 
