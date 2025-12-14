@@ -144,6 +144,8 @@ export class BaseQuery {
     /** @type {import('../compiler/JoinGraph').JoinGraph} */
     this.joinGraph = compilers.joinGraph;
     this.options = options || {};
+    // Collects extra pre-aggregations registered from manually built subqueries
+    this.extraPreAggregations = [];
 
     this.orderHashToString = this.orderHashToString.bind(this);
     this.defaultOrder = this.defaultOrder.bind(this);
@@ -3957,6 +3959,19 @@ export class BaseQuery {
   newSubQuery(options) {
     const QueryClass = this.constructor;
     return new QueryClass(this.compilers, this.subQueryOptions(options));
+  }
+
+  registerSubQueryPreAggregations(subQuery) {
+    const desc = subQuery?.preAggregations?.preAggregationsDescription?.();
+    if (desc?.length) {
+      this.extraPreAggregations.push(...desc);
+    }
+  }
+
+  compileSubQueryWithPreAggregations(options, exportAnnotatedSql) {
+    const subQuery = this.newSubQuery(options);
+    this.registerSubQueryPreAggregations(subQuery);
+    return subQuery.buildSqlAndParams(exportAnnotatedSql);
   }
 
   newSubQueryForCube(cube, options) {

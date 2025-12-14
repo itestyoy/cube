@@ -117,10 +117,11 @@ export class PreAggregations {
    */
   public preAggregationsDescription(): FullPreAggregationDescription[] {
     const disableExternalPreAggregations = this.query.options?.disableExternalPreAggregations;
+    const extraPreAggregations: FullPreAggregationDescription[] = (this.query as any).extraPreAggregations || [];
     const preAggregations = [this.preAggregationsDescriptionLocal()].concat(
       this.query.subQueryDimensions.map(d => this.query.subQueryDescription(d).subQuery)
         .map(q => q.preAggregations.preAggregationsDescription())
-    );
+    ).concat([extraPreAggregations]);
 
     return R.pipe(
       R.unnest as (list: any[][]) => any[],
