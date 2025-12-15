@@ -3340,7 +3340,8 @@ export class BaseQuery {
             if (symbol.sql.length === 0) {
               // Recreate SQL function in a scope where subQuery is an argument
               const source = symbol.sql.toString();
-              sqlEvaluator = new Function('subQuery', `return (${source})();`);
+              const patchedSource = source.replace(/\\(\\s*subQuery\\s*\\)/g, '(subQuery = __subQuery__)');
+              sqlEvaluator = new Function('subQuery', `const __subQuery__ = subQuery; return (${patchedSource})();`);
             }
             sql = this.evaluateSql(cubeName, sqlEvaluator, { extraParamValues: { subQuery: subQuerySql } });
             if (typeof sql !== 'string') {
