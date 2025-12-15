@@ -3343,7 +3343,7 @@ export class BaseQuery {
             );
             sql = this.evaluateSql(cubeName, symbol.sql);
             if (typeof sql === 'string') {
-              sql = sql.replace(/\\{\\{\\s*subQuery\\s*\\}\\}/g, subQuerySql);
+              sql = sql.replace(/\{\{\s*subQuery\s*\}\}/g, subQuerySql);
             }
             if (typeof sql !== 'string') {
               throw new UserError(`Correlated measure must resolve to SQL string for ${cubeName}.${name}`);
