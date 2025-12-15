@@ -4024,7 +4024,8 @@ export class BaseQuery {
     }
 
     const subQueryOptions = {
-      ...this.options
+      ...this.options,
+      ...(correlatedQuery?.optionOverrides || {})
     };
 
     if (hasDims) {
@@ -4965,7 +4966,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, null, BaseQuery, null),
+      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}),
     };
   }
 
@@ -5045,10 +5046,10 @@ export class BaseQuery {
   }
 
   queryContextProxy() {
-    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compilers, this.constructor, this.extraPreAggregations);
+    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options);
   }
 
-  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compilers, constructor, extraPreAggregations) {
+  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
     const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
@@ -5056,19 +5057,6 @@ export class BaseQuery {
     const filterNames = (filters || []).map(s => s.dimension);
 
     const queryOptions = options;
-
-    const query = (options) => {
-      if (!compilers?.cubeEvaluator || !compilers?.joinGraph) return { };
-      const item = new constructor(compilers, { ...options });
-
-      const desc = item?.preAggregations?.preAggregationsDescription?.();
-
-      if (desc?.length) {
-        extraPreAggregations?.push(...desc);
-      }
-
-      return item.buildSqlAndParams(false);
-    };
 
     return new Proxy({}, {
       get: (_target, name) => {
@@ -5092,9 +5080,6 @@ export class BaseQuery {
         }
         if (name === 'queryOptions') {
           return queryOptions;
-        }
-        if (name === 'query') {
-          return query;
         }
         if (name === 'members') {
           return measureNames

@@ -398,6 +398,7 @@ const BaseMeasure = {
   correlatedQuery: Joi.object({
     allowedDimensions: Joi.array().items(Joi.string()).min(1),
     calculateMeasures: Joi.array().items(Joi.string()).min(1).required(),
+    optionOverrides: Joi.object(),
   }),
   rollingWindow: Joi.alternatives().conditional(
     Joi.ref('.type'), [
