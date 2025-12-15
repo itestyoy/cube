@@ -59,6 +59,7 @@ export type MeasureDefinition = {
   correlatedQuery?: {
     allowedDimensions?: string[];
     calculateMeasures: string[];
+    optionOverrides?: Record<string, any>;
   };
   ownedByCube: boolean;
   rollingWindow?: any
