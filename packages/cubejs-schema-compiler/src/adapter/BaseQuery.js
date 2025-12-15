@@ -4966,7 +4966,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}),
+      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, null, null),
     };
   }
 
@@ -5046,10 +5046,19 @@ export class BaseQuery {
   }
 
   queryContextProxy() {
-    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options);
+    return BaseQuery.queryContextProxyFromQuery(
+      this.measures,
+      this.dimensions,
+      this.timeDimensions,
+      this.segments,
+      this.filters,
+      this.options,
+      this.cubeAlias.bind(this),
+      this.join?.root
+    );
   }
 
-  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options) {
+  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, cubeAliasFn, rootCube) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
     const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
@@ -5057,6 +5066,8 @@ export class BaseQuery {
     const filterNames = (filters || []).map(s => s.dimension);
 
     const queryOptions = options;
+
+    const cubeAlias = cubeAliasFn && rootCube ? cubeAliasFn(rootCube) : undefined;
 
     return new Proxy({}, {
       get: (_target, name) => {
@@ -5077,6 +5088,9 @@ export class BaseQuery {
         }
         if (name === 'filters') {
           return filterNames;
+        }
+        if (name === 'cubeAlias') {
+          return cubeAlias;
         }
         if (name === 'queryOptions') {
           return queryOptions;
