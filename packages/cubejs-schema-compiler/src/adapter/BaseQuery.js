@@ -3336,7 +3336,13 @@ export class BaseQuery {
               throw new UserError(`Measure ${cubeName}.${name} with correlatedDimensions must provide sql as function`);
             }
             const subQuerySql = this.buildCorrelatedSubQuery(symbol.correlatedDimensions, cubeName, name);
-            sql = this.evaluateSql(cubeName, symbol.sql, { extraParamValues: { subQuery: subQuerySql } });
+            let sqlEvaluator = symbol.sql;
+            if (symbol.sql.length === 0) {
+              // Recreate SQL function in a scope where subQuery is an argument
+              const source = symbol.sql.toString();
+              sqlEvaluator = new Function('subQuery', `return (${source})();`);
+            }
+            sql = this.evaluateSql(cubeName, sqlEvaluator, { extraParamValues: { subQuery: subQuerySql } });
             if (typeof sql !== 'string') {
               throw new UserError(`Correlated measure must resolve to SQL string for ${cubeName}.${name}`);
             }
