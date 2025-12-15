@@ -50,6 +50,11 @@ export class BigqueryQuery extends BaseQuery {
   }
 
   public dateTimeCast(value) {
+    // When querying pre-aggregations, time dimensions are stored as TIMESTAMP
+    // Use TIMESTAMP casting to avoid type mismatch with DATETIME
+    if (this.evaluateSymbolContext?.rollupQuery) {
+      return this.timeStampCast(value);
+    }
     return `DATETIME(TIMESTAMP(${value}))`;
   }
 

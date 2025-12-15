@@ -1727,12 +1727,33 @@ export class BaseQuery {
         filters: this.keepFilters(queryContext.filters, filterMember => filterMember === memberPath),
       };
     } else {
-      queryContext = {
-        ...queryContext,
-        // TODO remove not related segments
-        // segments: queryContext.segments,
-        filters: this.keepFilters(queryContext.filters, filterMember => !this.memberInstanceByPath(filterMember).isMultiStage()),
-      };
+      // Check if filteredDimensionsReferences is defined
+      if (memberDef.filteredDimensionsReferences !== undefined) {
+        // If filteredDimensionsReferences is defined, apply only filters for those dimensions
+        const allowedDimensions = memberDef.filteredDimensionsReferences || [];
+        queryContext = {
+          ...queryContext,
+          // TODO remove not related segments
+          // segments: queryContext.segments,
+          filters: this.keepFilters(queryContext.filters, filterMember => {
+            // If allowedDimensions is empty array, keep no filters
+            if (allowedDimensions.length === 0) {
+              return false;
+            }
+            // Keep filter if it's in the allowed dimensions list
+            return allowedDimensions.includes(filterMember);
+          }),
+        };
+      } else {
+        // Default behavior when filteredDimensions is not set: use original logic
+        // Keep all filters except multiStage ones
+        queryContext = {
+          ...queryContext,
+          // TODO remove not related segments
+          // segments: queryContext.segments,
+          filters: this.keepFilters(queryContext.filters, filterMember => !this.memberInstanceByPath(filterMember).isMultiStage()),
+        };
+      }
     }
     return queryContext;
   }
@@ -4894,7 +4915,8 @@ export class BaseQuery {
         filterGroup: this.filterGroupFunction(),
         sqlUtils: {
           convertTz: this.convertTz.bind(this)
-        }
+        },
+        queryContext: this.queryContextProxy()
       }, R.map(
         (symbols) => this.contextSymbolsProxy(symbols),
         this.contextSymbols
@@ -4911,6 +4933,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
+      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, null, BaseQuery, null),
     };
   }
 
@@ -4987,6 +5010,70 @@ export class BaseQuery {
       this.paramAllocator.allocateParam.bind(this.paramAllocator),
       this.newGroupFilter.bind(this),
     );
+  }
+
+  queryContextProxy() {
+    return BaseQuery.queryContextProxyFromQuery(this.measures, this.dimensions, this.timeDimensions, this.segments, this.filters, this.options, this.compilers, this.constructor, this.extraPreAggregations);
+  }
+
+  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, compilers, constructor, extraPreAggregations) {
+    const measureNames = (measures || []).map(m => m.measure);
+    const dimensionNames = (dimensions || []).map(d => d.dimension);
+    const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
+    const segmentNames = (segments || []).map(s => s.segment);
+    const filterNames = (filters || []).map(s => s.dimension);
+
+    const queryOptions = options;
+
+    const query = (options) => {
+      if (!compilers?.cubeEvaluator || !compilers?.joinGraph) return { };
+      const item = new constructor(compilers, { ...options });
+
+      const desc = item?.preAggregations?.preAggregationsDescription?.();
+
+      if (desc?.length) {
+        extraPreAggregations?.push(...desc);
+      }
+
+      return item.buildSqlAndParams(false);
+    };
+
+    return new Proxy({}, {
+      get: (_target, name) => {
+        if (name === '_objectWithResolvedProperties') {
+          return true;
+        }
+        if (name === 'measures') {
+          return measureNames;
+        }
+        if (name === 'dimensions') {
+          return dimensionNames;
+        }
+        if (name === 'dimensions') {
+          return dimensionNames;
+        }
+        if (name === 'timeDimensions') {
+          return timeDimensionNames;
+        }
+        if (name === 'filters') {
+          return filterNames;
+        }
+        if (name === 'queryOptions') {
+          return queryOptions;
+        }
+        if (name === 'query') {
+          return query;
+        }
+        if (name === 'members') {
+          return measureNames
+                  .concat(dimensionNames)
+                  .concat(timeDimensionNames)
+                  .concat(segmentNames)
+              .filter((e) => !!e);
+        }
+        return undefined;
+      }
+    });
   }
 
   filterGroupFunctionForRust(usedFilters) {

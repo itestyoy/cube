@@ -227,7 +227,8 @@ export const CONTEXT_SYMBOLS = {
   securityContext: 'securityContext',
   FILTER_PARAMS: 'filterParams',
   FILTER_GROUP: 'filterGroup',
-  SQL_UTILS: 'sqlUtils'
+  SQL_UTILS: 'sqlUtils',
+  CONTEXT: 'queryContext'
 };
 
 export const CURRENT_CUBE_CONSTANTS = ['CUBE', 'TABLE'];
