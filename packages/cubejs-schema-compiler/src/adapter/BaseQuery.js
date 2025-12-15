@@ -907,17 +907,39 @@ export class BaseQuery {
       }
     }
 
+    const cacheKey = ['buildSqlAndParams', 'withExtraPreAggregations', exportAnnotatedSql];
+
     return this.compilers.compiler.withQuery(
       this,
-      () => this.cacheValue(
-        ['buildSqlAndParams', exportAnnotatedSql],
-        () => this.paramAllocator.buildSqlAndParams(
-          this.buildParamAnnotatedSql(),
-          exportAnnotatedSql,
-          this.shouldReuseParams
-        ),
-        { cache: this.queryCache }
-      )
+      () => {
+        const cached = this.cacheValue(
+          cacheKey,
+          () => {
+            const sqlAndParams = this.paramAllocator.buildSqlAndParams(
+              this.buildParamAnnotatedSql(),
+              exportAnnotatedSql,
+              this.shouldReuseParams
+            );
+
+            return {
+              sqlAndParams,
+              // Persist sub-query pre-aggregation metadata alongside cached SQL
+              extraPreAggregations: [...(this.extraPreAggregations || [])],
+            };
+          },
+          { cache: this.queryCache }
+        );
+
+        if (Array.isArray(cached)) {
+          return cached;
+        }
+
+        if (cached?.extraPreAggregations) {
+          this.extraPreAggregations = [...cached.extraPreAggregations];
+        }
+
+        return cached?.sqlAndParams ?? cached;
+      }
     );
   }
 
