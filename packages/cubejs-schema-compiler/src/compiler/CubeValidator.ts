@@ -395,6 +395,7 @@ const BaseMeasure = {
   ),
   title: Joi.string(),
   description: Joi.string(),
+  correlatedDimensions: Joi.array().items(Joi.string()).min(1),
   rollingWindow: Joi.alternatives().conditional(
     Joi.ref('.type'), [
       { is: 'year_to_date', then: YearToDate },

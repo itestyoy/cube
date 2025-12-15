@@ -3331,12 +3331,26 @@ export class BaseQuery {
         const orderBySql = (symbol.orderBy || []).map(o => ({ sql: this.evaluateSql(cubeName, o.sql), dir: o.dir }));
         let sql;
         if (symbol.type !== 'rank') {
-          sql = symbol.sql && this.evaluateSql(cubeName, symbol.sql) ||
-            primaryKeys.length && (
-              primaryKeys.length > 1 ?
-                this.concatStringsSql(primaryKeys.map((pk) => this.castToString(this.primaryKeySql(pk, cubeName))))
-                : this.primaryKeySql(primaryKeys[0], cubeName)
-            ) || '*';
+          if (!this.options.skipCorrelatedMeasures && symbol.correlatedDimensions) {
+            if (typeof symbol.sql !== 'function') {
+              throw new UserError(`Measure ${cubeName}.${name} with correlatedDimensions must provide sql as function`);
+            }
+            if (symbol.sql.length !== 1) {
+              throw new UserError(`Measure ${cubeName}.${name} sql must accept exactly one argument when using correlatedDimensions`);
+            }
+            const subQuerySql = this.buildCorrelatedSubQuery(symbol.correlatedDimensions, cubeName, name);
+            sql = this.evaluateSql(cubeName, symbol.sql, { extraParamValues: { subQuery: subQuerySql } });
+            if (typeof sql !== 'string') {
+              throw new UserError(`Correlated measure must resolve to SQL string for ${cubeName}.${name}`);
+            }
+          } else {
+            sql = symbol.sql && this.evaluateSql(cubeName, symbol.sql) ||
+              primaryKeys.length && (
+                primaryKeys.length > 1 ?
+                  this.concatStringsSql(primaryKeys.map((pk) => this.castToString(this.primaryKeySql(pk, cubeName))))
+                  : this.primaryKeySql(primaryKeys[0], cubeName)
+              ) || '*';
+          }
         }
         const result = this.renderSqlMeasure(
           name,
@@ -3474,7 +3488,11 @@ export class BaseQuery {
     options = options || {};
     const self = this;
     const { cubeEvaluator } = this;
+    const { extraParamValues } = options;
     return cubeEvaluator.resolveSymbolsCall(sql, (name) => {
+      if (extraParamValues && Object.prototype.hasOwnProperty.call(extraParamValues, name)) {
+        return extraParamValues[name];
+      }
       const nextCubeName = cubeEvaluator.symbols[name] && name || cubeName;
       const resolvedSymbol =
         cubeEvaluator.resolveSymbol(
@@ -3979,7 +3997,42 @@ export class BaseQuery {
    */
   newSubQuery(options) {
     const QueryClass = this.constructor;
-    return new QueryClass(this.compilers, this.subQueryOptions(options));
+    const subQuery = new QueryClass(this.compilers, this.subQueryOptions(options));
+    // Register pre-aggregations of this subquery so parent can expose them to orchestrator
+    this.registerSubQueryPreAggregations(subQuery);
+    return subQuery;
+  }
+
+  registerSubQueryPreAggregations(subQuery) {
+    const desc = subQuery?.preAggregations?.preAggregationsDescription?.();
+    if (desc?.length) {
+      this.extraPreAggregations.push(...desc);
+    }
+  }
+
+  compileSubQueryWithPreAggregations(options, exportAnnotatedSql) {
+    const subQuery = this.newSubQuery(options);
+    this.registerSubQueryPreAggregations(subQuery);
+    return subQuery.buildSqlAndParams(exportAnnotatedSql);
+  }
+
+  buildCorrelatedSubQuery(correlatedDimensions, cubeName, memberName) {
+    if (!Array.isArray(correlatedDimensions) || correlatedDimensions.length === 0) {
+      throw new UserError(`correlatedDimensions must be a non-empty array for ${cubeName}.${memberName}`);
+    }
+    const allowed = new Set(correlatedDimensions);
+    const filteredDimensions = (this.options.dimensions || []).filter((d) => allowed.has(d));
+    const filteredTimeDimensions = (this.options.timeDimensions || []).filter((td) => allowed.has(td.dimension));
+    const subQueryOptions = {
+      ...this.options,
+      skipCorrelatedMeasures: true,
+      dimensions: filteredDimensions,
+      timeDimensions: filteredTimeDimensions,
+    };
+    const subQuery = this.newSubQuery(subQueryOptions);
+    this.registerSubQueryPreAggregations(subQuery);
+    const [subQuerySql] = subQuery.buildSqlAndParams(this.options.exportAnnotatedSql);
+    return `(${subQuerySql})`;
   }
 
   newSubQueryForCube(cube, options) {
