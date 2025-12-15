@@ -3314,9 +3314,6 @@ export class BaseQuery {
             if (typeof symbol.sql !== 'function') {
               throw new UserError(`Measure ${cubeName}.${name} with correlatedDimensions must provide sql as function`);
             }
-            if (symbol.sql.length !== 1) {
-              throw new UserError(`Measure ${cubeName}.${name} sql must accept exactly one argument when using correlatedDimensions`);
-            }
             const subQuerySql = this.buildCorrelatedSubQuery(symbol.correlatedDimensions, cubeName, name);
             sql = this.evaluateSql(cubeName, symbol.sql, { extraParamValues: { subQuery: subQuerySql } });
             if (typeof sql !== 'string') {

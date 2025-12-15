@@ -55,7 +55,7 @@ export type TimeShiftDefinitionReference = {
 
 export type MeasureDefinition = {
   type: string;
-  sql?: (...args: any[]) => string;
+  sql?: () => string;
   correlatedDimensions?: string[];
   ownedByCube: boolean;
   rollingWindow?: any
