@@ -3331,13 +3331,9 @@ export class BaseQuery {
         const orderBySql = (symbol.orderBy || []).map(o => ({ sql: this.evaluateSql(cubeName, o.sql), dir: o.dir }));
         let sql;
         if (symbol.type !== 'rank') {
-          if (!this.options.skipCorrelatedMeasures && (symbol.correlatedDimensions || symbol.correlatedMeasures)) {
-            if (typeof symbol.sql !== 'function') {
-              throw new UserError(`Measure ${cubeName}.${name} with correlatedDimensions/correlatedMeasures must provide sql as function`);
-            }
+          if (!this.options.skipCorrelatedMeasures && symbol.correlatedQuery) {
             const subQuerySql = this.buildCorrelatedSubQuery(
-              symbol.correlatedDimensions,
-              symbol.correlatedMeasures,
+              symbol.correlatedQuery,
               cubeName,
               name
             );
@@ -4017,17 +4013,14 @@ export class BaseQuery {
     return subQuery.buildSqlAndParams(exportAnnotatedSql);
   }
 
-  buildCorrelatedSubQuery(correlatedDimensions, correlatedMeasures, cubeName, memberName) {
-    const hasDims = Array.isArray(correlatedDimensions) && correlatedDimensions.length > 0;
-    const hasMeasures = Array.isArray(correlatedMeasures) && correlatedMeasures.length > 0;
-    if (!hasDims && !hasMeasures) {
-      throw new UserError(`correlatedDimensions or correlatedMeasures must be a non-empty array for ${cubeName}.${memberName}`);
-    }
-    if (correlatedDimensions && !Array.isArray(correlatedDimensions)) {
-      throw new UserError(`correlatedDimensions must be an array for ${cubeName}.${memberName}`);
-    }
-    if (correlatedMeasures && !Array.isArray(correlatedMeasures)) {
-      throw new UserError(`correlatedMeasures must be an array for ${cubeName}.${memberName}`);
+  buildCorrelatedSubQuery(correlatedQuery, cubeName, memberName) {
+    const allowedDimensions = correlatedQuery?.allowedDimensions;
+    const calculateMeasures = correlatedQuery?.calculateMeasures;
+
+    const hasDims = Array.isArray(allowedDimensions) && allowedDimensions.length > 0;
+    const hasMeasures = Array.isArray(calculateMeasures) && calculateMeasures.length > 0;
+    if (!hasMeasures && !hasDims) {
+      throw new UserError(`correlatedQuery.allowedDimensions or correlatedQuery.calculateMeasures must be provided for ${cubeName}.${memberName}`);
     }
 
     const subQueryOptions = {
@@ -4036,7 +4029,7 @@ export class BaseQuery {
     };
 
     if (hasDims) {
-      const allowed = new Set(correlatedDimensions);
+      const allowed = new Set(allowedDimensions);
       subQueryOptions.dimensions = (this.options.dimensions || []).filter((d) => allowed.has(d));
       subQueryOptions.timeDimensions = (this.options.timeDimensions || []).filter((td) => allowed.has(td.dimension));
       const filterAllowed = (filter) => {
@@ -4060,8 +4053,10 @@ export class BaseQuery {
     }
 
     if (hasMeasures) {
-      const allowedMeasures = new Set(correlatedMeasures);
-      subQueryOptions.measures = (this.options.measures || []).filter((m) => allowedMeasures.has(m));
+      const allowedMeasures = new Set(calculateMeasures);
+      subQueryOptions.measures = calculateMeasures.filter((m) => allowedMeasures.has(m));
+    } else {
+      subQueryOptions.measures = [];
     }
 
     const subQuery = this.newSubQuery(subQueryOptions);
