@@ -3336,14 +3336,10 @@ export class BaseQuery {
               throw new UserError(`Measure ${cubeName}.${name} with correlatedDimensions must provide sql as function`);
             }
             const subQuerySql = this.buildCorrelatedSubQuery(symbol.correlatedDimensions, cubeName, name);
-            let sqlEvaluator = symbol.sql;
-            if (symbol.sql.length === 0) {
-              // Recreate SQL function in a scope where subQuery is an argument
-              const source = symbol.sql.toString();
-              const patchedSource = source.replace(/\\(\\s*subQuery\\s*\\)/g, '(subQuery = __subQuery__)');
-              sqlEvaluator = new Function('subQuery', `const __subQuery__ = subQuery; return (${patchedSource})();`);
+            sql = this.evaluateSql(cubeName, symbol.sql);
+            if (typeof sql === 'string') {
+              sql = sql.replace(/\\{\\{\\s*subQuery\\s*\\}\\}/g, subQuerySql);
             }
-            sql = this.evaluateSql(cubeName, sqlEvaluator, { extraParamValues: { subQuery: subQuerySql } });
             if (typeof sql !== 'string') {
               throw new UserError(`Correlated measure must resolve to SQL string for ${cubeName}.${name}`);
             }
@@ -3492,11 +3488,7 @@ export class BaseQuery {
     options = options || {};
     const self = this;
     const { cubeEvaluator } = this;
-    const { extraParamValues } = options;
     return cubeEvaluator.resolveSymbolsCall(sql, (name) => {
-      if (extraParamValues && Object.prototype.hasOwnProperty.call(extraParamValues, name)) {
-        return extraParamValues[name];
-      }
       const nextCubeName = cubeEvaluator.symbols[name] && name || cubeName;
       const resolvedSymbol =
         cubeEvaluator.resolveSymbol(
