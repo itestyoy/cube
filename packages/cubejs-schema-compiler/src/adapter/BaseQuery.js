@@ -3331,7 +3331,7 @@ export class BaseQuery {
         const orderBySql = (symbol.orderBy || []).map(o => ({ sql: this.evaluateSql(cubeName, o.sql), dir: o.dir }));
         let sql;
         if (symbol.type !== 'rank') {
-          if (!this.options.skipCorrelatedMeasures && symbol.correlatedQuery) {
+          if (symbol.correlatedQuery) {
             const subQuerySql = this.buildCorrelatedSubQuery(
               symbol.correlatedQuery,
               cubeName,
@@ -4024,8 +4024,7 @@ export class BaseQuery {
     }
 
     const subQueryOptions = {
-      ...this.options,
-      skipCorrelatedMeasures: true,
+      ...this.options
     };
 
     if (hasDims) {
