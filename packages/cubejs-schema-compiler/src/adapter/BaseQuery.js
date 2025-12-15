@@ -3331,11 +3331,16 @@ export class BaseQuery {
         const orderBySql = (symbol.orderBy || []).map(o => ({ sql: this.evaluateSql(cubeName, o.sql), dir: o.dir }));
         let sql;
         if (symbol.type !== 'rank') {
-          if (!this.options.skipCorrelatedMeasures && symbol.correlatedDimensions) {
+          if (!this.options.skipCorrelatedMeasures && (symbol.correlatedDimensions || symbol.correlatedMeasures)) {
             if (typeof symbol.sql !== 'function') {
-              throw new UserError(`Measure ${cubeName}.${name} with correlatedDimensions must provide sql as function`);
+              throw new UserError(`Measure ${cubeName}.${name} with correlatedDimensions/correlatedMeasures must provide sql as function`);
             }
-            const subQuerySql = this.buildCorrelatedSubQuery(symbol.correlatedDimensions, cubeName, name);
+            const subQuerySql = this.buildCorrelatedSubQuery(
+              symbol.correlatedDimensions,
+              symbol.correlatedMeasures,
+              cubeName,
+              name
+            );
             sql = this.evaluateSql(cubeName, symbol.sql);
             if (typeof sql === 'string') {
               sql = sql.replace(/\\{\\{\\s*subQuery\\s*\\}\\}/g, subQuerySql);
@@ -4012,19 +4017,53 @@ export class BaseQuery {
     return subQuery.buildSqlAndParams(exportAnnotatedSql);
   }
 
-  buildCorrelatedSubQuery(correlatedDimensions, cubeName, memberName) {
-    if (!Array.isArray(correlatedDimensions) || correlatedDimensions.length === 0) {
-      throw new UserError(`correlatedDimensions must be a non-empty array for ${cubeName}.${memberName}`);
+  buildCorrelatedSubQuery(correlatedDimensions, correlatedMeasures, cubeName, memberName) {
+    const hasDims = Array.isArray(correlatedDimensions) && correlatedDimensions.length > 0;
+    const hasMeasures = Array.isArray(correlatedMeasures) && correlatedMeasures.length > 0;
+    if (!hasDims && !hasMeasures) {
+      throw new UserError(`correlatedDimensions or correlatedMeasures must be a non-empty array for ${cubeName}.${memberName}`);
     }
-    const allowed = new Set(correlatedDimensions);
-    const filteredDimensions = (this.options.dimensions || []).filter((d) => allowed.has(d));
-    const filteredTimeDimensions = (this.options.timeDimensions || []).filter((td) => allowed.has(td.dimension));
+    if (correlatedDimensions && !Array.isArray(correlatedDimensions)) {
+      throw new UserError(`correlatedDimensions must be an array for ${cubeName}.${memberName}`);
+    }
+    if (correlatedMeasures && !Array.isArray(correlatedMeasures)) {
+      throw new UserError(`correlatedMeasures must be an array for ${cubeName}.${memberName}`);
+    }
+
     const subQueryOptions = {
       ...this.options,
       skipCorrelatedMeasures: true,
-      dimensions: filteredDimensions,
-      timeDimensions: filteredTimeDimensions,
     };
+
+    if (hasDims) {
+      const allowed = new Set(correlatedDimensions);
+      subQueryOptions.dimensions = (this.options.dimensions || []).filter((d) => allowed.has(d));
+      subQueryOptions.timeDimensions = (this.options.timeDimensions || []).filter((td) => allowed.has(td.dimension));
+      const filterAllowed = (filter) => {
+        if (!filter) {
+          return null;
+        }
+        if (filter.and) {
+          const and = filter.and.map(filterAllowed).filter(Boolean);
+          return and.length ? { ...filter, and } : null;
+        }
+        if (filter.or) {
+          const or = filter.or.map(filterAllowed).filter(Boolean);
+          return or.length ? { ...filter, or } : null;
+        }
+        const member = filter.dimension || filter.member || filter.measure;
+        return member && allowed.has(member) ? filter : null;
+      };
+      subQueryOptions.filters = (this.options.filters || [])
+        .map(filterAllowed)
+        .filter(Boolean);
+    }
+
+    if (hasMeasures) {
+      const allowedMeasures = new Set(correlatedMeasures);
+      subQueryOptions.measures = (this.options.measures || []).filter((m) => allowedMeasures.has(m));
+    }
+
     const subQuery = this.newSubQuery(subQueryOptions);
     this.registerSubQueryPreAggregations(subQuery);
     const [subQuerySql] = subQuery.buildSqlAndParams(this.options.exportAnnotatedSql);
