@@ -29,7 +29,7 @@ import type {
 } from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 
-import { QueryBody, QueryCache, QueryWithParams } from '@cubejs-backend/query-orchestrator';
+import { QueryBody } from '@cubejs-backend/query-orchestrator';
 import {
   QueryType,
   ApiScopes,
@@ -1347,66 +1347,6 @@ class ApiGateway {
     }
   }
 
-  private async applyPreAggregationsToSqlQuery(
-    sqlQuery: any,
-    normalizedQuery: NormalizedQuery,
-    context: RequestContext,
-  ) {
-    if (!sqlQuery?.preAggregations?.length) {
-      return sqlQuery;
-    }
-
-    const orchestratorApi: any = await this.getAdapterApi(context);
-    const queryOrchestrator = orchestratorApi.getQueryOrchestrator && orchestratorApi.getQueryOrchestrator();
-    const preAggregations = queryOrchestrator?.getPreAggregations && queryOrchestrator.getPreAggregations();
-
-    if (!preAggregations) {
-      return sqlQuery;
-    }
-
-    const sqlWithParams: QueryWithParams = Array.isArray(sqlQuery.sql)
-      ? [...sqlQuery.sql] as QueryWithParams
-      : [sqlQuery.sql, sqlQuery.values || []];
-
-    const queryBody: QueryBody = {
-      ...sqlQuery,
-      query: sqlQuery.query || sqlWithParams[0],
-      values: sqlQuery.values || sqlWithParams[1],
-      cacheMode: normalizedQuery.cacheMode,
-      renewQuery: normalizedQuery.renewQuery,
-      requestId: context.requestId,
-      context,
-    };
-
-    const {
-      preAggregationsTablesToTempTables,
-      values,
-    } = await preAggregations.loadAllPreAggregationsIfNeeded(queryBody);
-
-    if (values != null && Array.isArray(sqlWithParams)) {
-      sqlWithParams[1] = values;
-    }
-
-    const sql = QueryCache.replacePreAggregationTableNames(
-      sqlWithParams,
-      preAggregationsTablesToTempTables
-    );
-
-    const cacheKeyQueries = (sqlQuery.cacheKeyQueries || []).map(
-      (cacheKeyQuery) => QueryCache.replacePreAggregationTableNames(
-        cacheKeyQuery,
-        preAggregationsTablesToTempTables
-      )
-    );
-
-    return {
-      ...sqlQuery,
-      sql,
-      cacheKeyQueries,
-      preAggregationsTablesToTempTables,
-    };
-  }
-
   public async sql({
     query,
     context,
@@ -1427,16 +1367,12 @@ class ApiGateway {
         await this.getNormalizedQueries(query, context, disableLimitEnforcing, memberExpressions);
 
       const sqlQueries = await Promise.all<any>(
-        normalizedQueries.map(async (normalizedQuery) => this.applyPreAggregationsToSqlQuery(
-          await (await this.getCompilerApi(context)).getSql(
-            this.coerceForSqlQuery({ ...normalizedQuery, memberToAlias, expressionParams, disableExternalPreAggregations }, context),
-            {
-              includeDebugInfo: getEnv('devMode') || context.signedWithPlaygroundAuthSecret,
-              exportAnnotatedSql,
-            }
-          ),
-          normalizedQuery,
-          context
+        normalizedQueries.map(async (normalizedQuery) => (await this.getCompilerApi(context)).getSql(
+          this.coerceForSqlQuery({ ...normalizedQuery, memberToAlias, expressionParams, disableExternalPreAggregations }, context),
+          {
+            includeDebugInfo: getEnv('devMode') || context.signedWithPlaygroundAuthSecret,
+            exportAnnotatedSql,
+          }
         ))
       );
 
@@ -1695,20 +1631,15 @@ class ApiGateway {
               this.coerceForSqlQuery(normalizedQuery, context)
             );
           const sqlQuery = this.sanitizeSqlQuery(sqlQueryRaw);
-          const sqlWithPreAggregations = await this.applyPreAggregationsToSqlQuery(
-            sqlQuery,
-            normalizedQuery,
-            context
-          );
 
           this.log({
             type: 'Load Request SQL',
             duration: this.duration(loadRequestSQLStarted),
             query: this.sanitizeQueryForLogging(normalizedQueries[index]),
-            sqlQuery: sqlWithPreAggregations
+            sqlQuery
           }, context);
 
-          return sqlWithPreAggregations;
+          return sqlQuery;
         }
       )
     );
@@ -1750,21 +1681,14 @@ class ApiGateway {
     normalizedQuery: NormalizedQuery,
     sqlQuery: any,
   ): Promise<ResultWrapper> {
-    const sqlQueryWithPreAggregations = await this.applyPreAggregationsToSqlQuery(
-      sqlQuery,
-      normalizedQuery,
-      context
-    );
-
     const queries: QueryBody[] = [{
-      ...sqlQueryWithPreAggregations,
-      query: sqlQueryWithPreAggregations.sql[0],
-      values: sqlQueryWithPreAggregations.sql[1],
+      ...sqlQuery,
+      query: sqlQuery.sql[0],
+      values: sqlQuery.sql[1],
       cacheMode: normalizedQuery.cacheMode,
       requestId: context.requestId,
       context,
       persistent: false,
-      preAggregationsTablesToTempTables: sqlQueryWithPreAggregations.preAggregationsTablesToTempTables,
     }];
     if (normalizedQuery.total) {
       const normalizedTotal = structuredClone(normalizedQuery);
@@ -1780,15 +1704,10 @@ class ApiGateway {
         context,
         [normalizedTotal],
       );
-      const totalQueryWithPreAggregations = await this.applyPreAggregationsToSqlQuery(
-        totalQuery,
-        normalizedTotal,
-        context
-      );
       queries.push({
-        ...totalQueryWithPreAggregations,
-        query: totalQueryWithPreAggregations.sql[0],
-        values: totalQueryWithPreAggregations.sql[1],
+        ...totalQuery,
+        query: totalQuery.sql[0],
+        values: totalQuery.sql[1],
         cacheMode: normalizedTotal.cacheMode,
         requestId: context.requestId,
         context
@@ -1904,12 +1823,7 @@ class ApiGateway {
     try {
       this.log({ type: 'Load Request', query, streaming: true }, context);
       const [, normalizedQueries] = await this.getNormalizedQueries(query, context, true);
-      const sqlQueryRaw = (await this.getSqlQueriesInternal(context, normalizedQueries))[0];
-      const sqlQuery = await this.applyPreAggregationsToSqlQuery(
-        sqlQueryRaw,
-        normalizedQueries[0],
-        context
-      );
+      const sqlQuery = (await this.getSqlQueriesInternal(context, normalizedQueries))[0];
       const q: QueryBody = {
         ...sqlQuery,
         query: sqlQuery.sql[0],
@@ -1919,7 +1833,6 @@ class ApiGateway {
         context,
         persistent: true,
         forceNoCache: true,
-        preAggregationsTablesToTempTables: sqlQuery.preAggregationsTablesToTempTables,
       };
       const _stream = {
         originalQuery: query,
@@ -2105,22 +2018,15 @@ class ApiGateway {
       let slowQuery = false;
 
       const streamResponse = async (sqlQuery) => {
-        const sqlWithPreAggregations = await this.applyPreAggregationsToSqlQuery(
-          sqlQuery,
-          normalizedQueries[0],
-          context
-        );
-
         const q: QueryBody = {
-          ...sqlWithPreAggregations,
-          query: sqlWithPreAggregations.query || sqlWithPreAggregations.sql[0],
-          values: sqlWithPreAggregations.values || sqlWithPreAggregations.sql[1],
+          ...sqlQuery,
+          query: sqlQuery.query || sqlQuery.sql[0],
+          values: sqlQuery.values || sqlQuery.sql[1],
           cacheMode: 'stale-if-slow',
           requestId: context.requestId,
           context,
           persistent: true,
           forceNoCache: true,
-          preAggregationsTablesToTempTables: sqlWithPreAggregations.preAggregationsTablesToTempTables,
         };
 
         const adapterApi = await this.getAdapterApi(context);

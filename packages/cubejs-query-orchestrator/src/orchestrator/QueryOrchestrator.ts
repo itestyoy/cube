@@ -214,38 +214,11 @@ export class QueryOrchestrator {
       preAggregationsTablesToTempTables,
       values,
     } = await this.preAggregations.loadAllPreAggregationsIfNeeded(queryBody);
-    let mergedPreAggregationsTablesToTempTables = preAggregationsTablesToTempTables;
 
     if (values) {
       queryBody = {
         ...queryBody,
         values
-      };
-    }
-    if (queryBody.preAggregationsTablesToTempTables) {
-      // Merge pre-aggregation mappings coming from the client with ones we just built
-      // to ensure nested/manual subqueries keep their replacements.
-      const merged = [
-        ...queryBody.preAggregationsTablesToTempTables,
-        ...preAggregationsTablesToTempTables,
-      ];
-      // Deduplicate by original table name (first element)
-      const seen = new Set<string>();
-      mergedPreAggregationsTablesToTempTables = merged.filter(([tableName]) => {
-        if (seen.has(tableName)) {
-          return false;
-        }
-        seen.add(tableName);
-        return true;
-      });
-      queryBody = {
-        ...queryBody,
-        preAggregationsTablesToTempTables: mergedPreAggregationsTablesToTempTables,
-      };
-    } else {
-      queryBody = {
-        ...queryBody,
-        preAggregationsTablesToTempTables,
       };
     }
 
@@ -293,7 +266,7 @@ export class QueryOrchestrator {
 
     const result = await this.queryCache.cachedQueryResult(
       queryBody,
-      mergedPreAggregationsTablesToTempTables
+      preAggregationsTablesToTempTables
     );
 
     lastRefreshTimestamp = getLastUpdatedAtTimestamp([
