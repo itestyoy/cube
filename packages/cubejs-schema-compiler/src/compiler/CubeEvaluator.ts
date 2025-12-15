@@ -57,6 +57,7 @@ export type MeasureDefinition = {
   type: string;
   sql: () => string;
   correlatedDimensions?: string[];
+  correlatedMeasures?: string[];
   ownedByCube: boolean;
   rollingWindow?: any
   filters?: any
