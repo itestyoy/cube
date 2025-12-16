@@ -4056,15 +4056,6 @@ export class BaseQuery {
       throw new UserError(`correlatedQuery.allowedDimensions or correlatedQuery.calculateMeasures must be provided for ${cubeName}.${memberName}`);
     }
 
-    if (hasMeasures) {
-      calculateMeasures.forEach((measure) => {
-        const measureObj = this.newMeasure(measure);
-        if (measureObj.definition()?.correlatedQuery) {
-          throw new UserError(`Measure '${measure}' cannot be used inside correlatedQuery.calculateMeasures of '${cubeName}.${memberName}' because it is itself correlated.`);
-        }
-      });
-    }
-
     const subQueryOptions = {
       ...this.options,
       // Prevent nested correlated measures from recursing
@@ -4111,7 +4102,7 @@ export class BaseQuery {
     // Use annotated SQL so parent query can correctly collect parameters from the shared allocator
     const subQuerySql = subQuery.buildParamAnnotatedSql();
 
-    /*const preAggregationForQuery = this.preAggregations.findPreAggregationForQuery?.();
+    const preAggregationForQuery = this.preAggregations.findPreAggregationForQuery?.();
     let mainAlias;
     if (preAggregationForQuery) {
       let effectivePreAggregation = preAggregationForQuery;
@@ -4162,12 +4153,12 @@ export class BaseQuery {
         const right = findRight(dimension);
         return `${left} ${operator || '='} ${right}`;
       })
-      .join(' AND ') || '1=1';*/
+      .join(' AND ') || '1=1';
 
     return {
       sql: `(${subQuerySql})`,
       subQueryAlias: rawSubQueryAlias,
-      correlatedWhereClause: 'true'
+      correlatedWhereClause
     };
   }
 
