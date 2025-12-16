@@ -4111,7 +4111,8 @@ export class BaseQuery {
     // Use annotated SQL so parent query can correctly collect parameters from the shared allocator
     const subQuerySql = subQuery.buildParamAnnotatedSql();
 
-    const preAggregationForQuery = this.preAggregations.findPreAggregationForQuery?.();
+    // Avoid triggering pre-aggregation discovery while building correlated subquery (can recurse)
+    const preAggregationForQuery = this.preAggregations?.preAggregationForQuery;
     let mainAlias;
     if (preAggregationForQuery) {
       let effectivePreAggregation = preAggregationForQuery;
