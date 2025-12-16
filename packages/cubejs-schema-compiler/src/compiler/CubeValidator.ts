@@ -396,9 +396,20 @@ const BaseMeasure = {
   title: Joi.string(),
   description: Joi.string(),
   correlatedQuery: Joi.object({
-    allowedDimensions: Joi.array().items(Joi.string()).min(1),
-    calculateMeasures: Joi.array().items(Joi.string()).min(1).required(),
+    allowedDimensions: Joi.array().items(
+      Joi.alternatives().try(
+        Joi.string(),
+        Joi.array().items(Joi.string().required(), Joi.string(), Joi.string()).min(1).max(3)
+      )
+    ),
+    calculateMeasures: Joi.array().items(Joi.string()).min(1),
+    subQueryAlias: Joi.string(),
     optionOverrides: Joi.object(),
+  }).custom((value, helpers) => {
+    if (!value.allowedDimensions?.length && !value.calculateMeasures?.length) {
+      return helpers.error('any.invalid', { message: 'correlatedQuery requires allowedDimensions or calculateMeasures' });
+    }
+    return value;
   }),
   rollingWindow: Joi.alternatives().conditional(
     Joi.ref('.type'), [
