@@ -4111,7 +4111,7 @@ export class BaseQuery {
     // Use annotated SQL so parent query can correctly collect parameters from the shared allocator
     const subQuerySql = subQuery.buildParamAnnotatedSql();
 
-    const preAggregationForQuery = this.preAggregations.findPreAggregationForQuery?.();
+    /*const preAggregationForQuery = this.preAggregations.findPreAggregationForQuery?.();
     let mainAlias;
     if (preAggregationForQuery) {
       let effectivePreAggregation = preAggregationForQuery;
@@ -4162,12 +4162,12 @@ export class BaseQuery {
         const right = findRight(dimension);
         return `${left} ${operator || '='} ${right}`;
       })
-      .join(' AND ') || '1=1';
+      .join(' AND ') || '1=1';*/
 
     return {
       sql: `(${subQuerySql})`,
       subQueryAlias: rawSubQueryAlias,
-      correlatedWhereClause
+      correlatedWhereClause: 'true'
     };
   }
 
