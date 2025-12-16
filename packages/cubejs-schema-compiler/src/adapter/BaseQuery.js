@@ -3354,14 +3354,17 @@ export class BaseQuery {
         let sql;
         if (symbol.type !== 'rank') {
           if (symbol.correlatedQuery) {
-            const subQuerySql = this.buildCorrelatedSubQuery(
+            const correlated = this.buildCorrelatedSubQuery(
               symbol.correlatedQuery,
               cubeName,
               name
             );
             sql = this.evaluateSql(cubeName, symbol.sql);
             if (typeof sql === 'string') {
-              sql = sql.replace(/\{\{\s*subQuery\s*\}\}/g, subQuerySql);
+              sql = sql
+                .replace(/\{\{\s*subQuery\s*\}\}/g, correlated.sql)
+                .replace(/\{\{\s*subQueryAlias\s*\}\}/g, correlated.subQueryAlias)
+                .replace(/\{\{\s*correlatedWhereClause\s*\}\}/g, correlated.correlatedWhereClause || '1=1');
             }
             if (typeof sql !== 'string') {
               throw new UserError(`Correlated measure must resolve to SQL string for ${cubeName}.${name}`);
@@ -4051,10 +4054,18 @@ export class BaseQuery {
   }
 
   buildCorrelatedSubQuery(correlatedQuery, cubeName, memberName) {
-    const allowedDimensions = correlatedQuery?.allowedDimensions;
+    const normalizeAllowedDimensions = (dims) => (Array.isArray(dims) ? dims : []).map((item) => {
+      if (Array.isArray(item)) {
+        const [dimension, operator, rightColumn] = item;
+        return { dimension, operator: operator || '=', rightColumn: rightColumn || this.aliasName(dimension) };
+      }
+      return { dimension: item, operator: '=', rightColumn: this.aliasName(item) };
+    }).filter(d => !!d.dimension && !!d.rightColumn);
+
+    const allowedDimensionsRaw = normalizeAllowedDimensions(correlatedQuery?.allowedDimensions);
     const calculateMeasures = correlatedQuery?.calculateMeasures;
 
-    const hasDims = Array.isArray(allowedDimensions) && allowedDimensions.length > 0;
+    const hasDims = allowedDimensionsRaw.length > 0;
     const hasMeasures = Array.isArray(calculateMeasures) && calculateMeasures.length > 0;
     if (!hasMeasures && !hasDims) {
       throw new UserError(`correlatedQuery.allowedDimensions or correlatedQuery.calculateMeasures must be provided for ${cubeName}.${memberName}`);
@@ -4066,9 +4077,9 @@ export class BaseQuery {
     };
 
     if (hasDims) {
-      const allowed = new Set(allowedDimensions);
-      subQueryOptions.dimensions = (this.options.dimensions || []).filter((d) => allowed.has(d));
-      subQueryOptions.timeDimensions = (this.options.timeDimensions || []).filter((td) => allowed.has(td.dimension));
+      const allowedSet = new Set(allowedDimensionsRaw.map(d => d.dimension));
+      subQueryOptions.dimensions = (this.options.dimensions || []).filter((d) => allowedSet.has(d));
+      subQueryOptions.timeDimensions = (this.options.timeDimensions || []).filter((td) => allowedSet.has(td.dimension));
       const filterAllowed = (filter) => {
         if (!filter) {
           return null;
@@ -4082,7 +4093,7 @@ export class BaseQuery {
           return or.length ? { ...filter, or } : null;
         }
         const member = filter.dimension || filter.member || filter.measure;
-        return member && allowed.has(member) ? filter : null;
+        return member && allowedSet.has(member) ? filter : null;
       };
       subQueryOptions.filters = (this.options.filters || [])
         .map(filterAllowed)
@@ -4096,11 +4107,72 @@ export class BaseQuery {
       subQueryOptions.measures = [];
     }
 
+    const rawSubQueryAlias = correlatedQuery?.subQueryAlias || this.aliasName(`${cubeName}_${memberName}_subquery`);
+    const escapedSubQueryAlias = this.escapeColumnName(rawSubQueryAlias);
+
     const subQuery = this.newSubQuery(subQueryOptions);
     this.registerSubQueryPreAggregations(subQuery);
     // Use annotated SQL so parent query can correctly collect parameters from the shared allocator
     const subQuerySql = subQuery.buildParamAnnotatedSql();
-    return `(${subQuerySql})`;
+
+    const preAggregationForQuery = this.preAggregations.findPreAggregationForQuery?.();
+    let mainAlias;
+    if (preAggregationForQuery) {
+      let effectivePreAggregation = preAggregationForQuery;
+      if (
+        preAggregationForQuery.preAggregation?.type === 'rollupJoin' &&
+        preAggregationForQuery.rollupJoin?.length
+      ) {
+        effectivePreAggregation = preAggregationForQuery.rollupJoin[0].fromPreAggObj || preAggregationForQuery;
+      }
+      const aliasPath = this.cubeEvaluator.pathFromArray([effectivePreAggregation.cube, effectivePreAggregation.preAggregationName]);
+      mainAlias = this.escapeColumnName(this.aliasName(aliasPath));
+    }
+
+    const findLeft = (dimension) => {
+      const timeDimConfig = (subQuery.timeDimensions || []).find((td) => td.dimension === dimension);
+      if (timeDimConfig) {
+        return timeDimConfig.unescapedAliasName();
+      }
+      const dimConfig = (subQuery.dimensions || []).find((d) => d.dimension === dimension);
+      if (dimConfig?.unescapedAliasName) {
+        return dimConfig.unescapedAliasName();
+      }
+      return this.aliasName(dimension);
+    };
+
+    const findRight = (dimension) => {
+      const rightTimeDim = this.timeDimensions.find((td) => td.dimension === dimension);
+      const rightDim = rightTimeDim || (this.dimensions || []).find((d) => d.dimension === dimension);
+      if (!rightDim) {
+        throw new UserError(`Correlated dimension '${dimension}' is not present in the main query. Ensure the dimension is selected so correlatedWhereClause can be built.`);
+      }
+
+      if (mainAlias) {
+        const rightUnescapedAlias = rightDim.unescapedAliasName ? rightDim.unescapedAliasName() : this.aliasName(dimension);
+        return `${mainAlias}.${this.escapeColumnName(rightUnescapedAlias)}`;
+      }
+
+      if (rightDim.dimensionSql) {
+        return rightDim.dimensionSql();
+      }
+
+      return this.dimensionSql(rightDim);
+    };
+
+    const correlatedWhereClause = allowedDimensionsRaw
+      .map(({ dimension, operator }) => {
+        const left = `${escapedSubQueryAlias}.${this.escapeColumnName(findLeft(dimension))}`;
+        const right = findRight(dimension);
+        return `${left} ${operator || '='} ${right}`;
+      })
+      .join(' AND ') || '1=1';
+
+    return {
+      sql: `(${subQuerySql})`,
+      subQueryAlias: rawSubQueryAlias,
+      correlatedWhereClause
+    };
   }
 
   newSubQueryForCube(cube, options) {
@@ -5004,7 +5076,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, undefined),
+      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}),
     };
   }
 
@@ -5091,12 +5163,11 @@ export class BaseQuery {
       this.timeDimensions,
       this.segments,
       this.filters,
-      this.options,
-      this.preAggregations
+      this.options
     );
   }
 
-  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, preAggregations) {
+  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
     const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
@@ -5104,7 +5175,6 @@ export class BaseQuery {
     const filterNames = (filters || []).map(s => s.dimension);
 
     const queryOptions = options;
-    const queryPreAggregations = preAggregations;
 
     return new Proxy({}, {
       get: (_target, name) => {
@@ -5125,9 +5195,6 @@ export class BaseQuery {
         }
         if (name === 'queryOptions') {
           return queryOptions;
-        }
-        if (name === 'preAggregations') {
-          return queryPreAggregations;
         }
         if (name === 'members') {
           return measureNames

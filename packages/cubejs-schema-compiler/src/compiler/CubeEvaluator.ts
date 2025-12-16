@@ -57,9 +57,11 @@ export type MeasureDefinition = {
   type: string;
   sql: () => string;
   correlatedQuery?: {
-    allowedDimensions?: string[];
-    calculateMeasures: string[];
+    // Each entry: [leftDimension, operator?] or just leftDimension string
+    allowedDimensions?: (string | [string, string?])[];
+    calculateMeasures?: string[];
     optionOverrides?: Record<string, any>;
+    subQueryAlias?: string;
   };
   ownedByCube: boolean;
   rollingWindow?: any
