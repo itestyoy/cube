@@ -4114,6 +4114,7 @@ export class BaseQuery {
     // Avoid triggering pre-aggregation discovery while building correlated subquery (can recurse)
     const preAggregationForQuery = this.preAggregations?.preAggregationForQuery;
     let mainAlias;
+    let preAggregationReferences;
     if (preAggregationForQuery) {
       let effectivePreAggregation = preAggregationForQuery;
       if (
@@ -4122,30 +4123,49 @@ export class BaseQuery {
       ) {
         effectivePreAggregation = preAggregationForQuery.rollupJoin[0].fromPreAggObj || preAggregationForQuery;
       }
+      preAggregationReferences = effectivePreAggregation.references || preAggregationForQuery.references;
       const aliasPath = this.cubeEvaluator.pathFromArray([effectivePreAggregation.cube, effectivePreAggregation.preAggregationName]);
-      mainAlias = this.escapeColumnName(this.aliasName(aliasPath));
+      mainAlias = this.cubeAlias(aliasPath);
     }
 
+    const subQueryTimeDims = subQuery.timeDimensions || [];
+    const subQueryDims = subQuery.dimensions || [];
+    const mainTimeDims = this.timeDimensions || [];
+    const mainDims = this.dimensions || [];
+
+    const hasLeft = (dimension) => subQueryTimeDims.some((td) => td.dimension === dimension) ||
+      subQueryDims.some((d) => d.dimension === dimension);
+
     const findLeft = (dimension) => {
-      const timeDimConfig = (subQuery.timeDimensions || []).find((td) => td.dimension === dimension);
+      const timeDimConfig = subQueryTimeDims.find((td) => td.dimension === dimension);
       if (timeDimConfig) {
         return timeDimConfig.unescapedAliasName();
       }
-      const dimConfig = (subQuery.dimensions || []).find((d) => d.dimension === dimension);
+      const dimConfig = subQueryDims.find((d) => d.dimension === dimension);
       if (dimConfig?.unescapedAliasName) {
         return dimConfig.unescapedAliasName();
       }
       return this.aliasName(dimension);
     };
 
-    const findRight = (dimension) => {
-      const rightTimeDim = this.timeDimensions.find((td) => td.dimension === dimension);
-      const rightDim = rightTimeDim || (this.dimensions || []).find((d) => d.dimension === dimension);
+    const findRight = (dimension, rightDim) => {
       if (!rightDim) {
         throw new UserError(`Correlated dimension '${dimension}' is not present in the main query. Ensure the dimension is selected so correlatedWhereClause can be built.`);
       }
 
       if (mainAlias) {
+        if (rightDim instanceof BaseTimeDimension) {
+          const rollupTimeDimension = preAggregationReferences?.timeDimensions?.find(
+            (td) => td.dimension === dimension
+          );
+          const columnAlias = rollupTimeDimension
+            ? this.escapeColumnName(rightDim.unescapedAliasName(rollupTimeDimension.granularity))
+            : this.escapeColumnName(rightDim.unescapedAliasName());
+          const columnRef = `${mainAlias}.${columnAlias}`;
+          return rightDim.granularityObj
+            ? this.dimensionTimeGroupedColumn(columnRef, rightDim.granularityObj)
+            : columnRef;
+        }
         const rightUnescapedAlias = rightDim.unescapedAliasName ? rightDim.unescapedAliasName() : this.aliasName(dimension);
         return `${mainAlias}.${this.escapeColumnName(rightUnescapedAlias)}`;
       }
@@ -4159,10 +4179,19 @@ export class BaseQuery {
 
     const correlatedWhereClause = allowedDimensionsRaw
       .map(({ dimension, operator }) => {
+        if (!hasLeft(dimension)) {
+          return null;
+        }
+        const rightTimeDim = mainTimeDims.find((td) => td.dimension === dimension);
+        const rightDim = rightTimeDim || mainDims.find((d) => d.dimension === dimension);
+        if (!rightDim) {
+          throw new UserError(`Correlated dimension '${dimension}' is not present in the main query. Ensure the dimension is selected so correlatedWhereClause can be built.`);
+        }
         const left = `${escapedSubQueryAlias}.${this.escapeColumnName(findLeft(dimension))}`;
-        const right = findRight(dimension);
+        const right = findRight(dimension, rightDim);
         return `${left} ${operator || '='} ${right}`;
       })
+      .filter(Boolean)
       .join(' AND ') || '1=1';
 
     return {
