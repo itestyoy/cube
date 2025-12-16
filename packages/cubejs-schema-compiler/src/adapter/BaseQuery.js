@@ -4083,7 +4083,8 @@ export class BaseQuery {
 
     const subQuery = this.newSubQuery(subQueryOptions);
     this.registerSubQueryPreAggregations(subQuery);
-    const [subQuerySql] = subQuery.buildSqlAndParams(this.options.exportAnnotatedSql);
+    // Use annotated SQL so parent query can correctly collect parameters from the shared allocator
+    const subQuerySql = subQuery.buildParamAnnotatedSql();
     return `(${subQuerySql})`;
   }
 
