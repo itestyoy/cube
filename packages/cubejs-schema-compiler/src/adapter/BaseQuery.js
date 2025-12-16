@@ -4056,6 +4056,15 @@ export class BaseQuery {
       throw new UserError(`correlatedQuery.allowedDimensions or correlatedQuery.calculateMeasures must be provided for ${cubeName}.${memberName}`);
     }
 
+    if (hasMeasures) {
+      calculateMeasures.forEach((measure) => {
+        const measureObj = this.newMeasure(measure);
+        if (measureObj.definition()?.correlatedQuery) {
+          throw new UserError(`Measure '${measure}' cannot be used inside correlatedQuery.calculateMeasures of '${cubeName}.${memberName}' because it is itself correlated.`);
+        }
+      });
+    }
+
     const subQueryOptions = {
       ...this.options,
       // Prevent nested correlated measures from recursing
