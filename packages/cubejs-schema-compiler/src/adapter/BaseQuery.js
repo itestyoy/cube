@@ -5004,7 +5004,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
-      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, () => undefined),
+      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}, undefined),
     };
   }
 
@@ -5084,36 +5084,17 @@ export class BaseQuery {
   }
 
   queryContextProxy() {
-    const resolveBasePreAggregation = () => {
-      const preAggregationForQuery = this.preAggregations.findPreAggregationForQuery?.();
-      if (!preAggregationForQuery) {
-        return undefined;
-      }
 
-      let effectivePreAggregation = preAggregationForQuery;
-      if (
+    const preAggregationForQuery = this.preAggregations.findPreAggregationForQuery?.();
+
+    let effectivePreAggregation = preAggregationForQuery;
+
+    if ( preAggregationForQuery &&
         preAggregationForQuery.preAggregation?.type === 'rollupJoin' &&
         preAggregationForQuery.rollupJoin?.length
-      ) {
+    ) {
         effectivePreAggregation = preAggregationForQuery.rollupJoin[0].fromPreAggObj || preAggregationForQuery;
-      }
-
-      const aliasPath = this.cubeEvaluator.pathFromArray([effectivePreAggregation.cube, effectivePreAggregation.preAggregationName]);
-      const unescapedAlias = this.aliasName(aliasPath);
-      const alias = this.escapeColumnName(unescapedAlias);
-      const tableName = this.preAggregations.preAggregationTableName(
-        effectivePreAggregation.cube,
-        effectivePreAggregation.preAggregationName,
-        effectivePreAggregation.preAggregation
-      );
-
-      return {
-        id: `${effectivePreAggregation.cube}.${effectivePreAggregation.preAggregationName}`,
-        tableName,
-        alias,
-        unescapedAlias
-      };
-    };
+    }
 
     return BaseQuery.queryContextProxyFromQuery(
       this.measures,
@@ -5122,11 +5103,11 @@ export class BaseQuery {
       this.segments,
       this.filters,
       this.options,
-      resolveBasePreAggregation
+      effectivePreAggregation.preAggregationName
     );
   }
 
-  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, basePreAggregationResolver) {
+  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, preAggregationName) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
     const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
@@ -5146,9 +5127,6 @@ export class BaseQuery {
         if (name === 'dimensions') {
           return dimensionNames;
         }
-        if (name === 'dimensions') {
-          return dimensionNames;
-        }
         if (name === 'timeDimensions') {
           return timeDimensionNames;
         }
@@ -5159,7 +5137,7 @@ export class BaseQuery {
           return queryOptions;
         }
         if (name === 'basePreAggregation') {
-          return basePreAggregationResolver && basePreAggregationResolver()?.alias;
+          return preAggregationName;
         }
         if (name === 'members') {
           return measureNames
