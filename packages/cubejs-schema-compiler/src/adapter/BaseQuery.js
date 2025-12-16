@@ -5085,17 +5085,6 @@ export class BaseQuery {
 
   queryContextProxy() {
 
-    const preAggregationForQuery = this.preAggregations.findPreAggregationForQuery?.();
-
-    let effectivePreAggregation = preAggregationForQuery;
-
-    if ( preAggregationForQuery &&
-        preAggregationForQuery.preAggregation?.type === 'rollupJoin' &&
-        preAggregationForQuery.rollupJoin?.length
-    ) {
-        effectivePreAggregation = preAggregationForQuery.rollupJoin[0].fromPreAggObj || preAggregationForQuery;
-    }
-
     return BaseQuery.queryContextProxyFromQuery(
       this.measures,
       this.dimensions,
@@ -5103,11 +5092,11 @@ export class BaseQuery {
       this.segments,
       this.filters,
       this.options,
-      effectivePreAggregation.preAggregationName
+      this.preAggregations
     );
   }
 
-  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, preAggregationName) {
+  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options, preAggregations) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
     const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
@@ -5115,6 +5104,7 @@ export class BaseQuery {
     const filterNames = (filters || []).map(s => s.dimension);
 
     const queryOptions = options;
+    const queryPreAggregations = preAggregations;
 
     return new Proxy({}, {
       get: (_target, name) => {
@@ -5136,8 +5126,8 @@ export class BaseQuery {
         if (name === 'queryOptions') {
           return queryOptions;
         }
-        if (name === 'basePreAggregation') {
-          return preAggregationName;
+        if (name === 'preAggregations') {
+          return queryPreAggregations;
         }
         if (name === 'members') {
           return measureNames
