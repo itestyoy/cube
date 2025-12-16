@@ -4025,7 +4025,22 @@ export class BaseQuery {
   registerSubQueryPreAggregations(subQuery) {
     const desc = subQuery?.preAggregations?.preAggregationsDescription?.();
     if (desc?.length) {
-      this.extraPreAggregations.push(...desc);
+      // Avoid pushing duplicate pre-aggregations coming from the same subquery chain
+      if (!this.extraPreAggregationsKeySet) {
+        this.extraPreAggregationsKeySet = new Set(
+          (this.extraPreAggregations || []).map((d) => d.tableName || d.preAggregationId)
+        );
+      }
+      desc.forEach((d) => {
+        const key = d.tableName || d.preAggregationId;
+        if (key && this.extraPreAggregationsKeySet.has(key)) {
+          return;
+        }
+        if (key) {
+          this.extraPreAggregationsKeySet.add(key);
+        }
+        this.extraPreAggregations.push(d);
+      });
     }
   }
 
@@ -5144,7 +5159,7 @@ export class BaseQuery {
           return queryOptions;
         }
         if (name === 'basePreAggregation') {
-          return basePreAggregationResolver && basePreAggregationResolver().alias;
+          return basePreAggregationResolver && basePreAggregationResolver()?.alias;
         }
         if (name === 'members') {
           return measureNames
