@@ -3353,7 +3353,7 @@ export class BaseQuery {
         const orderBySql = (symbol.orderBy || []).map(o => ({ sql: this.evaluateSql(cubeName, o.sql), dir: o.dir }));
         let sql;
         if (symbol.type !== 'rank') {
-          if (symbol.correlatedQuery) {
+          if (symbol.correlatedQuery && !this.options.skipCorrelatedMeasures) {
             const correlated = this.buildCorrelatedSubQuery(
               symbol.correlatedQuery,
               cubeName,
@@ -4028,22 +4028,7 @@ export class BaseQuery {
   registerSubQueryPreAggregations(subQuery) {
     const desc = subQuery?.preAggregations?.preAggregationsDescription?.();
     if (desc?.length) {
-      // Avoid pushing duplicate pre-aggregations coming from the same subquery chain
-      if (!this.extraPreAggregationsKeySet) {
-        this.extraPreAggregationsKeySet = new Set(
-          (this.extraPreAggregations || []).map((d) => d.tableName || d.preAggregationId)
-        );
-      }
-      desc.forEach((d) => {
-        const key = d.tableName || d.preAggregationId;
-        if (key && this.extraPreAggregationsKeySet.has(key)) {
-          return;
-        }
-        if (key) {
-          this.extraPreAggregationsKeySet.add(key);
-        }
-        this.extraPreAggregations.push(d);
-      });
+      this.extraPreAggregations.push(...desc);
     }
   }
 
@@ -4071,8 +4056,19 @@ export class BaseQuery {
       throw new UserError(`correlatedQuery.allowedDimensions or correlatedQuery.calculateMeasures must be provided for ${cubeName}.${memberName}`);
     }
 
+    if (hasMeasures) {
+      calculateMeasures.forEach((measure) => {
+        const measureObj = this.newMeasure(measure);
+        if (measureObj.definition()?.correlatedQuery) {
+          throw new UserError(`Measure '${measure}' cannot be used inside correlatedQuery.calculateMeasures of '${cubeName}.${memberName}' because it is itself correlated.`);
+        }
+      });
+    }
+
     const subQueryOptions = {
       ...this.options,
+      // Prevent nested correlated measures from recursing
+      skipCorrelatedMeasures: true,
       ...(correlatedQuery?.optionOverrides || {})
     };
 
@@ -5156,7 +5152,6 @@ export class BaseQuery {
   }
 
   queryContextProxy() {
-
     return BaseQuery.queryContextProxyFromQuery(
       this.measures,
       this.dimensions,
