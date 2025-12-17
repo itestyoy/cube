@@ -4072,6 +4072,9 @@ export class BaseQuery {
     const mainDimsFromOptions = this.options.dimensions || [];
     const mainDimSet = new Set(mainDimsFromOptions);
     const mainTimeDimSet = new Set(mainTimeDimsFromOptions.map((td) => td.dimension));
+    const includeFilters = Array.isArray(correlatedQuery?.includeFilters) ? correlatedQuery.includeFilters : [];
+    const excludeFiltersSet = new Set(correlatedQuery?.excludeFilters || []);
+    const allowedLeftSet = new Set(hasDims ? allowedDimensionsFiltered.map(d => d.leftDimension) : []);
 
     const allowedDimensionsFiltered = allowedDimensionsRaw.filter(({ leftDimension, rightDimension }) => {
       if (!(mainDimSet.has(rightDimension) || mainTimeDimSet.has(rightDimension))) {
@@ -4106,7 +4109,6 @@ export class BaseQuery {
     };
 
     if (hasDims) {
-      const allowedLeftSet = new Set(allowedDimensionsFiltered.map(d => d.leftDimension));
       const timeDimsFromOptions = mainTimeDimsFromOptions;
       const dimsFromOptions = mainDimsFromOptions;
 
@@ -4131,26 +4133,33 @@ export class BaseQuery {
 
       subQueryOptions.dimensions = Array.from(new Set(baseDims.concat(extraDims)));
       subQueryOptions.timeDimensions = baseTimeDims.concat(extraTimeDims);
-
-      const filterAllowed = (filter) => {
-        if (!filter) {
-          return null;
-        }
-        if (filter.and) {
-          const and = filter.and.map(filterAllowed).filter(Boolean);
-          return and.length ? { ...filter, and } : null;
-        }
-        if (filter.or) {
-          const or = filter.or.map(filterAllowed).filter(Boolean);
-          return or.length ? { ...filter, or } : null;
-        }
-        const member = filter.dimension || filter.member || filter.measure;
-        return member && allowedLeftSet.has(member) ? filter : null;
-      };
-      subQueryOptions.filters = (this.options.filters || [])
-        .map(filterAllowed)
-        .filter(Boolean);
     }
+
+    const filterAllowed = (filter) => {
+      if (!filter) {
+        return null;
+      }
+      if (filter.and) {
+        const and = filter.and.map(filterAllowed).filter(Boolean);
+        return and.length ? { ...filter, and } : null;
+      }
+      if (filter.or) {
+        const or = filter.or.map(filterAllowed).filter(Boolean);
+        return or.length ? { ...filter, or } : null;
+      }
+      const member = filter.dimension || filter.member || filter.measure;
+      if (member && excludeFiltersSet.has(member)) {
+        return null;
+      }
+      if (hasDims) {
+        return member && allowedLeftSet.has(member) ? filter : null;
+      }
+      return filter;
+    };
+    subQueryOptions.filters = (this.options.filters || [])
+      .map(filterAllowed)
+      .filter(Boolean)
+      .concat(includeFilters);
 
     if (hasMeasures) {
       const allowedMeasures = new Set(calculateMeasures);

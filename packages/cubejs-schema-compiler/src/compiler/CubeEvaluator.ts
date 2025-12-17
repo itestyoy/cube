@@ -62,6 +62,8 @@ export type MeasureDefinition = {
     calculateMeasures?: string[];
     optionOverrides?: Record<string, any>;
     subQueryAlias?: string;
+    includeFilters?: any[];
+    excludeFilters?: string[];
   };
   ownedByCube: boolean;
   rollingWindow?: any
