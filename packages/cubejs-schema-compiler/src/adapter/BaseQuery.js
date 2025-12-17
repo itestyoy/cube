@@ -4113,7 +4113,9 @@ export class BaseQuery {
       const timeDimsFromOptions = mainTimeDimsFromOptions;
       const dimsFromOptions = mainDimsFromOptions;
 
-      const baseTimeDims = timeDimsFromOptions.filter((td) => allowedLeftSet.has(td.dimension));
+      const baseTimeDims = timeDimsFromOptions
+        .filter((td) => allowedLeftSet.has(td.dimension))
+        .map((td) => (excludeFiltersSet.has(td.dimension) ? { ...td, dateRange: null, boundaryDateRange: null } : td));
       const baseDims = dimsFromOptions.filter((d) => allowedLeftSet.has(d));
 
       const extraTimeDims = [];
@@ -4125,7 +4127,12 @@ export class BaseQuery {
           if (!baseTimeDims.find((td) => td.dimension === leftDimension)) {
             const template = timeDimsFromOptions.find((td) => td.dimension === rightDimension) ||
               timeDimsFromOptions.find((td) => td.dimension === leftDimension);
-            extraTimeDims.push(template ? { ...template, dimension: leftDimension } : { dimension: leftDimension });
+            const cloned = template ? { ...template, dimension: leftDimension } : { dimension: leftDimension };
+            if (excludeFiltersSet.has(leftDimension)) {
+              cloned.dateRange = null;
+              cloned.boundaryDateRange = null;
+            }
+            extraTimeDims.push(cloned);
           }
         } else if (!baseDims.includes(leftDimension)) {
           extraDims.push(leftDimension);
@@ -4157,10 +4164,10 @@ export class BaseQuery {
       }
       return filter;
     };
-    subQueryOptions.filters = (this.options.filters || [])
+    const mainFilters = (this.options.filters || [])
       .map(filterAllowed)
-      .filter(Boolean)
-      .concat(includeFilters);
+      .filter(Boolean);
+    subQueryOptions.filters = mainFilters.concat(includeFilters);
 
     if (hasMeasures) {
       const allowedMeasures = new Set(calculateMeasures);
