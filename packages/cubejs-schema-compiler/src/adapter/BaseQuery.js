@@ -4074,7 +4074,6 @@ export class BaseQuery {
     const mainTimeDimSet = new Set(mainTimeDimsFromOptions.map((td) => td.dimension));
     const includeFilters = Array.isArray(correlatedQuery?.includeFilters) ? correlatedQuery.includeFilters : [];
     const excludeFiltersSet = new Set(correlatedQuery?.excludeFilters || []);
-    const allowedLeftSet = new Set(hasDims ? allowedDimensionsFiltered.map(d => d.leftDimension) : []);
 
     const allowedDimensionsFiltered = allowedDimensionsRaw.filter(({ leftDimension, rightDimension }) => {
       if (!(mainDimSet.has(rightDimension) || mainTimeDimSet.has(rightDimension))) {
@@ -4092,6 +4091,8 @@ export class BaseQuery {
       }
       return true;
     });
+
+    const allowedLeftSet = new Set(hasDims ? allowedDimensionsFiltered.map(d => d.leftDimension) : []);
 
     if (hasMeasures) {
       calculateMeasures.forEach((measure) => {
