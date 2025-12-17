@@ -4230,8 +4230,7 @@ export class BaseQuery {
             return rewritten;
           }
         }
-        const rightUnescapedAlias = rightDim.unescapedAliasName ? rightDim.unescapedAliasName() : this.aliasName(dimension);
-        return `${mainAlias}.${this.escapeColumnName(rightUnescapedAlias)}`;
+        return rightDim.dimensionSql();
       }
 
       if (rightDim.dimensionSql) {
