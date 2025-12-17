@@ -4074,6 +4074,7 @@ export class BaseQuery {
     const mainTimeDimSet = new Set(mainTimeDimsFromOptions.map((td) => td.dimension));
     const includeFilters = Array.isArray(correlatedQuery?.includeFilters) ? correlatedQuery.includeFilters : [];
     const excludeFiltersSet = new Set(correlatedQuery?.excludeFilters || []);
+    const filtersRequiresDimension = new Set(correlatedQuery?.filtersRequiresDimension || []);
 
     const allowedDimensionsFiltered = allowedDimensionsRaw.filter(({ leftDimension, rightDimension }) => {
       if (!(mainDimSet.has(rightDimension) || mainTimeDimSet.has(rightDimension))) {
@@ -4174,6 +4175,34 @@ export class BaseQuery {
       subQueryOptions.measures = calculateMeasures.filter((m) => allowedMeasures.has(m));
     } else {
       subQueryOptions.measures = [];
+    }
+
+    if (filtersRequiresDimension.size > 0) {
+      const dimsSelected = subQueryOptions.dimensions || [];
+      const timeDimsSelected = subQueryOptions.timeDimensions || [];
+      const checkSelected = (member) => (
+        dimsSelected.includes(member) ||
+        timeDimsSelected.some((td) => td.dimension === member)
+      );
+      const validateRequired = (member) => {
+        if (!member || excludeFiltersSet.has(member)) {
+          return;
+        }
+        if (hasDims && !allowedLeftSet.has(member)) {
+          return;
+        }
+        if (filtersRequiresDimension.has(member) && !checkSelected(member)) {
+          throw new UserError(`Filter on '${member}' requires selecting the same dimension in correlatedQuery for '${cubeName}.${memberName}'.`);
+        }
+      };
+      (this.options.filters || []).forEach((filter) => {
+        validateRequired(filter.dimension || filter.member || filter.measure);
+      });
+      (this.options.timeDimensions || []).forEach((td) => {
+        if (td.dateRange) {
+          validateRequired(td.dimension);
+        }
+      });
     }
 
     const rawSubQueryAlias = correlatedQuery?.subQueryAlias || this.aliasName(`${cubeName}_${memberName}_subquery`);

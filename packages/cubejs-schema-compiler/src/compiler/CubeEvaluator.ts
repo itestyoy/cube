@@ -64,6 +64,7 @@ export type MeasureDefinition = {
     subQueryAlias?: string;
     includeFilters?: any[];
     excludeFilters?: string[];
+    filtersRequiresDimension?: string[];
   };
   ownedByCube: boolean;
   rollingWindow?: any
