@@ -58,7 +58,7 @@ export type MeasureDefinition = {
   sql: () => string;
   correlatedQuery?: {
     // Each entry: [leftDimension, operator?] or just leftDimension string
-    allowedDimensions?: (string | [string, string?])[];
+    allowedDimensions?: (string | [string, string?] | [[string, string?], string?])[];
     calculateMeasures?: string[];
     optionOverrides?: Record<string, any>;
     subQueryAlias?: string;

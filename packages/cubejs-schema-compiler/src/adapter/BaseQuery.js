@@ -4041,11 +4041,23 @@ export class BaseQuery {
   buildCorrelatedSubQuery(correlatedQuery, cubeName, memberName) {
     const normalizeAllowedDimensions = (dims) => (Array.isArray(dims) ? dims : []).map((item) => {
       if (Array.isArray(item)) {
-        const [dimension, operator, rightColumn] = item;
-        return { dimension, operator: operator || '=', rightColumn: rightColumn || this.aliasName(dimension) };
+        const [first, operator] = item;
+        if (Array.isArray(first)) {
+          const [leftDimension, rightDimension] = first;
+          return { leftDimension, rightDimension: rightDimension || leftDimension, operator: operator || '=' };
+        }
+        return { leftDimension: first, rightDimension: first, operator: operator || '=' };
       }
-      return { dimension: item, operator: '=', rightColumn: this.aliasName(item) };
-    }).filter(d => !!d.dimension && !!d.rightColumn);
+      return { leftDimension: item, rightDimension: item, operator: '=' };
+    }).filter(d => !!d.leftDimension && !!d.rightDimension);
+
+    const dimensionType = (path) => {
+      try {
+        return this.cubeEvaluator.dimensionByPath(path)?.type;
+      } catch (e) {
+        return undefined;
+      }
+    };
 
     const allowedDimensionsRaw = normalizeAllowedDimensions(correlatedQuery?.allowedDimensions);
     const calculateMeasures = correlatedQuery?.calculateMeasures;
@@ -4055,6 +4067,28 @@ export class BaseQuery {
     if (!hasMeasures && !hasDims) {
       throw new UserError(`correlatedQuery.allowedDimensions or correlatedQuery.calculateMeasures must be provided for ${cubeName}.${memberName}`);
     }
+
+    const mainTimeDimsFromOptions = this.options.timeDimensions || [];
+    const mainDimsFromOptions = this.options.dimensions || [];
+    const mainDimSet = new Set(mainDimsFromOptions);
+    const mainTimeDimSet = new Set(mainTimeDimsFromOptions.map((td) => td.dimension));
+
+    const allowedDimensionsFiltered = allowedDimensionsRaw.filter(({ leftDimension, rightDimension }) => {
+      if (!(mainDimSet.has(rightDimension) || mainTimeDimSet.has(rightDimension))) {
+        return false;
+      }
+      const leftType = dimensionType(leftDimension);
+      const rightType = dimensionType(rightDimension);
+      const rightIsTime = rightType === 'time' || mainTimeDimSet.has(rightDimension);
+      const leftIsTime = leftType === 'time';
+      if (rightIsTime && leftType && !leftIsTime) {
+        throw new UserError(`Correlated dimension '${leftDimension}' must be a time dimension because '${rightDimension}' in the main query is time.`);
+      }
+      if (leftType && rightType && leftType !== rightType) {
+        throw new UserError(`Correlated dimensions '${leftDimension}' and '${rightDimension}' must have the same type but are '${leftType}' and '${rightType}'.`);
+      }
+      return true;
+    });
 
     if (hasMeasures) {
       calculateMeasures.forEach((measure) => {
@@ -4067,15 +4101,37 @@ export class BaseQuery {
 
     const subQueryOptions = {
       ...this.options,
-      // Prevent nested correlated measures from recursing
       skipCorrelatedMeasures: true,
       ...(correlatedQuery?.optionOverrides || {})
     };
 
     if (hasDims) {
-      const allowedSet = new Set(allowedDimensionsRaw.map(d => d.dimension));
-      subQueryOptions.dimensions = (this.options.dimensions || []).filter((d) => allowedSet.has(d));
-      subQueryOptions.timeDimensions = (this.options.timeDimensions || []).filter((td) => allowedSet.has(td.dimension));
+      const allowedLeftSet = new Set(allowedDimensionsFiltered.map(d => d.leftDimension));
+      const timeDimsFromOptions = mainTimeDimsFromOptions;
+      const dimsFromOptions = mainDimsFromOptions;
+
+      const baseTimeDims = timeDimsFromOptions.filter((td) => allowedLeftSet.has(td.dimension));
+      const baseDims = dimsFromOptions.filter((d) => allowedLeftSet.has(d));
+
+      const extraTimeDims = [];
+      const extraDims = [];
+
+      allowedDimensionsFiltered.forEach(({ leftDimension, rightDimension }) => {
+        const isTime = dimensionType(leftDimension) === 'time';
+        if (isTime) {
+          if (!baseTimeDims.find((td) => td.dimension === leftDimension)) {
+            const template = timeDimsFromOptions.find((td) => td.dimension === rightDimension) ||
+              timeDimsFromOptions.find((td) => td.dimension === leftDimension);
+            extraTimeDims.push(template ? { ...template, dimension: leftDimension } : { dimension: leftDimension });
+          }
+        } else if (!baseDims.includes(leftDimension)) {
+          extraDims.push(leftDimension);
+        }
+      });
+
+      subQueryOptions.dimensions = Array.from(new Set(baseDims.concat(extraDims)));
+      subQueryOptions.timeDimensions = baseTimeDims.concat(extraTimeDims);
+
       const filterAllowed = (filter) => {
         if (!filter) {
           return null;
@@ -4089,7 +4145,7 @@ export class BaseQuery {
           return or.length ? { ...filter, or } : null;
         }
         const member = filter.dimension || filter.member || filter.measure;
-        return member && allowedSet.has(member) ? filter : null;
+        return member && allowedLeftSet.has(member) ? filter : null;
       };
       subQueryOptions.filters = (this.options.filters || [])
         .map(filterAllowed)
@@ -4108,13 +4164,12 @@ export class BaseQuery {
 
     const subQuery = this.newSubQuery(subQueryOptions);
     this.registerSubQueryPreAggregations(subQuery);
-    // Use annotated SQL so parent query can correctly collect parameters from the shared allocator
     const subQuerySql = subQuery.buildParamAnnotatedSql();
 
-    // Avoid triggering pre-aggregation discovery while building correlated subquery (can recurse)
     const preAggregationForQuery = this.preAggregations?.preAggregationForQuery;
     let mainAlias;
     let preAggregationReferences;
+    let renderedReferenceWithAlias;
     if (preAggregationForQuery) {
       let effectivePreAggregation = preAggregationForQuery;
       if (
@@ -4126,6 +4181,18 @@ export class BaseQuery {
       preAggregationReferences = effectivePreAggregation.references || preAggregationForQuery.references;
       const aliasPath = this.cubeEvaluator.pathFromArray([effectivePreAggregation.cube, effectivePreAggregation.preAggregationName]);
       mainAlias = this.cubeAlias(aliasPath);
+      const renderedReferenceBase = {};
+      if (preAggregationReferences) {
+        const dimRefs = this.preAggregations.dimensionsRenderedReference?.(preAggregationForQuery) || {};
+        Object.assign(renderedReferenceBase, dimRefs);
+        (preAggregationReferences.timeDimensions || []).forEach((td) => {
+          const tdRefs = this.preAggregations.timeDimensionsRenderedReference?.(td.granularity, preAggregationForQuery) || {};
+          Object.assign(renderedReferenceBase, tdRefs);
+        });
+      }
+      renderedReferenceWithAlias = Object.fromEntries(
+        Object.entries(renderedReferenceBase).map(([k, v]) => [k, `${mainAlias}.${v}`])
+      );
     }
 
     const subQueryTimeDims = subQuery.timeDimensions || [];
@@ -4154,17 +4221,14 @@ export class BaseQuery {
       }
 
       if (mainAlias) {
-        if (rightDim instanceof BaseTimeDimension) {
-          const rollupTimeDimension = preAggregationReferences?.timeDimensions?.find(
-            (td) => td.dimension === dimension
+        if (renderedReferenceWithAlias) {
+          const rewritten = this.evaluateSymbolSqlWithContext(
+            () => (rightDim.dimensionSql ? rightDim.dimensionSql() : null),
+            { renderedReference: renderedReferenceWithAlias, rollupQuery: true }
           );
-          const columnAlias = rollupTimeDimension
-            ? this.escapeColumnName(rightDim.unescapedAliasName(rollupTimeDimension.granularity))
-            : this.escapeColumnName(rightDim.unescapedAliasName());
-          const columnRef = `${mainAlias}.${columnAlias}`;
-          return rightDim.granularityObj
-            ? this.dimensionTimeGroupedColumn(columnRef, rightDim.granularityObj)
-            : columnRef;
+          if (typeof rewritten === 'string') {
+            return rewritten;
+          }
         }
         const rightUnescapedAlias = rightDim.unescapedAliasName ? rightDim.unescapedAliasName() : this.aliasName(dimension);
         return `${mainAlias}.${this.escapeColumnName(rightUnescapedAlias)}`;
@@ -4177,18 +4241,18 @@ export class BaseQuery {
       return this.dimensionSql(rightDim);
     };
 
-    const correlatedWhereClause = allowedDimensionsRaw
-      .map(({ dimension, operator }) => {
-        if (!hasLeft(dimension)) {
+    const correlatedWhereClause = allowedDimensionsFiltered
+      .map(({ leftDimension, rightDimension, operator }) => {
+        if (!hasLeft(leftDimension)) {
           return null;
         }
-        const rightTimeDim = mainTimeDims.find((td) => td.dimension === dimension);
-        const rightDim = rightTimeDim || mainDims.find((d) => d.dimension === dimension);
+        const rightTimeDim = mainTimeDims.find((td) => td.dimension === rightDimension);
+        const rightDim = rightTimeDim || mainDims.find((d) => d.dimension === rightDimension);
         if (!rightDim) {
-          throw new UserError(`Correlated dimension '${dimension}' is not present in the main query. Ensure the dimension is selected so correlatedWhereClause can be built.`);
+          throw new UserError(`Correlated dimension '${rightDimension}' is not present in the main query. Ensure the dimension is selected so correlatedWhereClause can be built.`);
         }
-        const left = `${escapedSubQueryAlias}.${this.escapeColumnName(findLeft(dimension))}`;
-        const right = findRight(dimension, rightDim);
+        const left = `${escapedSubQueryAlias}.${this.escapeColumnName(findLeft(leftDimension))}`;
+        const right = findRight(rightDimension, rightDim);
         return `${left} ${operator || '='} ${right}`;
       })
       .filter(Boolean)

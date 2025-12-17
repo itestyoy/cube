@@ -399,7 +399,14 @@ const BaseMeasure = {
     allowedDimensions: Joi.array().items(
       Joi.alternatives().try(
         Joi.string(),
-        Joi.array().items(Joi.string().required(), Joi.string(), Joi.string()).min(1).max(3)
+        Joi.array().items(
+          Joi.alternatives().try(
+            Joi.string(),
+            Joi.array().items(Joi.string().required(), Joi.string()).min(1).max(2)
+          ).required(),
+          Joi.string(),
+          Joi.string()
+        ).min(1).max(3)
       )
     ),
     calculateMeasures: Joi.array().items(Joi.string()).min(1),
