@@ -4037,24 +4037,144 @@ export class BaseQuery {
     this.registerSubQueryPreAggregations(subQuery);
     return subQuery.buildSqlAndParams(exportAnnotatedSql);
   }
-  
+
   /**
    * Build correlated subquery for measures with correlatedQuery configuration.
    * 
-   * Supports:
-   * - Regular dimensions and time dimensions
-   * - Expression dimensions (computed dimensions with dependencies)
-   * - Dimension remapping between main query and subquery
-   * - Filter transformation and validation
-   * - Partial filter exclusion via excludeFilters
-   * - Required dimension validation via filtersRequiresDimension
+   * ## Overview
    * 
-   * Expression Dimensions:
-   * - Expression dimensions are identified by their expressionName
-   * - Can be included in allowedDimensions by name (e.g., 'Orders.avgPrice')
-   * - All dependencies must be present in allowedDimensions
-   * - Dependencies are automatically included in subquery
-   * - Filters on expression dimensions are transformed with remapped cube context
+   * Correlated subqueries allow measures to reference data from related queries with different
+   * filtering or grouping. This method handles:
+   * - Dimension remapping between main query and subquery
+   * - Expression dimensions (computed dimensions with dependencies)
+   * - Filter transformation and validation
+   * - Partial filter exclusion and required dimension validation
+   * 
+   * ## Expression Dimensions
+   * 
+   * Expression dimensions are computed dimensions defined by JavaScript functions:
+   * ```javascript
+   * {
+   *   expression: (orders) => orders.total / orders.count,
+   *   expressionName: 'Orders.avgPrice',
+   *   cubeName: 'Orders'
+   * }
+   * ```
+   * 
+   * Key concepts:
+   * - **expressionName**: Arbitrary identifier for the expression dimension
+   * - **dependencies**: Real dimension paths used in the expression (extracted automatically)
+   * - **remapping**: Expression can be remapped to different cube with new cubeName
+   * 
+   * ## WHERE Clause Structure
+   * 
+   * For expression dimensions in WHERE clause:
+   * - **Left side**: Column alias from subquery (e.g., `subquery.activity_avgprice`)
+   * - **Right side**: SQL expression from main query (e.g., `orders.total / orders.count`)
+   * 
+   * Example:
+   * ```sql
+   * WHERE subquery.activity_avgprice = orders.total / orders.count
+   * ```
+   * 
+   * ## Usage Examples
+   * 
+   * ### Example 1: Expression Dimension with Dependencies
+   * 
+   * ```javascript
+   * correlatedQuery: {
+   *   allowedDimensions: [
+   *     ['Activity.avgPrice', 'Orders.avgPrice'],  // Expression dimension
+   *     ['Activity.total', 'Orders.total'],        // Required dependency
+   *     ['Activity.count', 'Orders.count']         // Required dependency
+   *   ]
+   * }
+   * ```
+   * 
+   * Result:
+   * - SubQuery creates expression dimension `Activity.avgPrice` with `cubeName: 'Activity'`
+   * - WHERE clause: `subquery.activity_avgprice = orders.total / orders.count`
+   * - Expression function evaluates in Activity cube context
+   * 
+   * ### Example 2: Expression Dimension in Filters
+   * 
+   * ```javascript
+   * filters: [{
+   *   dimension: {
+   *     expression: (orders) => orders.total / orders.count,
+   *     expressionName: 'Orders.avgPrice'
+   *   },
+   *   operator: 'gt',
+   *   values: [100]
+   * }]
+   * 
+   * correlatedQuery: {
+   *   allowedDimensions: [
+   *     ['Activity.avgPrice', 'Orders.avgPrice'],
+   *     ['Activity.total', 'Orders.total'],
+   *     ['Activity.count', 'Orders.count']
+   *   ]
+   * }
+   * ```
+   * 
+   * Result:
+   * - Filter transforms to Activity cube context
+   * - SubQuery WHERE: `(activity.total / activity.count) > 100`
+   * - All dependencies must be in allowedDimensions
+   * 
+   * ### Example 3: Dependencies Without Expression
+   * 
+   * ```javascript
+   * correlatedQuery: {
+   *   allowedDimensions: [
+   *     ['Activity.total', 'Orders.total'],
+   *     ['Activity.count', 'Orders.count']
+   *   ]
+   * }
+   * ```
+   * 
+   * Result:
+   * - Only dependencies are added to subQuery (as regular dimensions)
+   * - Expression dimension NOT created automatically
+   * - Filters on expression dimension will fail validation
+   * 
+   * ### Example 4: Exclude Filters
+   * 
+   * ```javascript
+   * correlatedQuery: {
+   *   allowedDimensions: ['Orders.status', 'Orders.createdAt'],
+   *   excludeFilters: ['Orders.createdAt']  // Remove date filters in subquery
+   * }
+   * ```
+   * 
+   * Result:
+   * - `Orders.createdAt` included in subQuery dimensions
+   * - Date filters on `Orders.createdAt` excluded from subQuery
+   * - For timeDimensions: dateRange and boundaryDateRange set to null
+   * 
+   * ### Example 5: Partial Coverage Validation
+   * 
+   * ```javascript
+   * // INVALID - will throw error:
+   * correlatedQuery: {
+   *   allowedDimensions: [
+   *     ['Activity.total', 'Orders.total']  // Missing Orders.count!
+   *   ],
+   *   excludeFilters: ['Orders.total']  // Only one dependency
+   * }
+   * ```
+   * 
+   * Error: Expression dimension 'Orders.avgPrice' depends on [orders.total, orders.count],
+   * but only some dependencies are in excludeFilters/allowedDimensions.
+   * 
+   * ## Validation Rules
+   * 
+   * 1. **Same Cube Dependencies**: All dependencies of expression must be from same cube
+   * 2. **No Partial Coverage**: Either include ALL dependencies or NONE
+   * 3. **Consistent Remapping**: When remapping to different cube, all dependencies
+   *    must map to same target cube
+   * 4. **Type Compatibility**: Left and right dimensions must have compatible types
+   * 5. **No Nested Correlation**: calculateMeasures cannot contain correlated measures
    * 
    * @param {Object} correlatedQuery - Configuration for correlated subquery
    * @param {Array} correlatedQuery.allowedDimensions - Dimensions allowed in subquery with optional remapping
@@ -4075,12 +4195,19 @@ export class BaseQuery {
    */
   buildCorrelatedSubQuery(correlatedQuery, cubeName, memberName) {
     // ============================================================================
-    // STEP 1: Helper functions
+    // STEP 1: Helper functions and utilities
     // ============================================================================
     
     /**
      * Normalize allowedDimensions array to unified format
      * Handles multiple input formats and converts to consistent structure
+     * 
+     * Input formats:
+     * - 'dimension' -> { left: 'dimension', right: 'dimension', operator: '=' }
+     * - ['dimension'] -> { left: 'dimension', right: 'dimension', operator: '=' }
+     * - ['dimension', '>'] -> { left: 'dimension', right: 'dimension', operator: '>' }
+     * - [['left', 'right']] -> { left: 'left', right: 'right', operator: '=' }
+     * - [['left', 'right'], '>'] -> { left: 'left', right: 'right', operator: '>' }
      */
     const normalizeAllowedDimensions = (dims) => 
       (Array.isArray(dims) ? dims : [])
@@ -4102,7 +4229,7 @@ export class BaseQuery {
 
     /**
      * Get dimension type by path
-     * @returns {string|undefined} Dimension type or undefined if not found
+     * @returns {string|undefined} Dimension type ('time', 'string', 'number', etc.) or undefined
      */
     const getDimensionType = (path) => {
       try {
@@ -4114,7 +4241,8 @@ export class BaseQuery {
 
     /**
      * Extract cube name from dimension path
-     * @example getCubeName('Order.total') => 'Order'
+     * @example getCubeName('Orders.total') => 'Orders'
+     * @example getCubeName('orders.total') => 'orders'
      */
     const getCubeName = (dimensionPath) => {
       if (!dimensionPath) return null;
@@ -4124,11 +4252,16 @@ export class BaseQuery {
 
     /**
      * Extract all member paths used inside an expression function
+     * Uses Cube.js collectUsedCubeReferences to analyze expression dependencies
      * Returns normalized paths (lowercase, without join hints) for consistent comparison
      * 
      * @param {Function} expressionFunc - Expression function to analyze
      * @param {string} expressionCubeName - Cube name for expression context
      * @returns {Array<string>} Array of normalized dependency paths
+     * 
+     * @example
+     * expression: (orders) => orders.total / orders.count
+     * returns: ['orders.total', 'orders.count']
      */
     const getExpressionDependencies = (expressionFunc, expressionCubeName) => {
       if (typeof expressionFunc !== 'function') {
@@ -4141,7 +4274,7 @@ export class BaseQuery {
           expressionFunc
         );
         
-        // Normalize each dependency path: remove join hints and lowercase
+        // Normalize each dependency: remove join hints and lowercase
         return pathReferencesUsed.map(pathArray => {
           const pathString = this.cubeEvaluator.pathFromArray(pathArray);
           const { path } = this.cubeEvaluator.constructor.joinHintFromPath(pathString);
@@ -4158,6 +4291,11 @@ export class BaseQuery {
      * 
      * @param {string|Object} dim - Dimension string or expression object
      * @returns {string|null} Normalized path
+     * 
+     * @example
+     * 'Orders[join_hint].total' => 'orders.total'
+     * 'Orders.total' => 'orders.total'
+     * { expression: ..., expressionName: 'Orders.avgPrice' } => 'orders.avgprice'
      */
     const normalizeDimensionPath = (dim) => {
       if (typeof dim === 'string') {
@@ -4178,17 +4316,38 @@ export class BaseQuery {
     /**
      * Collect dimensions/timeDimensions metadata including expression dependencies
      * 
-     * For expression dimensions:
-     * - Creates separate entry for each dependency (dependencies are the real paths)
-     * - Stores expressionName for identification
-     * - Stores allDependencies for validation
+     * Strategy:
+     * - For expression dimensions: Create separate entry for EACH dependency
+     * - For regular dimensions: Create single entry with dimension path
      * 
-     * For regular dimensions:
-     * - Uses dimension field as path
-     * - Normalizes to remove join hints
+     * This allows:
+     * 1. Finding expression dimensions by their dependency paths
+     * 2. Validating partial coverage of dependencies
+     * 3. Consistent lookup structure for both regular and expression dimensions
      * 
-     * @param {Array} dimensionsArray - Array of dimension objects
-     * @returns {Array} Array of metadata objects with normalized paths
+     * @param {Array} dimensionsArray - Array of dimension objects from this.dimensions or this.timeDimensions
+     * @returns {Array<Object>} Array of metadata objects
+     * 
+     * Metadata object structure:
+     * {
+     *   path: string,              // Normalized path (dependency for expressions, dimension for regular)
+     *   original: Object,          // Original dimension object
+     *   isExpression: boolean,     // True if this is expression dimension
+     *   expressionName: string,    // Normalized expression name (for expressions only)
+     *   allDependencies: Array     // All dependencies for this expression (for expressions only)
+     * }
+     * 
+     * @example
+     * Input: [
+     *   { dimension: 'Orders.total' },
+     *   { expression: (o) => o.total / o.count, expressionName: 'Orders.avgPrice' }
+     * ]
+     * 
+     * Output: [
+     *   { path: 'orders.total', isExpression: false, ... },
+     *   { path: 'orders.total', isExpression: true, expressionName: 'orders.avgprice', allDependencies: [...] },
+     *   { path: 'orders.count', isExpression: true, expressionName: 'orders.avgprice', allDependencies: [...] }
+     * ]
      */
     const collectDimensionsMetadata = (dimensionsArray) => {
       const result = [];
@@ -4197,34 +4356,31 @@ export class BaseQuery {
         const isExpression = !!dimObj.expression;
 
         if (isExpression) {
-          // Expression dimension: dependencies are the real paths
           if (dimObj.expression) {
             const expressionCubeName = dimObj.expressionCubeName || dimObj.cubeName;
             const dependencies = getExpressionDependencies(dimObj.expression, expressionCubeName);
+            const expressionName = (dimObj.expressionName || 
+                                  (dimObj.cubeName && dimObj.name ? `${dimObj.cubeName}.${dimObj.name}` : null))?.toLowerCase();
             
             if (dependencies.length > 0) {
-              // Add each dependency as a separate entry
+              // Create entry for each dependency
               dependencies.forEach(depPath => {
                 result.push({
-                  path: depPath, // normalized dependency path
+                  path: depPath,
                   original: dimObj,
                   isExpression: true,
-                  expressionName: (dimObj.expressionName || 
-                                (dimObj.cubeName && dimObj.name ? `${dimObj.cubeName}.${dimObj.name}` : null))?.toLowerCase(),
+                  expressionName,
                   allDependencies: dependencies
                 });
               });
             } else {
-              // Expression without dependencies (e.g., constant) - add as standalone
-              const syntheticPath = (dimObj.expressionName || 
-                                    (dimObj.cubeName && dimObj.name ? `${dimObj.cubeName}.${dimObj.name}` : null))?.toLowerCase();
-              
-              if (syntheticPath) {
+              // Expression without dependencies (e.g., constant expression)
+              if (expressionName) {
                 result.push({
-                  path: syntheticPath,
+                  path: expressionName,
                   original: dimObj,
                   isExpression: true,
-                  expressionName: syntheticPath,
+                  expressionName,
                   allDependencies: []
                 });
               }
@@ -4254,6 +4410,8 @@ export class BaseQuery {
     /**
      * Extract path from dimension object
      * Handles both regular dimensions (string) and expression dimensions (object)
+     * 
+     * Used in correlatedWhereClause to compare dimension objects from subQuery/mainQuery
      */
     const extractDimensionPath = (dimObj) => {
       if (typeof dimObj === 'string') return dimObj;
@@ -4266,26 +4424,30 @@ export class BaseQuery {
 
     /**
      * Find expression dimension metadata by expressionName
-     * Searches both dimensions and timeDimensions
+     * Searches both dimensions and timeDimensions maps
      * 
      * @param {string} expressionName - Name of expression dimension to find
-     * @returns {Object|null} Metadata object with type field or null if not found
+     * @returns {Object|null} Metadata object with type field ('dimension' or 'timeDimension') or null
+     * 
+     * @example
+     * findExpressionDimensionByName('Orders.avgPrice')
+     * returns: { path: 'orders.total', original: {...}, isExpression: true, type: 'dimension', ... }
      */
     const findExpressionDimensionByName = (expressionName) => {
       const normalizedName = expressionName.toLowerCase();
       
       // Search in dimensions
-      for (const [path, itemsArray] of mainQueryContext.dimensions.map.entries()) {
+      for (const itemsArray of mainQueryContext.dimensions.map.values()) {
         const expressionItem = itemsArray.find(item => 
-          item.isExpression && item.expressionName?.toLowerCase() === normalizedName
+          item.isExpression && item.expressionName === normalizedName
         );
         if (expressionItem) return { ...expressionItem, type: 'dimension' };
       }
       
       // Search in timeDimensions
-      for (const [path, itemsArray] of mainQueryContext.timeDimensions.map.entries()) {
+      for (const itemsArray of mainQueryContext.timeDimensions.map.values()) {
         const expressionItem = itemsArray.find(item => 
-          item.isExpression && item.expressionName?.toLowerCase() === normalizedName
+          item.isExpression && item.expressionName === normalizedName
         );
         if (expressionItem) return { ...expressionItem, type: 'timeDimension' };
       }
@@ -4294,7 +4456,7 @@ export class BaseQuery {
     };
 
     // ============================================================================
-    // STEP 2: Validate input
+    // STEP 2: Validate input parameters
     // ============================================================================
     
     const allowedDimensions = normalizeAllowedDimensions(correlatedQuery?.allowedDimensions);
@@ -4309,19 +4471,28 @@ export class BaseQuery {
     }
 
     // ============================================================================
-    // STEP 3: Collect main query context
+    // STEP 3: Collect and index main query context
     // ============================================================================
 
     const mainQueryDimensionsMetadata = collectDimensionsMetadata(this.dimensions);
     const mainQueryTimeDimensionsMetadata = collectDimensionsMetadata(this.timeDimensions);
 
-    // Create lookup structures
-    // Key = normalized path (for regular dimensions OR dependency of expression dimension)
-    // Value = array of metadata (can have multiple: regular + expression dependencies)
+    /**
+     * Main query context structure:
+     * 
+     * dimensions/timeDimensions:
+     *   - set: Set of all paths (includes both regular dimensions and expression dependencies)
+     *   - map: Map of path -> array of metadata objects
+     * 
+     * For regular dimensions: map contains single entry per path
+     * For expression dimensions: map contains multiple entries (one per expression using that dependency)
+     * 
+     * filterMembers: Set of paths used in filters (for existsOnlyInFilters check)
+     */
     const mainQueryContext = {
       dimensions: {
         set: new Set(mainQueryDimensionsMetadata.map(item => item.path)),
-        map: new Map() // path → array of metadata
+        map: new Map()
       },
       timeDimensions: {
         set: new Set(mainQueryTimeDimensionsMetadata.map(item => item.path)),
@@ -4330,22 +4501,21 @@ export class BaseQuery {
       filterMembers: new Set()
     };
 
-    // Build maps with multiple entries per path (for expression dependencies)
-    mainQueryDimensionsMetadata.forEach(item => {
-      if (!mainQueryContext.dimensions.map.has(item.path)) {
-        mainQueryContext.dimensions.map.set(item.path, []);
-      }
-      mainQueryContext.dimensions.map.get(item.path).push(item);
-    });
+    // Build maps: path -> [metadata objects]
+    // Array is needed because one path can be both regular dimension AND expression dependency
+    const buildContextMap = (metadata, contextMap) => {
+      metadata.forEach(item => {
+        if (!contextMap.has(item.path)) {
+          contextMap.set(item.path, []);
+        }
+        contextMap.get(item.path).push(item);
+      });
+    };
 
-    mainQueryTimeDimensionsMetadata.forEach(item => {
-      if (!mainQueryContext.timeDimensions.map.has(item.path)) {
-        mainQueryContext.timeDimensions.map.set(item.path, []);
-      }
-      mainQueryContext.timeDimensions.map.get(item.path).push(item);
-    });
+    buildContextMap(mainQueryDimensionsMetadata, mainQueryContext.dimensions.map);
+    buildContextMap(mainQueryTimeDimensionsMetadata, mainQueryContext.timeDimensions.map);
 
-    // Collect filter members (dimensions used in filters)
+    // Collect filter members (dimensions/timeDimensions used in filters)
     const collectFilterMembers = (filter) => {
       if (!filter) return;
       if (filter.and) return filter.and.forEach(collectFilterMembers);
@@ -4363,6 +4533,7 @@ export class BaseQuery {
     (this.options.filters || []).forEach(collectFilterMembers);
 
     // Add timeDimensions with dateRange/boundaryDateRange to filter members
+    // These timeDimensions are effectively filtered even without explicit filter
     mainQueryTimeDimensionsMetadata.forEach(({ path, original }) => {
       const td = original.timeDimension || original;
       if (td.dateRange || td.boundaryDateRange) {
@@ -4371,10 +4542,9 @@ export class BaseQuery {
     });
 
     // ============================================================================
-    // STEP 4: Process configuration options
+    // STEP 4: Process and validate configuration options
     // ============================================================================
 
-    // All config options contain dimension paths (can be regular or expression dimensions)
     const config = {
       includeFilters: Array.isArray(correlatedQuery?.includeFilters) 
         ? correlatedQuery.includeFilters 
@@ -4391,84 +4561,88 @@ export class BaseQuery {
       )
     };
 
-    // Validate: if a dependency is in excludeFilters/filtersRequiresDimension,
-    // check that all dependencies of the same expression are also included
-    const validateDependencyInConfig = (depPath, configName, configSet) => {
-      // Get all expressions that use this dependency
-      const expressionsUsingDep = [
-        ...(mainQueryContext.dimensions.map.get(depPath) || []),
-        ...(mainQueryContext.timeDimensions.map.get(depPath) || [])
-      ].filter(item => item.isExpression);
-
+    /**
+     * Validate expression dimensions in excludeFilters/filtersRequiresDimension
+     * 
+     * Rule: If ANY dependency of expression is in config, ALL dependencies must be in config
+     * This prevents ambiguity about whether to exclude/require the expression or its dependencies
+     * 
+     * @param {Set} configSet - Set of dimension paths from config
+     * @param {string} configName - Name of config option (for error messages)
+     */
+    const validateExpressionInConfig = (configSet, configName) => {
       const validatedExpressions = new Set();
 
-      expressionsUsingDep.forEach(item => {
-        const normalizedExpressionName = item.expressionName?.toLowerCase();
-        if (validatedExpressions.has(normalizedExpressionName)) return;
-        validatedExpressions.add(normalizedExpressionName);
-        
-        // Check if other dependencies of the same expression are in config
-        const depsInConfig = item.allDependencies.filter(dep => configSet.has(dep));
-        
-        if (depsInConfig.length > 0 && depsInConfig.length < item.allDependencies.length) {
-          throw new UserError(
-            `Expression dimension '${item.expressionName}' in correlatedQuery.${configName} of '${cubeName}.${memberName}' ` +
-            `depends on [${item.allDependencies.join(', ')}], but only some of its dependencies are in ${configName}. ` +
-            `Present: [${depsInConfig.join(', ')}]. Missing: [${item.allDependencies.filter(d => !configSet.has(d)).join(', ')}]. ` +
-            `This creates ambiguity. Either include all dependencies of the expression or none.`
-          );
+      for (const depPath of configSet) {
+        // Find all expressions using this dependency
+        const expressionsUsingDep = [
+          ...(mainQueryContext.dimensions.map.get(depPath) || []),
+          ...(mainQueryContext.timeDimensions.map.get(depPath) || [])
+        ].filter(item => item.isExpression);
+
+        for (const item of expressionsUsingDep) {
+          if (validatedExpressions.has(item.expressionName)) continue;
+          validatedExpressions.add(item.expressionName);
+          
+          const depsInConfig = item.allDependencies.filter(dep => configSet.has(dep));
+          
+          if (depsInConfig.length > 0 && depsInConfig.length < item.allDependencies.length) {
+            const missingDeps = item.allDependencies.filter(d => !configSet.has(d));
+            throw new UserError(
+              `Expression dimension '${item.expressionName}' in correlatedQuery.${configName} of '${cubeName}.${memberName}' ` +
+              `depends on [${item.allDependencies.join(', ')}], but only some dependencies are in ${configName}. ` +
+              `Present: [${depsInConfig.join(', ')}]. Missing: [${missingDeps.join(', ')}]. ` +
+              `Either include all dependencies or none.`
+            );
+          }
         }
-      });
+      }
     };
 
-    // Validate excludeFilters
-    config.excludeFilters.forEach(depPath => {
-      validateDependencyInConfig(depPath, 'excludeFilters', config.excludeFilters);
-    });
-
-    // Validate filtersRequiresDimension
-    config.filtersRequireDimension.forEach(depPath => {
-      validateDependencyInConfig(depPath, 'filtersRequiresDimension', config.filtersRequireDimension);
-    });
+    validateExpressionInConfig(config.excludeFilters, 'excludeFilters');
+    validateExpressionInConfig(config.filtersRequireDimension, 'filtersRequiresDimension');
 
     // ============================================================================
-    // STEP 5: Filter and validate allowedDimensions
+    // STEP 5: Validate and normalize allowedDimensions
     // ============================================================================
     
-    // allowedDimensions can contain:
-    // 1. Regular dimension paths
-    // 2. Expression dimension names (identified by expressionName)
-    // 3. Dependencies of expression dimensions
+    /**
+     * Process each allowedDimension entry:
+     * 1. Normalize rightDimension for lookups
+     * 2. Check if it's expression dimension (by name)
+     * 3. Validate existence in main query
+     * 4. Validate type compatibility
+     * 
+     * Result: Array of validated dimension mappings with metadata
+     */
     const validatedAllowedDimensions = allowedDimensions
       .map(({ leftDimension, rightDimension, operator }) => {
         const normalizedRightDimension = normalizeDimensionPath(rightDimension);
         if (!normalizedRightDimension) return null;
         
-        // Check if rightDimension is an expression dimension by name
+        // Check if rightDimension is expression dimension by name
         const expressionMetadata = findExpressionDimensionByName(normalizedRightDimension);
         const isExpressionDimension = !!expressionMetadata;
         
         return {
           leftDimension,
-          rightDimension: normalizedRightDimension, // Normalized for lookups
-          originalRightDimension: rightDimension,   // Original for error messages
+          rightDimension: normalizedRightDimension,
+          originalRightDimension: rightDimension,
           operator,
           isExpressionDimension,
           expressionMetadata
         };
       })
       .filter(Boolean)
-      .filter(({ leftDimension, rightDimension, originalRightDimension, isExpressionDimension, expressionMetadata, operator }) => {
-        // Check existence in main query
+      .filter(({ leftDimension, rightDimension, originalRightDimension, isExpressionDimension, expressionMetadata }) => {
+        // Validate existence
         const existsInMainQuery = 
           mainQueryContext.dimensions.set.has(rightDimension) || 
           mainQueryContext.timeDimensions.set.has(rightDimension) || 
           mainQueryContext.filterMembers.has(rightDimension) ||
-          isExpressionDimension; // Expression dimension exists by name
+          isExpressionDimension;
         
-        if (!existsInMainQuery) {
-          return false;
-        }
+        if (!existsInMainQuery) return false;
 
         // Validate type compatibility
         const leftDimensionType = getDimensionType(leftDimension);
@@ -4481,19 +4655,22 @@ export class BaseQuery {
 
         if (rightIsTimeDimension && leftDimensionType && !leftIsTimeDimension) {
           throw new UserError(
-            `Correlated dimension '${leftDimension}' must be a time dimension because '${originalRightDimension}' in the main query is time.`
+            `Correlated dimension '${leftDimension}' must be a time dimension ` +
+            `because '${originalRightDimension}' in the main query is time.`
           );
         }
 
         if (leftDimensionType && rightDimensionType && leftDimensionType !== rightDimensionType) {
           throw new UserError(
-            `Correlated dimensions '${leftDimension}' and '${originalRightDimension}' must have the same type but are '${leftDimensionType}' and '${rightDimensionType}'.`
+            `Correlated dimensions '${leftDimension}' and '${originalRightDimension}' ` +
+            `must have the same type but are '${leftDimensionType}' and '${rightDimensionType}'.`
           );
         }
 
         return true;
       });
 
+    // Create quick-lookup sets
     const allowedSubQueryDimensions = new Set(
       hasAllowedDimensions ? validatedAllowedDimensions.map(d => d.leftDimension) : []
     );
@@ -4503,13 +4680,23 @@ export class BaseQuery {
     );
 
     // ============================================================================
-    // STEP 6: Validate expression dimensions in allowedDimensions
+    // STEP 6: Validate expression dimensions dependencies
     // ============================================================================
 
-    // For expression dimensions explicitly included in allowedDimensions:
-    // - Validate all dependencies are from same cube
-    // - Validate all dependencies are present in allowedDimensions
-    // - Validate cross-cube remapping consistency
+    /**
+     * Two validation paths:
+     * 
+     * Path A: Expression dimension explicitly in allowedDimensions (by name)
+     *   - Validate all dependencies from same cube
+     *   - Validate all dependencies present in allowedDimensions
+     *   - Validate cross-cube remapping consistency
+     * 
+     * Path B: Expression dimension implicitly via dependencies
+     *   - Validate no partial coverage
+     *   - Validate dependencies don't remap to different cubes
+     */
+
+    // Path A: Explicit expression dimensions in allowedDimensions
     validatedAllowedDimensions.forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata }) => {
       if (!isExpressionDimension || !expressionMetadata) return;
       
@@ -4518,7 +4705,8 @@ export class BaseQuery {
       
       if (!rightCubeName || !leftCubeName) {
         throw new UserError(
-          `Expression dimension '${rightDimension}' must have cube names in both left and right dimensions (format: CubeName.dimensionName).`
+          `Expression dimension '${rightDimension}' must have cube names in both ` +
+          `left and right dimensions (format: CubeName.dimensionName).`
         );
       }
       
@@ -4531,68 +4719,65 @@ export class BaseQuery {
       if (dependenciesFromDifferentCubes.length > 0) {
         throw new UserError(
           `Expression dimension '${rightDimension}' has dependencies from different cubes. ` +
-          `All dependencies [${expressionMetadata.allDependencies.join(', ')}] must be from the same cube '${rightCubeName}'.`
+          `All dependencies [${expressionMetadata.allDependencies.join(', ')}] must be from cube '${rightCubeName}'.`
         );
       }
       
-      // Validate: all dependencies must be in allowedDimensions
+      // Validate: all dependencies present
       const missingDependencies = expressionMetadata.allDependencies.filter(dep =>
         !allowedRightDimensionsSet.has(dep)
       );
       
       if (missingDependencies.length > 0) {
         throw new UserError(
-          `Expression dimension '${rightDimension}' in allowedDimensions requires all its dependencies. ` +
-          `Missing dependencies: [${missingDependencies.join(', ')}]. ` +
-          `Please add them to allowedDimensions.`
+          `Expression dimension '${rightDimension}' requires all its dependencies in allowedDimensions. ` +
+          `Missing: [${missingDependencies.join(', ')}].`
         );
       }
       
-      // Validate: all dependencies remap to same target cube
+      // Validate: dependencies remap to same target cube
       expressionMetadata.allDependencies.forEach(dep => {
         const depMapping = validatedAllowedDimensions.find(d => d.rightDimension === dep);
         if (depMapping) {
           const depLeftCubeName = getCubeName(depMapping.leftDimension);
           if (depLeftCubeName !== leftCubeName) {
             throw new UserError(
-              `Expression dimension '${rightDimension}' is remapped to cube '${leftCubeName}', ` +
-              `but its dependency '${dep}' is remapped to cube '${depLeftCubeName}'. ` +
-              `All dependencies must be remapped to the same target cube.`
+              `Expression dimension '${rightDimension}' remaps to cube '${leftCubeName}', ` +
+              `but dependency '${dep}' remaps to cube '${depLeftCubeName}'. ` +
+              `All dependencies must remap to the same target cube.`
             );
           }
         }
       });
     });
 
-    // For expression dimensions used implicitly via dependencies:
-    // - Validate no partial coverage in allowedDimensions
-    // - Validate dependencies don't map to different target cubes
+    // Path B: Implicit expression dimensions (via dependencies)
     const processedExpressions = new Set();
     
     validatedAllowedDimensions.forEach(({ rightDimension }) => {
-      // Check if rightDimension is a dependency of any expression dimension
       const expressionsUsingDep = [
         ...(mainQueryContext.dimensions.map.get(rightDimension) || []),
         ...(mainQueryContext.timeDimensions.map.get(rightDimension) || [])
       ].filter(item => item.isExpression);
 
-      expressionsUsingDep.forEach(item => {
-        const normalizedExpressionName = item.expressionName?.toLowerCase();
-        if (processedExpressions.has(normalizedExpressionName)) return;
-        processedExpressions.add(normalizedExpressionName);
+      for (const item of expressionsUsingDep) {
+        if (processedExpressions.has(item.expressionName)) continue;
+        processedExpressions.add(item.expressionName);
 
         // Validate: all dependencies from same cube
-        const rightCubeName = getCubeName(item.allDependencies[0]);
-        const dependenciesFromDifferentCubes = item.allDependencies.filter(dep => {
-          const depCubeName = getCubeName(dep);
-          return depCubeName && depCubeName !== rightCubeName;
-        });
+        if (item.allDependencies.length > 0) {
+          const rightCubeName = getCubeName(item.allDependencies[0]);
+          const dependenciesFromDifferentCubes = item.allDependencies.filter(dep => {
+            const depCubeName = getCubeName(dep);
+            return depCubeName && depCubeName !== rightCubeName;
+          });
 
-        if (dependenciesFromDifferentCubes.length > 0) {
-          throw new UserError(
-            `Expression dimension '${item.expressionName}' has dependencies from different cubes. ` +
-            `All dependencies [${item.allDependencies.join(', ')}] must be from the same cube.`
-          );
+          if (dependenciesFromDifferentCubes.length > 0) {
+            throw new UserError(
+              `Expression dimension '${item.expressionName}' has dependencies from different cubes. ` +
+              `All dependencies must be from the same cube.`
+            );
+          }
         }
 
         // Validate: no partial coverage
@@ -4605,16 +4790,14 @@ export class BaseQuery {
 
         if (presentDependencies.length > 0 && missingDependencies.length > 0) {
           throw new UserError(
-            `Expression dimension '${item.expressionName}' depends on [${item.allDependencies.join(', ')}], ` +
-            `but only some of these dependencies are in allowedDimensions. ` +
+            `Expression dimension '${item.expressionName}' has partial dependency coverage. ` +
             `Present: [${presentDependencies.join(', ')}]. Missing: [${missingDependencies.join(', ')}]. ` +
-            `Partial remapping of expression dependencies is not supported - include all dependencies or none.`
+            `Include all dependencies or none.`
           );
         }
 
         // Validate: cross-cube remapping consistency
         if (presentDependencies.length === item.allDependencies.length) {
-          // All dependencies present - check they all map to same target cube
           const leftCubeNames = new Set(
             presentDependencies.map(dep => {
               const mapping = validatedAllowedDimensions.find(d => d.rightDimension === dep);
@@ -4624,12 +4807,12 @@ export class BaseQuery {
 
           if (leftCubeNames.size > 1) {
             throw new UserError(
-              `Expression dimension '${item.expressionName}' dependencies are remapped to different cubes: [${[...leftCubeNames].join(', ')}]. ` +
-              `All dependencies must be remapped to the same target cube.`
+              `Expression dimension '${item.expressionName}' dependencies remap to different cubes: ` +
+              `[${[...leftCubeNames].join(', ')}]. All must remap to same cube.`
             );
           }
         }
-      });
+      }
     });
 
     // ============================================================================
@@ -4640,7 +4823,8 @@ export class BaseQuery {
       calculateMeasures.forEach(measure => {
         if (this.newMeasure(measure).definition()?.correlatedQuery) {
           throw new UserError(
-            `Measure '${measure}' cannot be used inside correlatedQuery.calculateMeasures of '${cubeName}.${memberName}' because it is itself correlated.`
+            `Measure '${measure}' in calculateMeasures of '${cubeName}.${memberName}' ` +
+            `cannot be correlated (nested correlation not supported).`
           );
         }
       });
@@ -4669,23 +4853,27 @@ export class BaseQuery {
       };
 
       /**
-       * Create expression dimension object for subQuery with remapped cube name
-       * The expression function remains the same, but cubeName is changed to target cube
-       * Cube.js will resolve dependencies in the new cube context automatically
+       * Create expression dimension object for subQuery
+       * 
+       * Key transformation: Change cubeName to target cube (leftDimension cube)
+       * Expression function remains the same - Cube.js resolves dependencies in new context
+       * 
+       * @example
+       * Input:  { expression: (o) => o.total / o.count, expressionName: 'Orders.avgPrice', cubeName: 'Orders' }
+       * Output: { expression: (o) => o.total / o.count, expressionName: 'Activity.avgPrice', cubeName: 'Activity' }
        */
       const createExpressionDimension = (leftDimension, originalDim) => {
         const leftCubeName = getCubeName(leftDimension);
 
         if (!leftCubeName) {
           throw new UserError(
-            `Cannot remap expression dimension to '${leftDimension}' in '${cubeName}.${memberName}': ` +
-            `leftDimension must have a cube name (format: CubeName.dimensionName).`
+            `Cannot remap expression to '${leftDimension}': must include cube name.`
           );
         }
 
         return {
           expression: originalDim.expression,
-          cubeName: leftCubeName,  // Target cube for subquery
+          cubeName: leftCubeName,
           name: leftDimension.split('.').pop(),
           expressionName: leftDimension,
           definition: originalDim.definition
@@ -4694,8 +4882,7 @@ export class BaseQuery {
 
       /**
        * Add time dimension to subQuery
-       * Handles both regular and expression time dimensions
-       * Applies excludeFilters to remove dateRange/boundaryDateRange if needed
+       * Handles both explicit expression dimensions and implicit dependencies
        */
       const addTimeDimension = (leftDimension, rightDimension, expressionMetadata = null) => {
         if (processed.timeDimensions.has(leftDimension)) return;
@@ -4703,7 +4890,7 @@ export class BaseQuery {
         let timeDimension;
         
         if (expressionMetadata) {
-          // Expression dimension explicitly included in allowedDimensions
+          // Explicit expression dimension
           timeDimension = {
             dimension: createExpressionDimension(leftDimension, expressionMetadata.original),
             granularity: expressionMetadata.original.granularity,
@@ -4711,10 +4898,8 @@ export class BaseQuery {
             boundaryDateRange: expressionMetadata.original.boundaryDateRange
           };
         } else {
-          // Regular dimension or dependency of expression
+          // Regular dimension or implicit expression dependency
           const rightTdItems = mainQueryContext.timeDimensions.map.get(rightDimension) || [];
-          
-          // Prefer regular dimension over expression dependency
           const rightTdMetadata = rightTdItems.find(item => !item.isExpression) || rightTdItems[0];
 
           if (rightTdMetadata?.isExpression) {
@@ -4736,7 +4921,7 @@ export class BaseQuery {
           }
         }
 
-        // Apply excludeFilters
+        // Apply excludeFilters: remove date filtering
         if (config.excludeFilters.has(rightDimension)) {
           timeDimension.dateRange = null;
           timeDimension.boundaryDateRange = null;
@@ -4749,19 +4934,15 @@ export class BaseQuery {
 
       /**
        * Add dimension to subQuery
-       * Handles both regular and expression dimensions
+       * Prefers regular dimensions over expression dependencies when both exist
        */
       const addDimension = (leftDimension, rightDimension, expressionMetadata = null) => {
         if (processed.dimensions.has(leftDimension)) return;
 
         if (expressionMetadata) {
-          // Expression dimension explicitly included in allowedDimensions
           subQueryDimensions.push(createExpressionDimension(leftDimension, expressionMetadata.original));
         } else {
-          // Regular dimension or dependency of expression
           const rightDimItems = mainQueryContext.dimensions.map.get(rightDimension) || [];
-          
-          // Prefer regular dimension over expression dependency
           const rightDimMetadata = rightDimItems.find(item => !item.isExpression) || rightDimItems[0];
 
           if (rightDimMetadata?.isExpression) {
@@ -4775,10 +4956,10 @@ export class BaseQuery {
         allowedSubQueryDimensions.add(leftDimension);
       };
 
-      // Process all allowed dimensions
+      // Process all validated allowed dimensions
       validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata }) => {
         if (isExpressionDimension && expressionMetadata) {
-          // Expression dimension explicitly included by name
+          // Explicit expression dimension in allowedDimensions
           const isTimeDimension = expressionMetadata.type === 'timeDimension';
           
           if (isTimeDimension) {
@@ -4787,7 +4968,7 @@ export class BaseQuery {
             addDimension(leftDimension, rightDimension, expressionMetadata);
           }
         } else {
-          // Regular dimension or dependency of expression
+          // Regular dimension or implicit expression dependency
           const leftIsTimeDimension = getDimensionType(leftDimension) === 'time';
           const rightIsTimeDimension = getDimensionType(rightDimension) === 'time';
           
@@ -4812,7 +4993,7 @@ export class BaseQuery {
     }
 
     // ============================================================================
-    // STEP 10: Build filters for subQuery
+    // STEP 10: Transform filters for subQuery
     // ============================================================================
     
     const allowedMeasures = hasCalculateMeasures ? new Set(calculateMeasures) : null;
@@ -4823,20 +5004,22 @@ export class BaseQuery {
     );
 
     /**
-     * Check if filter is allowed in subQuery and transform it
+     * Check if filter is allowed and transform it for subQuery
      * 
-     * Filters can be:
-     * - On regular dimensions: transform member name via dimensionMapping
-     * - On expression dimensions (object): transform by creating new expression with target cube
-     * - On expression dimensions (string): transform member name via dimensionMapping
-     * - On measures: allow if in calculateMeasures
+     * Transformation rules:
+     * 1. Expression dimension object: Create new object with target cube
+     * 2. Expression dimension string: Transform via dimensionMapping
+     * 3. Regular dimension: Transform via dimensionMapping
+     * 4. Measure: Allow if in calculateMeasures
      * 
-     * For expression dimensions, validates that all dependencies are in allowedDimensions
+     * Validation:
+     * - Check excludeFilters
+     * - For expression dimensions: validate all dependencies present
+     * - For expression dependencies: validate no partial coverage
      */
     const isFilterAllowed = (filter) => {
       if (!filter) return null;
 
-      // Recursively process and/or filters
       if (filter.and) {
         const allowedAndFilters = filter.and.map(isFilterAllowed).filter(Boolean);
         return allowedAndFilters.length ? { ...filter, and: allowedAndFilters } : null;
@@ -4850,34 +5033,25 @@ export class BaseQuery {
       const filterMember = filter.dimension || filter.member || filter.measure;
       if (!filterMember) return null;
 
-      // Check if filter member is expression dimension object
       const isExpressionObject = typeof filterMember === 'object' && filterMember.expression;
       
       let normalizedFilterMember;
       let filterExpressionMetadata = null;
       
       if (isExpressionObject) {
-        // Expression dimension object in filter
         normalizedFilterMember = normalizeDimensionPath(filterMember);
         filterExpressionMetadata = findExpressionDimensionByName(normalizedFilterMember);
-        
-        if (!filterExpressionMetadata) {
-          // Unknown expression - skip
-          return null;
-        }
+        if (!filterExpressionMetadata) return null;
       } else {
-        // String member
         normalizedFilterMember = normalizeDimensionPath(filterMember);
       }
       
-      // Check excludeFilters
       if (config.excludeFilters.has(normalizedFilterMember)) return null;
 
-      // Check if this is expression dimension (by name or object)
       const exprMetadata = filterExpressionMetadata || findExpressionDimensionByName(normalizedFilterMember);
       
       if (exprMetadata) {
-        // Filter on expression dimension - validate dependencies
+        // Validate dependencies
         const presentDeps = exprMetadata.allDependencies.filter(
           dep => allowedRightDimensionsSet.has(dep)
         );
@@ -4887,11 +5061,8 @@ export class BaseQuery {
 
         if (presentDeps.length > 0 && missingDeps.length > 0) {
           throw new UserError(
-            `Filter on expression dimension '${normalizedFilterMember}' in '${cubeName}.${memberName}' ` +
-            `depends on [${exprMetadata.allDependencies.join(', ')}], ` +
-            `but only some are in allowedDimensions. ` +
-            `Present: [${presentDeps.join(', ')}]. Missing: [${missingDeps.join(', ')}]. ` +
-            `Partial remapping of expression dependencies in filters is not supported.`
+            `Filter on expression '${normalizedFilterMember}' requires all dependencies. ` +
+            `Missing: [${missingDeps.join(', ')}].`
           );
         }
 
@@ -4902,7 +5073,6 @@ export class BaseQuery {
         
         if (hasAllowedDimensions && leftMember && allowedSubQueryDimensions.has(leftMember)) {
           if (isExpressionObject) {
-            // Create new expression dimension object with remapped cube
             const leftCubeName = getCubeName(leftMember);
             
             return {
@@ -4917,7 +5087,6 @@ export class BaseQuery {
               member: filter.member ? leftMember : undefined,
             };
           } else {
-            // String reference to expression dimension
             return {
               ...filter,
               dimension: filter.dimension ? leftMember : undefined,
@@ -4961,7 +5130,6 @@ export class BaseQuery {
     // ============================================================================
     
     if (config.filtersRequireDimension.size > 0) {
-      // All paths from metadata (dependencies for expressions, paths for regular)
       const selectedMainQueryDimensions = new Set([
         ...mainQueryDimensionsMetadata.map(item => item.path),
         ...mainQueryTimeDimensionsMetadata.map(item => item.path)
@@ -4981,7 +5149,7 @@ export class BaseQuery {
         if (config.filtersRequireDimension.has(normalizedRightDimension) &&
             !selectedMainQueryDimensions.has(normalizedRightDimension)) {
           throw new UserError(
-            `Filter on '${normalizedRightDimension}' requires selecting the same dimension in correlatedQuery for '${cubeName}.${memberName}'.`
+            `Filter on '${normalizedRightDimension}' requires dimension selection in main query.`
           );
         }
       };
@@ -5065,8 +5233,8 @@ export class BaseQuery {
     const mainQueryDimensionsForJoin = this.dimensions || [];
 
     /**
-     * Find dimension in array by path with case-insensitive comparison
-     * Handles both string dimensions and expression dimension objects
+     * Find dimension in array with case-insensitive comparison
+     * Works with both string dimensions and expression dimension objects
      */
     const findDimensionInArray = (dimension, dimensionsArray) => {
       const normalizedDimension = dimension.toLowerCase();
@@ -5078,8 +5246,8 @@ export class BaseQuery {
     };
 
     /**
-     * Get column name (alias) for dimension in subQuery
-     * For expression dimensions, returns the unescaped alias name
+     * Get column alias for dimension in subQuery
+     * Uses unescapedAliasName() method from dimension object
      */
     const getSubQueryColumnName = (dimension) => {
       const timeDimensionConfig = findDimensionInArray(dimension, subQueryTimeDimensions);
@@ -5093,8 +5261,12 @@ export class BaseQuery {
 
     /**
      * Get SQL for dimension in main query
-     * For expression dimensions, returns the SQL expression (e.g., "orders.total / orders.count")
-     * For regular dimensions, returns the column reference
+     * 
+     * For expression dimensions: Returns SQL expression (e.g., "orders.total / orders.count")
+     * For regular dimensions: Returns column reference (e.g., "orders.total")
+     * 
+     * This is the key difference: Expression dimensions in WHERE clause use their SQL expression,
+     * not just a column reference
      */
     const getMainQueryDimensionSql = (rightDimension) => {
       const mainQueryDimension = findDimensionInArray(rightDimension, mainQueryTimeDimensionsForJoin) ||
@@ -5113,12 +5285,13 @@ export class BaseQuery {
     };
 
     /**
-     * Build WHERE clause for correlation between subquery and main query
+     * Build WHERE clause for correlation
+     * 
      * Format: subquery.column_alias = main_query.dimension_sql
      * 
-     * For expression dimensions:
-     * - Left side: subquery.expression_alias (column alias from subquery)
-     * - Right side: SQL expression from main query (e.g., "orders.total / orders.count")
+     * Examples:
+     * - Regular: subquery.activity_total = orders.total
+     * - Expression: subquery.activity_avgprice = orders.total / orders.count
      */
     const correlatedWhereClause = validatedAllowedDimensions
       .map(({ leftDimension, rightDimension, operator }) => {
