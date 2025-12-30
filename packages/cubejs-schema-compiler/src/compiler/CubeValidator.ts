@@ -268,6 +268,7 @@ const BaseDimensionWithoutSubQuery = {
   public: Joi.boolean().strict(),
   title: Joi.string(),
   description: Joi.string(),
+  dynamicSql: Joi.func(),
   suggestFilterValues: Joi.boolean().strict(),
   enableSuggestions: Joi.boolean().strict(),
   format: Joi.when('type', {
@@ -395,6 +396,7 @@ const BaseMeasure = {
   ),
   title: Joi.string(),
   description: Joi.string(),
+  dynamicSql: Joi.func(),
   correlatedQuery: Joi.object({
     allowedDimensions: Joi.array().items(
       Joi.alternatives().try(
