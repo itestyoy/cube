@@ -3353,21 +3353,37 @@ export class BaseQuery {
         const orderBySql = (symbol.orderBy || []).map(o => ({ sql: this.evaluateSql(cubeName, o.sql), dir: o.dir }));
         let sql;
         if (symbol.type !== 'rank') {
-          if (symbol.correlatedQuery && !this.options.skipCorrelatedMeasures) {
-            const correlated = this.buildCorrelatedSubQuery(
-              symbol.correlatedQuery,
-              cubeName,
-              name
+
+          if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
+
+            // Get categorized members for dynamicSql function
+            const categorized = this.getCategorizedMembersForDynamicSql();
+
+            // Call dynamicSql function with categorized members
+            const dynamicSqlResult = symbol.dynamicSql(
+              categorized.usedMeasures,
+              categorized.usedDimensions,
+              categorized.usedTimeDimensions,
+              categorized.usedFilters
             );
+
+            // Evaluate the SQL template
             sql = this.evaluateSql(cubeName, symbol.sql);
+
             if (typeof sql === 'string') {
-              sql = sql
-                .replace(/\{\{\s*subQuery\s*\}\}/g, correlated.sql)
-                .replace(/\{\{\s*subQueryAlias\s*\}\}/g, correlated.subQueryAlias)
-                .replace(/\{\{\s*correlatedWhereClause\s*\}\}/g, correlated.correlatedWhereClause || '1=1');
+              let dynamicSql = this.evaluateSql(cubeName, dynamicSqlResult);
+              if (typeof dynamicSql === 'string') {
+                  // Replace {{dynamicSql}} placeholder with the result from dynamicSql function
+                  sql = sql.replace(/\{\{\s*dynamicSql\s*\}\}/g, dynamicSql);
+              }
+
+              if (typeof dynamicSql !== 'string') {
+                throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+              }
             }
+
             if (typeof sql !== 'string') {
-              throw new UserError(`Correlated measure must resolve to SQL string for ${cubeName}.${name}`);
+              throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
             }
           } else {
             sql = symbol.sql && this.evaluateSql(cubeName, symbol.sql) ||
@@ -3377,6 +3393,25 @@ export class BaseQuery {
                   : this.primaryKeySql(primaryKeys[0], cubeName)
               ) || '*';
           }
+
+          if (symbol.correlatedQuery && !this.options.skipCorrelatedMeasures) {
+            const correlated = this.buildCorrelatedSubQuery(
+              symbol.correlatedQuery,
+              cubeName,
+              name
+            );
+
+            if (typeof sql === 'string') {
+              sql = sql
+                .replace(/\{\{\s*subQuery\s*\}\}/g, correlated.sql)
+                .replace(/\{\{\s*subQueryAlias\s*\}\}/g, correlated.subQueryAlias)
+                .replace(/\{\{\s*correlatedWhereClause\s*\}\}/g, correlated.correlatedWhereClause || '1=1');
+            }
+            if (typeof sql !== 'string') {
+              throw new UserError(`Correlated measure must resolve to SQL string for ${cubeName}.${name}`);
+            }
+          }
+
         }
         const result = this.renderSqlMeasure(
           name,
@@ -3430,22 +3465,7 @@ export class BaseQuery {
             '\',\'',
             this.autoPrefixAndEvaluateSql(cubeName, symbol.longitude.sql, isMemberExpr)
           ]);
-        } else if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
-          // Handle dynamicSql for dimensions
-          // Allows dimensions to generate SQL dynamically based on query context
-          // Example usage:
-          //   my_test: {
-          //     sql: `{{dynamicSql}}`,
-          //     dynamicSql: (usedMeasures, usedDimensions, usedTimeDimensions, usedFilters) => {
-          //       // Generate SQL based on query context
-          //       if (usedMeasures.includes('Orders.count')) {
-          //         return 'orders.created_at';
-          //       } else {
-          //         return 'orders.updated_at';
-          //       }
-          //     },
-          //     type: 'time'
-          //   }
+        } else if (symbol.type !== 'time' && symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
 
           // Get categorized members for dynamicSql function
           const categorized = this.getCategorizedMembersForDynamicSql();
@@ -3486,13 +3506,52 @@ export class BaseQuery {
             dimension: this.cubeEvaluator.pathFromArray([cubeName, name]),
             granularity: subPropertyName
           });
-          // for time dimension with granularity convertedToTz() is called internally in dimensionSql() flow,
-          // so we need to ignore convertTz later even if context convertTzForRawTimeDimension is set to true
-          return this.evaluateSymbolSqlWithContext(
+
+          // Evaluate the SQL template
+          let sql = this.evaluateSymbolSqlWithContext(
             () => td.dimensionSql(),
             { ignoreConvertTzForTimeDimension: true },
           );
+
+          if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
+            // Get categorized members for dynamicSql function
+            const categorized = this.getCategorizedMembersForDynamicSql();
+
+            // Call dynamicSql function with categorized members
+            const dynamicSqlResult = symbol.dynamicSql(
+              categorized.usedMeasures,
+              categorized.usedDimensions,
+              categorized.usedTimeDimensions,
+              categorized.usedFilters
+            );
+
+            if (typeof sql === 'string') {
+            
+              let dynamicSql = this.evaluateSql(cubeName, dynamicSqlResult);
+              if (typeof dynamicSql === 'string') {
+                  // Replace {{dynamicSql}} placeholder with the result from dynamicSql function
+                  sql = sql.replace(/\{\{\s*dynamicSql\s*\}\}/g, dynamicSql);
+              }
+
+              if (typeof dynamicSql !== 'string') {
+                throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+              }
+            }
+
+            if (typeof sql !== 'string') {
+              throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+            }
+          }
+
+          // for time dimension with granularity convertedToTz() is called internally in dimensionSql() flow,
+          // so we need to ignore convertTz later even if context convertTzForRawTimeDimension is set to true
+          return sql;
         } else {
+
+          if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
+            throw new UserError(`Dynamic SQL for this type of dimension for ${cubeName}.${name} not supported`);
+          }
+
           let res = this.autoPrefixAndEvaluateSql(cubeName, symbol.sql, isMemberExpr);
           const memPath = this.cubeEvaluator.pathFromArray([cubeName, name]);
 
@@ -3522,11 +3581,21 @@ export class BaseQuery {
           return res;
         }
       } else if (type === 'segment') {
+
+        if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
+          throw new UserError(`Dynamic SQL for this type of dimension for ${cubeName}.${name} not supported`);
+        }
+
         if ((this.safeEvaluateSymbolContext().renderedReference || {})[memberPath]) {
           return this.evaluateSymbolContext.renderedReference[memberPath];
         }
         return this.autoPrefixWithCubeName(cubeName, this.evaluateSql(cubeName, symbol.sql), isMemberExpr);
       }
+
+      if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
+        throw new UserError(`Dynamic SQL for this type of dimension for ${cubeName}.${name} not supported`);
+      }
+      
       return this.evaluateSql(cubeName, symbol.sql);
     } finally {
       this.safeEvaluateSymbolContext().currentMember = parentMember;
