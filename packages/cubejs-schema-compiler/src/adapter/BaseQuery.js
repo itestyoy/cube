@@ -3430,6 +3430,47 @@ export class BaseQuery {
             '\',\'',
             this.autoPrefixAndEvaluateSql(cubeName, symbol.longitude.sql, isMemberExpr)
           ]);
+        } else if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
+          // Handle dynamicSql for dimensions
+          // Allows dimensions to generate SQL dynamically based on query context
+          // Example usage:
+          //   my_test: {
+          //     sql: `{{dynamicSql}}`,
+          //     dynamicSql: (usedMeasures, usedDimensions, usedTimeDimensions, usedFilters) => {
+          //       // Generate SQL based on query context
+          //       if (usedMeasures.includes('Orders.count')) {
+          //         return 'orders.created_at';
+          //       } else {
+          //         return 'orders.updated_at';
+          //       }
+          //     },
+          //     type: 'time'
+          //   }
+
+          // Get categorized members for dynamicSql function
+          const categorized = this.getCategorizedMembersForDynamicSql();
+
+          // Call dynamicSql function with categorized members
+          const dynamicSqlResult = symbol.dynamicSql(
+            categorized.usedMeasures,
+            categorized.usedDimensions,
+            categorized.usedTimeDimensions,
+            categorized.usedFilters
+          );
+
+          // Evaluate the SQL template
+          let sql = this.evaluateSql(cubeName, symbol.sql);
+
+          if (typeof sql === 'string') {
+            // Replace {{dynamicSql}} placeholder with the result from dynamicSql function
+            sql = sql.replace(/\{\{\s*dynamicSql\s*\}\}/g, dynamicSqlResult);
+          }
+
+          if (typeof sql !== 'string') {
+            throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+          }
+
+          return this.autoPrefixWithCubeName(cubeName, sql, isMemberExpr);
         } else if (symbol.type === 'time' && subPropertyName) {
           // TODO: Beware! memberExpression && shiftInterval are not supported with the current implementation.
           // Ideally this should be implemented (at least partially) here + inside cube symbol evaluation logic.
@@ -6313,6 +6354,163 @@ export class BaseQuery {
       this.filters,
       this.options
     );
+  }
+
+  /**
+   * Collects all members used in the query, including members referenced by expressions
+   * @returns {Array<string>} Array of member paths
+   */
+  collectUsedMembersFromQuery() {
+    const usedMembers = [];
+
+    /**
+     * Extract all member paths from an expression function
+     * Similar to getExpressionDependencies in buildCorrelatedSubQuery
+     */
+    const getExpressionDependencies = (expressionFunc, expressionCubeName) => {
+      if (typeof expressionFunc !== 'function') {
+        return [];
+      }
+
+      try {
+        const { pathReferencesUsed } = this.cubeEvaluator.collectUsedCubeReferences(
+          expressionCubeName,
+          expressionFunc
+        );
+
+        return pathReferencesUsed.map(pathArray =>
+          this.cubeEvaluator.pathFromArray(pathArray)
+        );
+      } catch {
+        return [];
+      }
+    };
+
+    /**
+     * Collect members from an array of items (measures, dimensions, etc.)
+     */
+    const collectFromItems = (items, nameField) => {
+      (items || []).forEach(item => {
+        if (item.expression) {
+          // For expressions, collect referenced members
+          const expressionCubeName = item.expressionCubeName || item.cubeName;
+          const dependencies = getExpressionDependencies(item.expression, expressionCubeName);
+          usedMembers.push(...dependencies);
+        } else {
+          // For regular members, use the member name
+          const memberName = item[nameField];
+          if (typeof memberName === 'string') {
+            usedMembers.push(memberName);
+          }
+        }
+      });
+    };
+
+    // Collect from measures
+    collectFromItems(this.measures, 'measure');
+
+    // Collect from dimensions
+    collectFromItems(this.dimensions, 'dimension');
+
+    // Collect from time dimensions
+    collectFromItems(this.timeDimensions, 'dimension');
+
+    // Collect from segments
+    collectFromItems(this.segments, 'segment');
+
+    // Collect from filters (can be based on measures or dimensions)
+    (this.filters || []).forEach(filter => {
+      if (filter.expression) {
+        const expressionCubeName = filter.expressionCubeName || filter.cubeName;
+        const dependencies = getExpressionDependencies(filter.expression, expressionCubeName);
+        usedMembers.push(...dependencies);
+      } else {
+        if (typeof filter.measure === 'string') {
+          usedMembers.push(filter.measure);
+        }
+        if (typeof filter.dimension === 'string') {
+          usedMembers.push(filter.dimension);
+        }
+      }
+    });
+
+    // Remove duplicates and filter out nulls/undefined
+    return [...new Set(usedMembers.filter(m => !!m))];
+  }
+
+  /**
+   * Get categorized members for dynamicSql function
+   * @returns {Object} Object with usedMeasures, usedDimensions, usedTimeDimensions, usedFilters
+   */
+  getCategorizedMembersForDynamicSql() {
+    const categorized = {
+      usedMeasures: [],
+      usedDimensions: [],
+      usedTimeDimensions: [],
+      usedFilters: []
+    };
+
+    // Helper to categorize a member path
+    const categorizeMember = (memberPath) => {
+      try {
+        const pathArray = this.cubeEvaluator.parsePath('measures', memberPath);
+        if (this.cubeEvaluator.isMeasure(pathArray)) {
+          return 'measure';
+        }
+      } catch {
+        // not a measure
+      }
+
+      try {
+        const pathArray = this.cubeEvaluator.parsePath('dimensions', memberPath);
+        if (this.cubeEvaluator.isDimension(pathArray)) {
+          // Check if it's a time dimension
+          const dimension = this.cubeEvaluator.dimensionByPath(memberPath);
+          if (dimension.type === 'time') {
+            return 'timeDimension';
+          }
+          return 'dimension';
+        }
+      } catch {
+        // not a dimension
+      }
+
+      return null;
+    };
+
+    // Categorize measures
+    (this.measures || []).forEach(m => {
+      const memberPath = typeof m.measure === 'string' ? m.measure : null;
+      if (memberPath) {
+        categorized.usedMeasures.push(memberPath);
+      }
+    });
+
+    // Categorize dimensions
+    (this.dimensions || []).forEach(d => {
+      const memberPath = typeof d.dimension === 'string' ? d.dimension : null;
+      if (memberPath) {
+        categorized.usedDimensions.push(memberPath);
+      }
+    });
+
+    // Categorize time dimensions
+    (this.timeDimensions || []).forEach(td => {
+      const memberPath = typeof td.dimension === 'string' ? td.dimension : null;
+      if (memberPath) {
+        categorized.usedTimeDimensions.push(memberPath);
+      }
+    });
+
+    // Categorize filters
+    (this.filters || []).forEach(f => {
+      const memberPath = typeof f.measure === 'string' ? f.measure : (typeof f.dimension === 'string' ? f.dimension : null);
+      if (memberPath) {
+        categorized.usedFilters.push(memberPath);
+      }
+    });
+
+    return categorized;
   }
 
   static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options) {
