@@ -31,7 +31,7 @@ export type SegmentDefinition = {
 export type DimensionDefinition = {
   type: string;
   sql(): string;
-  dynamicSql?: (...args: Array<unknown>) => string;
+  dynamicSql?: (...args: Array<unknown>) => () => string;
   primaryKey?: true;
   ownedByCube: boolean;
   fieldType?: string;
@@ -57,7 +57,7 @@ export type TimeShiftDefinitionReference = {
 export type MeasureDefinition = {
   type: string;
   sql: () => string;
-  dynamicSql?: (...args: Array<unknown>) => string;
+  dynamicSql?: (...args: Array<unknown>) => () => string;
   correlatedQuery?: {
     // Each entry: [leftDimension, operator?] or just leftDimension string
     allowedDimensions?: (string | [string, string?] | [[string, string?], string?])[];

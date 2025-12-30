@@ -3462,8 +3462,15 @@ export class BaseQuery {
           let sql = this.evaluateSql(cubeName, symbol.sql);
 
           if (typeof sql === 'string') {
-            // Replace {{dynamicSql}} placeholder with the result from dynamicSql function
-            sql = sql.replace(/\{\{\s*dynamicSql\s*\}\}/g, dynamicSqlResult);
+            let dynamicSql = this.evaluateSql(cubeName, dynamicSqlResult);
+            if (typeof dynamicSql === 'string') {
+                // Replace {{dynamicSql}} placeholder with the result from dynamicSql function
+                sql = sql.replace(/\{\{\s*dynamicSql\s*\}\}/g, dynamicSql);
+            }
+
+            if (typeof dynamicSql !== 'string') {
+              throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+            }
           }
 
           if (typeof sql !== 'string') {
