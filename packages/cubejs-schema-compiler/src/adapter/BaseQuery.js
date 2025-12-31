@@ -3548,10 +3548,6 @@ export class BaseQuery {
           return sql;
         } else {
 
-          if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
-            throw new UserError(`Dynamic SQL for this type of dimension for ${cubeName}.${name} not supported`);
-          }
-
           let res = this.autoPrefixAndEvaluateSql(cubeName, symbol.sql, isMemberExpr);
           const memPath = this.cubeEvaluator.pathFromArray([cubeName, name]);
 
@@ -3578,22 +3574,45 @@ export class BaseQuery {
           ) {
             res = this.convertTz(res);
           }
+
+          if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
+            // Get categorized members for dynamicSql function
+            const categorized = this.getCategorizedMembersForDynamicSql();
+
+            // Call dynamicSql function with categorized members
+            const dynamicSqlResult = symbol.dynamicSql(
+              categorized.usedMeasures,
+              categorized.usedDimensions,
+              categorized.usedTimeDimensions,
+              categorized.usedFilters
+            );
+
+            if (typeof res === 'string') {
+            
+              let dynamicSql = this.evaluateSql(cubeName, dynamicSqlResult);
+              if (typeof dynamicSql === 'string') {
+                  // Replace {{dynamicSql}} placeholder with the result from dynamicSql function
+                  res = res.replace(/\{\{\s*dynamicSql\s*\}\}/g, dynamicSql);
+              }
+
+              if (typeof dynamicSql !== 'string') {
+                throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+              }
+            }
+
+            if (typeof res !== 'string') {
+              throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+            }
+          }
+
           return res;
         }
       } else if (type === 'segment') {
-
-        if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
-          throw new UserError(`Dynamic SQL for this type of dimension for ${cubeName}.${name} not supported`);
-        }
 
         if ((this.safeEvaluateSymbolContext().renderedReference || {})[memberPath]) {
           return this.evaluateSymbolContext.renderedReference[memberPath];
         }
         return this.autoPrefixWithCubeName(cubeName, this.evaluateSql(cubeName, symbol.sql), isMemberExpr);
-      }
-
-      if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
-        throw new UserError(`Dynamic SQL for this type of dimension for ${cubeName}.${name} not supported`);
       }
       
       return this.evaluateSql(cubeName, symbol.sql);
