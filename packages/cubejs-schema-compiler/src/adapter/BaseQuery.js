@@ -6609,6 +6609,38 @@ export class BaseQuery {
     return categorized;
   }
 
+  /**
+   * Resolve dependencies referenced inside dynamicSql result
+   * @param {string} cubeName
+   * @param {Function} dynamicSqlFn
+   * @returns {Array<string>} Array of member paths
+   */
+  getDynamicSqlDependencies(cubeName, dynamicSqlFn) {
+    if (typeof dynamicSqlFn !== 'function') {
+      return [];
+    }
+
+    const categorized = this.getCategorizedMembersForDynamicSql();
+
+    try {
+      const dynamicSqlResult = dynamicSqlFn(
+        categorized.usedMeasures,
+        categorized.usedDimensions,
+        categorized.usedTimeDimensions,
+        categorized.usedFilters
+      );
+
+      const { pathReferencesUsed } = this.cubeEvaluator.collectUsedCubeReferences(
+        cubeName,
+        dynamicSqlResult
+      );
+
+      return pathReferencesUsed.map(path => this.cubeEvaluator.pathFromArray(path));
+    } catch {
+      return [];
+    }
+  }
+
   static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options) {
     const measureNames = (measures || []).map(m => m.measure);
     const dimensionNames = (dimensions || []).map(d => d.dimension);
@@ -6853,10 +6885,24 @@ export class BaseQuery {
               nonAliasSeen = true;
             }
             return !nonAliasSeen;
-          })
-          .map(d => [query.cubeEvaluator.byPathAnyType(d).aliasMember, memberPath]);
+        })
+        .map(d => [query.cubeEvaluator.byPathAnyType(d).aliasMember, memberPath]);
       }
     ));
+
+    // Also treat dynamicSql that resolves to a single referenced member as an alias for matching
+    for (const member of members) {
+      const definition = member.definition?.();
+      const cubeName = member.cube?.()?.name;
+      if (!definition || !cubeName || typeof definition.dynamicSql !== 'function') {
+        continue;
+      }
+
+      const deps = this.getDynamicSqlDependencies(cubeName, definition.dynamicSql);
+      if (deps.length === 1 && deps[0] && !aliases[deps[0]]) {
+        aliases[deps[0]] = member.expressionPath();
+      }
+    }
 
     // No join/graph  might be in place when collecting members from the query with some injected filters,
     // like FILTER_PARAMS or securityContext...
