@@ -6900,7 +6900,16 @@ export class BaseQuery {
 
       const deps = this.getDynamicSqlDependencies(cubeName, definition.dynamicSql);
       if (deps.length === 1 && deps[0] && !aliases[deps[0]]) {
-        aliases[deps[0]] = member.expressionPath();
+        const memberPath = member.expressionPath();
+        aliases[deps[0]] = memberPath;
+
+        // For time dimensions also map granularity-qualified paths to keep rollup matching working
+        if (member instanceof BaseTimeDimension && member.granularity) {
+          const granularPath = `${deps[0]}.${member.granularity}`;
+          if (!aliases[granularPath]) {
+            aliases[granularPath] = `${memberPath}.${member.granularity}`;
+          }
+        }
       }
     }
 
