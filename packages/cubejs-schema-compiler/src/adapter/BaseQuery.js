@@ -4335,6 +4335,13 @@ export class BaseQuery {
     // ============================================================================
     
     /**
+     * Resolve view member to underlying cube member (preserves granularity)
+     */
+    const resolveViewPath = (path) => typeof path === 'string'
+      ? this.resolveViewMemberToCubeMember(path)
+      : path;
+
+    /**
      * Normalize allowedDimensions array to unified format
      * Handles multiple input formats and converts to consistent structure
      * 
@@ -4413,7 +4420,8 @@ export class BaseQuery {
         // Normalize each dependency: remove join hints and lowercase
         return pathReferencesUsed.map(pathArray => {
           const pathString = this.cubeEvaluator.pathFromArray(pathArray);
-          const { path } = this.cubeEvaluator.constructor.joinHintFromPath(pathString);
+          const resolvedPath = resolveViewPath(pathString);
+          const { path } = this.cubeEvaluator.constructor.joinHintFromPath(resolvedPath);
           return path.toLowerCase();
         });
       } catch {
@@ -4435,7 +4443,8 @@ export class BaseQuery {
      */
     const normalizeDimensionPath = (dim) => {
       if (typeof dim === 'string') {
-        const { path } = this.cubeEvaluator.constructor.joinHintFromPath(dim);
+        const resolved = resolveViewPath(dim);
+        const { path } = this.cubeEvaluator.constructor.joinHintFromPath(resolved);
         return path.toLowerCase();
       }
 
@@ -4495,8 +4504,9 @@ export class BaseQuery {
           if (dimObj.expression) {
             const expressionCubeName = dimObj.expressionCubeName || dimObj.cubeName;
             const dependencies = getExpressionDependencies(dimObj.expression, expressionCubeName);
-            const expressionName = (dimObj.expressionName || 
-                                  (dimObj.cubeName && dimObj.name ? `${dimObj.cubeName}.${dimObj.name}` : null))?.toLowerCase();
+            const rawExpressionName = dimObj.expressionName || 
+                                  (dimObj.cubeName && dimObj.name ? `${dimObj.cubeName}.${dimObj.name}` : null);
+            const expressionName = normalizeDimensionPath(rawExpressionName);
             
             if (dependencies.length > 0) {
               // Create entry for each dependency
@@ -4526,7 +4536,7 @@ export class BaseQuery {
           // Regular dimension
           let path = dimObj.dimension;
           if (path) {
-            const { path: normalizedPath } = this.cubeEvaluator.constructor.joinHintFromPath(path);
+            const { path: normalizedPath } = this.cubeEvaluator.constructor.joinHintFromPath(resolveViewPath(path));
             path = normalizedPath.toLowerCase();
             
             result.push({
@@ -6860,6 +6870,51 @@ export class BaseQuery {
    */
   allBackAliasMembers() {
     return this.backAliasMembers(this.flattenAllMembers());
+  }
+
+  /**
+   * Resolve a member path from a view to its underlying cube member.
+   * Returns the original path if no alias chain is found.
+   * @param {string} memberPath
+   * @returns {string}
+   */
+  resolveViewMemberToCubeMember(memberPath) {
+    if (!memberPath || typeof memberPath !== 'string') {
+      return memberPath;
+    }
+
+    const { path } = this.cubeEvaluator.constructor.joinHintFromPath(memberPath);
+    const parts = path.split('.');
+    let granularity;
+
+    if (parts.length === 3) {
+      granularity = parts.pop();
+    }
+
+    let current = parts.join('.');
+    const visited = new Set();
+
+    while (current && !visited.has(current)) {
+      visited.add(current);
+      let def;
+      try {
+        def = this.cubeEvaluator.byPathAnyType(current);
+      } catch {
+        break;
+      }
+
+      if (!def?.aliasMember) {
+        break;
+      }
+
+      current = def.aliasMember;
+    }
+
+    if (!current) {
+      return memberPath;
+    }
+
+    return granularity ? `${current}.${granularity}` : current;
   }
 
   /**
