@@ -5383,11 +5383,11 @@ export class BaseQuery {
      * Works with both string dimensions and expression dimension objects
      */
     const findDimensionInArray = (dimension, dimensionsArray) => {
-      const normalizedDimension = dimension.toLowerCase();
+      const normalizedDimension = normalizeDimensionPath(dimension);
       
       return dimensionsArray.find(d => {
-        const path = extractDimensionPath(d);
-        return path?.toLowerCase() === normalizedDimension;
+        const path = normalizeDimensionPath(extractDimensionPath(d));
+        return path === normalizedDimension;
       });
     };
 
@@ -6556,6 +6556,13 @@ export class BaseQuery {
       usedFilters: []
     };
 
+    const resolveMember = (memberPath) => {
+      if (!memberPath || typeof memberPath !== 'string') {
+        return null;
+      }
+      return this.resolveViewMemberToCubeMember(memberPath);
+    };
+
     // Helper to categorize a member path
     const categorizeMember = (memberPath) => {
       try {
@@ -6586,7 +6593,7 @@ export class BaseQuery {
 
     // Categorize measures
     (this.measures || []).forEach(m => {
-      const memberPath = typeof m.measure === 'string' ? m.measure : null;
+      const memberPath = resolveMember(typeof m.measure === 'string' ? m.measure : null);
       if (memberPath) {
         categorized.usedMeasures.push(memberPath);
       }
@@ -6594,7 +6601,7 @@ export class BaseQuery {
 
     // Categorize dimensions
     (this.dimensions || []).forEach(d => {
-      const memberPath = typeof d.dimension === 'string' ? d.dimension : null;
+      const memberPath = resolveMember(typeof d.dimension === 'string' ? d.dimension : null);
       if (memberPath) {
         categorized.usedDimensions.push(memberPath);
       }
@@ -6602,7 +6609,7 @@ export class BaseQuery {
 
     // Categorize time dimensions
     (this.timeDimensions || []).forEach(td => {
-      const memberPath = typeof td.dimension === 'string' ? td.dimension : null;
+      const memberPath = resolveMember(typeof td.dimension === 'string' ? td.dimension : null);
       if (memberPath) {
         categorized.usedTimeDimensions.push(memberPath);
       }
@@ -6610,11 +6617,17 @@ export class BaseQuery {
 
     // Categorize filters
     (this.filters || []).forEach(f => {
-      const memberPath = typeof f.measure === 'string' ? f.measure : (typeof f.dimension === 'string' ? f.dimension : null);
+      const memberPath = resolveMember(typeof f.measure === 'string' ? f.measure : (typeof f.dimension === 'string' ? f.dimension : null));
       if (memberPath) {
         categorized.usedFilters.push(memberPath);
       }
     });
+
+    // Deduplicate after resolving
+    categorized.usedMeasures = [...new Set(categorized.usedMeasures)];
+    categorized.usedDimensions = [...new Set(categorized.usedDimensions)];
+    categorized.usedTimeDimensions = [...new Set(categorized.usedTimeDimensions)];
+    categorized.usedFilters = [...new Set(categorized.usedFilters)];
 
     return categorized;
   }
