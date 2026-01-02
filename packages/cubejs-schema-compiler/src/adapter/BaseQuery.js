@@ -6907,6 +6907,9 @@ export class BaseQuery {
 
     let current = parts.join('.');
     const visited = new Set();
+    const originalCubeName = parts[0];
+    const originalCube = originalCubeName && this.cubeEvaluator.cubeFromPath(originalCubeName);
+    const originalIsView = !!originalCube?.isView;
 
     while (current && !visited.has(current)) {
       visited.add(current);
@@ -6921,7 +6924,18 @@ export class BaseQuery {
         break;
       }
 
-      current = def.aliasMember;
+      const target = def.aliasMember;
+      const targetCubeName = target?.split('.')?.[0];
+      const targetCube = targetCubeName && this.cubeEvaluator.cubeFromPath(targetCubeName);
+      const targetIsView = !!targetCube?.isView;
+
+      // If starting from a view and the alias points to a non-view, stop at the first hop
+      if (originalIsView && !targetIsView) {
+        current = target;
+        break;
+      }
+
+      current = target;
     }
 
     if (!current) {
@@ -6970,12 +6984,20 @@ export class BaseQuery {
       if (deps.length === 1 && deps[0] && !aliases[deps[0]]) {
         const memberPath = member.expressionPath();
         aliases[deps[0]] = memberPath;
+        // Also map reverse alias to help lookups that start from view path
+        if (!aliases[memberPath]) {
+          aliases[memberPath] = deps[0];
+        }
 
         // For time dimensions also map granularity-qualified paths to keep rollup matching working
         if (member instanceof BaseTimeDimension && member.granularity) {
           const granularPath = `${deps[0]}.${member.granularity}`;
           if (!aliases[granularPath]) {
             aliases[granularPath] = `${memberPath}.${member.granularity}`;
+          }
+          const reverseGranular = `${memberPath}.${member.granularity}`;
+          if (!aliases[reverseGranular]) {
+            aliases[reverseGranular] = granularPath;
           }
         }
       }
