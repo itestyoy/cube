@@ -6946,6 +6946,16 @@ export class BaseQuery {
       try {
         def = this.cubeEvaluator.byPathAnyType(current);
       } catch {
+        // If the path isn't defined on the view, try to resolve it through includedMembers
+        if (originalIsView && current.startsWith(`${originalCubeName}.`)) {
+          const field = current.split('.').slice(1).join('.');
+          const included = originalCube?.includedMembers || [];
+          const matchedIncluded = included.find(m => m.name === field || m.memberPath?.endsWith(`.${field}`));
+          if (matchedIncluded?.memberPath) {
+            current = matchedIncluded.memberPath;
+            continue;
+          }
+        }
         break;
       }
 
