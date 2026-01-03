@@ -6658,7 +6658,14 @@ export class BaseQuery {
         dynamicSqlResult
       );
 
-      return pathReferencesUsed.map(path => this.cubeEvaluator.pathFromArray(path));
+      return [
+        ...new Set(
+          pathReferencesUsed
+            .map(path => this.cubeEvaluator.pathFromArray(path))
+            // Map view members back to base cube members so rollup matching works with dynamicSql
+            .map(path => this.resolveViewMemberToCubeMember(path))
+        )
+      ];
     } catch {
       return [];
     }
