@@ -3366,6 +3366,7 @@ export class BaseQuery {
               categorized.usedTimeDimensions,
               categorized.usedFilters
             );
+            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
 
             // Evaluate the SQL template
             sql = this.evaluateSql(cubeName, symbol.sql);
@@ -3477,6 +3478,7 @@ export class BaseQuery {
             categorized.usedTimeDimensions,
             categorized.usedFilters
           );
+          this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
 
           // Evaluate the SQL template
           let sql = this.evaluateSql(cubeName, symbol.sql);
@@ -3524,6 +3526,7 @@ export class BaseQuery {
               categorized.usedTimeDimensions,
               categorized.usedFilters
             );
+            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
 
             if (typeof sql === 'string') {
             
@@ -3586,6 +3589,7 @@ export class BaseQuery {
               categorized.usedTimeDimensions,
               categorized.usedFilters
             );
+            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
 
             if (typeof res === 'string') {
             
@@ -6636,29 +6640,32 @@ export class BaseQuery {
    * Resolve dependencies referenced inside dynamicSql result
    * @param {string} cubeName
    * @param {Function} dynamicSqlFn
+   * @param {*} dynamicSqlResult
    * @returns {Array<string>} Array of member paths
    */
-  getDynamicSqlDependencies(cubeName, dynamicSqlFn) {
+  getDynamicSqlDependencies(cubeName, dynamicSqlFn, dynamicSqlResult) {
     if (typeof dynamicSqlFn !== 'function') {
       return [];
     }
 
-    const categorized = this.getCategorizedMembersForDynamicSql();
-
     try {
-      const dynamicSqlResult = dynamicSqlFn(
-        categorized.usedMeasures,
-        categorized.usedDimensions,
-        categorized.usedTimeDimensions,
-        categorized.usedFilters
-      );
+      let dynamicSqlResultLocal = dynamicSqlResult;
+      if (dynamicSqlResultLocal === undefined) {
+        const categorized = this.getCategorizedMembersForDynamicSql();
+        dynamicSqlResultLocal = dynamicSqlFn(
+          categorized.usedMeasures,
+          categorized.usedDimensions,
+          categorized.usedTimeDimensions,
+          categorized.usedFilters
+        );
+      }
 
       const { pathReferencesUsed } = this.cubeEvaluator.collectUsedCubeReferences(
         cubeName,
-        dynamicSqlResult
+        dynamicSqlResultLocal
       );
 
-      return [
+      const deps = [
         ...new Set(
           pathReferencesUsed
             .map(path => this.cubeEvaluator.pathFromArray(path))
@@ -6666,6 +6673,21 @@ export class BaseQuery {
             .map(path => this.resolveViewMemberToCubeMember(path))
         )
       ];
+
+      // Also register cubes referenced by dynamicSql while collecting cube names (e.g. for pre-aggregation matching)
+      const { cubeNames } = this.safeEvaluateSymbolContext();
+      if (Array.isArray(cubeNames)) {
+        deps.forEach(dep => {
+          try {
+            const depCube = this.cubeEvaluator.cubeNameFromPath(dep);
+            this.pushCubeNameForCollectionIfNecessary(depCube);
+          } catch (e) {
+            // Best-effort: ignore failures to resolve cube name
+          }
+        });
+      }
+
+      return deps;
     } catch {
       return [];
     }
