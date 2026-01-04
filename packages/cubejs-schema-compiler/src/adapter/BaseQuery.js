@@ -6959,6 +6959,17 @@ export class BaseQuery {
         break;
       }
 
+      // For view members included without aliasMember, try to hop via includedMembers metadata
+      if (!def?.aliasMember && originalIsView && current.startsWith(`${originalCubeName}.`)) {
+        const field = current.split('.').slice(1).join('.');
+        const included = originalCube?.includedMembers || [];
+        const matchedIncluded = included.find(m => m.name === field || m.memberPath?.endsWith(`.${field}`));
+        if (matchedIncluded?.memberPath && matchedIncluded.memberPath !== current) {
+          current = matchedIncluded.memberPath;
+          continue;
+        }
+      }
+
       if (!def?.aliasMember) {
         break;
       }
@@ -6995,8 +7006,18 @@ export class BaseQuery {
     const aliases = Object.fromEntries(members.flatMap(
       member => {
         const memberPath = member.expressionPath();
+        const def = member.definition?.();
+        const directAlias = def?.aliasMember;
         const viewResolvedPath = query.resolveViewMemberToCubeMember(memberPath);
         const aliasPairs = [];
+
+        if (directAlias && directAlias !== memberPath) {
+          aliasPairs.push([directAlias, memberPath]);
+
+          if (member instanceof BaseTimeDimension && member.granularity) {
+            aliasPairs.push([`${directAlias}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
+          }
+        }
 
         if (viewResolvedPath && viewResolvedPath !== memberPath) {
           aliasPairs.push([viewResolvedPath, memberPath]);
