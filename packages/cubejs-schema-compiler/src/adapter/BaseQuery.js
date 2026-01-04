@@ -6660,6 +6660,25 @@ export class BaseQuery {
         );
       }
 
+      // Best-effort: treat argument names of the returned function as member dependencies when they exist on the cube
+      const depsFromArgs = [];
+      if (typeof dynamicSqlResultLocal === 'function') {
+        try {
+          const args = this.cubeEvaluator.funcArguments(dynamicSqlResultLocal);
+          for (const arg of args) {
+            const path = `${cubeName}.${arg}`;
+            try {
+              this.cubeEvaluator.byPathAnyType(path);
+              depsFromArgs.push(path);
+            } catch (_e) {
+              // ignore non-member args
+            }
+          }
+        } catch (_e) {
+          // ignore parsing errors
+        }
+      }
+
       const { pathReferencesUsed } = this.cubeEvaluator.collectUsedCubeReferences(
         cubeName,
         dynamicSqlResultLocal
@@ -6669,6 +6688,7 @@ export class BaseQuery {
         ...new Set(
           pathReferencesUsed
             .map(path => this.cubeEvaluator.pathFromArray(path))
+            .concat(depsFromArgs)
             // Map view members back to base cube members so rollup matching works with dynamicSql
             .map(path => this.resolveViewMemberToCubeMember(path))
         )
@@ -7024,6 +7044,27 @@ export class BaseQuery {
 
           if (member instanceof BaseTimeDimension && member.granularity) {
             aliasPairs.push([`${viewResolvedPath}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
+          }
+        }
+
+        // If underlying member uses dynamicSql with a single dependency, treat that dependency as an alias source too.
+        const basePath = viewResolvedPath || directAlias;
+        if (basePath) {
+          try {
+            const baseCube = this.cubeEvaluator.cubeNameFromPath(basePath);
+            const baseDef = this.cubeEvaluator.byPathAnyType(basePath);
+            const baseDynSql = baseDef?.dynamicSql;
+            if (typeof baseDynSql === 'function') {
+              const deps = this.getDynamicSqlDependencies(baseCube, baseDynSql);
+              if (deps.length === 1 && deps[0]) {
+                aliasPairs.push([deps[0], memberPath]);
+                if (member instanceof BaseTimeDimension && member.granularity) {
+                  aliasPairs.push([`${deps[0]}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
+                }
+              }
+            }
+          } catch (_e) {
+            // best-effort: ignore resolution errors
           }
         }
 
