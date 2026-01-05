@@ -7056,12 +7056,14 @@ export class BaseQuery {
             const baseDynSql = baseDef?.dynamicSql;
             if (typeof baseDynSql === 'function') {
               const deps = this.getDynamicSqlDependencies(baseCube, baseDynSql);
-              if (deps.length === 1 && deps[0]) {
-                aliasPairs.push([deps[0], memberPath]);
-                if (member instanceof BaseTimeDimension && member.granularity) {
-                  aliasPairs.push([`${deps[0]}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
-                }
-              }
+              deps
+                .filter(Boolean)
+                .forEach((dep) => {
+                  aliasPairs.push([dep, memberPath]);
+                  if (member instanceof BaseTimeDimension && member.granularity) {
+                    aliasPairs.push([`${dep}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
+                  }
+                });
             }
           } catch (_e) {
             // best-effort: ignore resolution errors
@@ -7093,26 +7095,29 @@ export class BaseQuery {
       }
 
       const deps = this.getDynamicSqlDependencies(cubeName, definition.dynamicSql);
-      if (deps.length === 1 && deps[0] && !aliases[deps[0]]) {
-        const memberPath = member.expressionPath();
-        aliases[deps[0]] = memberPath;
-        // Also map reverse alias to help lookups that start from view path
-        if (!aliases[memberPath]) {
-          aliases[memberPath] = deps[0];
-        }
+      const memberPath = member.expressionPath();
+      deps
+        .filter(Boolean)
+        .forEach((dep) => {
+          if (!aliases[dep]) {
+            aliases[dep] = memberPath;
+          }
+          if (!aliases[memberPath]) {
+            aliases[memberPath] = dep;
+          }
 
-        // For time dimensions also map granularity-qualified paths to keep rollup matching working
-        if (member instanceof BaseTimeDimension && member.granularity) {
-          const granularPath = `${deps[0]}.${member.granularity}`;
-          if (!aliases[granularPath]) {
-            aliases[granularPath] = `${memberPath}.${member.granularity}`;
+          // For time dimensions also map granularity-qualified paths to keep rollup matching working
+          if (member instanceof BaseTimeDimension && member.granularity) {
+            const granularPath = `${dep}.${member.granularity}`;
+            if (!aliases[granularPath]) {
+              aliases[granularPath] = `${memberPath}.${member.granularity}`;
+            }
+            const reverseGranular = `${memberPath}.${member.granularity}`;
+            if (!aliases[reverseGranular]) {
+              aliases[reverseGranular] = granularPath;
+            }
           }
-          const reverseGranular = `${memberPath}.${member.granularity}`;
-          if (!aliases[reverseGranular]) {
-            aliases[reverseGranular] = granularPath;
-          }
-        }
-      }
+        });
     }
 
     // No join/graph  might be in place when collecting members from the query with some injected filters,
