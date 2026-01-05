@@ -7004,20 +7004,31 @@ export class BaseQuery {
 
     const aliases = Object.fromEntries(members.flatMap(
       member => {
+        const memberPath = member.expressionPath();
+        const viewResolvedPath = query.resolveViewMemberToCubeMember(memberPath);
+        const aliasPairs = [];
+
+        if (viewResolvedPath && viewResolvedPath !== memberPath) {
+          aliasPairs.push([viewResolvedPath, memberPath]);
+
+          if (member instanceof BaseTimeDimension && member.granularity) {
+            aliasPairs.push([`${viewResolvedPath}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
+          }
+        }
+
         const collectedMembers = query.evaluateSymbolSqlWithContext(
           () => query.collectFrom([member], query.collectMemberNamesFor.bind(query), 'collectMemberNamesFor'),
           { aliasGathering: true }
         );
-        const memberPath = member.expressionPath();
         let nonAliasSeen = false;
-        return collectedMembers
+        return aliasPairs.concat(collectedMembers
           .filter(d => {
             if (!query.cubeEvaluator.byPathAnyType(d).aliasMember) {
               nonAliasSeen = true;
             }
             return !nonAliasSeen;
         })
-        .map(d => [query.cubeEvaluator.byPathAnyType(d).aliasMember, memberPath]);
+        .map(d => [query.cubeEvaluator.byPathAnyType(d).aliasMember, memberPath]));
       }
     ));
 
