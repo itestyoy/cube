@@ -3385,6 +3385,7 @@ export class BaseQuery {
             if (typeof sql !== 'string') {
               throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
             }
+            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
           } else {
             sql = symbol.sql && this.evaluateSql(cubeName, symbol.sql) ||
               primaryKeys.length && (
@@ -3493,6 +3494,8 @@ export class BaseQuery {
             }
           }
 
+          this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
+
           if (typeof sql !== 'string') {
             throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
           }
@@ -3541,6 +3544,7 @@ export class BaseQuery {
             if (typeof sql !== 'string') {
               throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
             }
+            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
           }
 
           // for time dimension with granularity convertedToTz() is called internally in dimensionSql() flow,
@@ -3603,6 +3607,7 @@ export class BaseQuery {
             if (typeof res !== 'string') {
               throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
             }
+            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
           }
 
           return res;
@@ -6679,13 +6684,29 @@ export class BaseQuery {
         dynamicSqlResultLocal
       );
 
-      return [
+      const deps = [
         ...new Set(
           pathReferencesUsed
             .map(path => this.cubeEvaluator.pathFromArray(path))
             .concat(depsFromArgs)
+            .map(path => this.resolveViewMemberToCubeMember(path))
         )
       ];
+
+      // Also register cubes referenced by dynamicSql while collecting cube names (e.g. for pre-aggregation matching)
+      const { cubeNames } = this.safeEvaluateSymbolContext();
+      if (Array.isArray(cubeNames)) {
+        deps.forEach(dep => {
+          try {
+            const depCube = this.cubeEvaluator.cubeNameFromPath(dep);
+            this.pushCubeNameForCollectionIfNecessary(depCube);
+          } catch (e) {
+            // Best-effort: ignore failures to resolve cube name
+          }
+        });
+      }
+
+      return deps;
     } catch {
       return [];
     }
