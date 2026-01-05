@@ -3366,6 +3366,7 @@ export class BaseQuery {
               categorized.usedTimeDimensions,
               categorized.usedFilters
             );
+            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
 
             // Evaluate the SQL template
             sql = this.evaluateSql(cubeName, symbol.sql);
@@ -3385,7 +3386,6 @@ export class BaseQuery {
             if (typeof sql !== 'string') {
               throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
             }
-            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
           } else {
             sql = symbol.sql && this.evaluateSql(cubeName, symbol.sql) ||
               primaryKeys.length && (
@@ -3478,6 +3478,7 @@ export class BaseQuery {
             categorized.usedTimeDimensions,
             categorized.usedFilters
           );
+          this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
 
           // Evaluate the SQL template
           let sql = this.evaluateSql(cubeName, symbol.sql);
@@ -3493,8 +3494,6 @@ export class BaseQuery {
               throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
             }
           }
-
-          this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
 
           if (typeof sql !== 'string') {
             throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
@@ -3527,6 +3526,7 @@ export class BaseQuery {
               categorized.usedTimeDimensions,
               categorized.usedFilters
             );
+            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
 
             if (typeof sql === 'string') {
             
@@ -3544,7 +3544,6 @@ export class BaseQuery {
             if (typeof sql !== 'string') {
               throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
             }
-            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
           }
 
           // for time dimension with granularity convertedToTz() is called internally in dimensionSql() flow,
@@ -3590,6 +3589,7 @@ export class BaseQuery {
               categorized.usedTimeDimensions,
               categorized.usedFilters
             );
+            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
 
             if (typeof res === 'string') {
             
@@ -3607,7 +3607,6 @@ export class BaseQuery {
             if (typeof res !== 'string') {
               throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
             }
-            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
           }
 
           return res;
@@ -6689,6 +6688,7 @@ export class BaseQuery {
           pathReferencesUsed
             .map(path => this.cubeEvaluator.pathFromArray(path))
             .concat(depsFromArgs)
+            // Map view members back to base cube members so rollup matching works with dynamicSql
             .map(path => this.resolveViewMemberToCubeMember(path))
         )
       ];
@@ -6965,7 +6965,28 @@ export class BaseQuery {
       try {
         def = this.cubeEvaluator.byPathAnyType(current);
       } catch {
+        // If the path isn't defined on the view, try to resolve it through includedMembers
+        if (originalIsView && current.startsWith(`${originalCubeName}.`)) {
+          const field = current.split('.').slice(1).join('.');
+          const included = originalCube?.includedMembers || [];
+          const matchedIncluded = included.find(m => m.name === field || m.memberPath?.endsWith(`.${field}`));
+          if (matchedIncluded?.memberPath) {
+            current = matchedIncluded.memberPath;
+            continue;
+          }
+        }
         break;
+      }
+
+      // For view members included without aliasMember, try to hop via includedMembers metadata
+      if (!def?.aliasMember && originalIsView && current.startsWith(`${originalCubeName}.`)) {
+        const field = current.split('.').slice(1).join('.');
+        const included = originalCube?.includedMembers || [];
+        const matchedIncluded = included.find(m => m.name === field || m.memberPath?.endsWith(`.${field}`));
+        if (matchedIncluded?.memberPath && matchedIncluded.memberPath !== current) {
+          current = matchedIncluded.memberPath;
+          continue;
+        }
       }
 
       if (!def?.aliasMember) {
@@ -7004,14 +7025,45 @@ export class BaseQuery {
     const aliases = Object.fromEntries(members.flatMap(
       member => {
         const memberPath = member.expressionPath();
+        const def = member.definition?.();
+        const directAlias = def?.aliasMember;
         const viewResolvedPath = query.resolveViewMemberToCubeMember(memberPath);
         const aliasPairs = [];
+
+        if (directAlias && directAlias !== memberPath) {
+          aliasPairs.push([directAlias, memberPath]);
+
+          if (member instanceof BaseTimeDimension && member.granularity) {
+            aliasPairs.push([`${directAlias}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
+          }
+        }
 
         if (viewResolvedPath && viewResolvedPath !== memberPath) {
           aliasPairs.push([viewResolvedPath, memberPath]);
 
           if (member instanceof BaseTimeDimension && member.granularity) {
             aliasPairs.push([`${viewResolvedPath}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
+          }
+        }
+
+        // If underlying member uses dynamicSql with a single dependency, treat that dependency as an alias source too.
+        const basePath = viewResolvedPath || directAlias;
+        if (basePath) {
+          try {
+            const baseCube = this.cubeEvaluator.cubeNameFromPath(basePath);
+            const baseDef = this.cubeEvaluator.byPathAnyType(basePath);
+            const baseDynSql = baseDef?.dynamicSql;
+            if (typeof baseDynSql === 'function') {
+              const deps = this.getDynamicSqlDependencies(baseCube, baseDynSql);
+              if (deps.length === 1 && deps[0]) {
+                aliasPairs.push([deps[0], memberPath]);
+                if (member instanceof BaseTimeDimension && member.granularity) {
+                  aliasPairs.push([`${deps[0]}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
+                }
+              }
+            }
+          } catch (_e) {
+            // best-effort: ignore resolution errors
           }
         }
 
