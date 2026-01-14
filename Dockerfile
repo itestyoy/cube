@@ -38,6 +38,7 @@ ENV OPENSSL_STATIC=1 \
 # Install build dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+        binutils \
         cmake \
         g++ \
         gcc \
