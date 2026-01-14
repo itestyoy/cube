@@ -72,7 +72,7 @@ RUN cd rust/cubestore && \
 # Replicates: native_linux job (lines 71-150)
 # Note: Build on target platform to avoid cross-compilation issues
 # -----------------------------------------------------------------------------
-FROM --platform=$TARGETPLATFORM node:20.x-bookworm AS native-builder
+FROM --platform=$TARGETPLATFORM node:20.17.0-bookworm AS native-builder
 
 # Install Rust (toolchain 1.84.1 as per workflow line 101)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
@@ -122,7 +122,7 @@ RUN npm install && \
 # Replicates: npm job (lines 14-70)
 # Note: Build on target platform for consistency
 # -----------------------------------------------------------------------------
-FROM --platform=$TARGETPLATFORM node:20.x-bookworm AS nodejs-builder
+FROM --platform=$TARGETPLATFORM node:20.17.0-bookworm AS nodejs-builder
 
 # Install Rust for potential native module builds during yarn install
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
@@ -192,7 +192,7 @@ RUN cp /tmp/native-backup/index.node packages/cubejs-backend-native/index.node
 # Stage 4: Production - Assemble final image
 # Replicates: docker-default job + latest.Dockerfile
 # -----------------------------------------------------------------------------
-FROM --platform=$TARGETPLATFORM node:20.x-bookworm-slim
+FROM --platform=$TARGETPLATFORM node:20.17.0-bookworm-slim
 
 # Build-time arguments
 ARG IMAGE_VERSION=unknown
