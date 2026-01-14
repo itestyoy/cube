@@ -43,11 +43,6 @@ WORKDIR /cube
 # Copy Rust projects (each has its own Cargo.toml and Cargo.lock)
 COPY rust ./rust
 
-# Install nightly toolchain as per workflow (line 628)
-# Workflow uses: nightly-2024-01-29
-RUN rustup toolchain install nightly-2024-01-29 && \
-    rustup component add rustfmt --toolchain nightly-2024-01-29
-
 # Build CubeStore (workflow command from line 640)
 # Building natively on target platform, no cross-compilation needed
 RUN cd rust/cubestore && \
