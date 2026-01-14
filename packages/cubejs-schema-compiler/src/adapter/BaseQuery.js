@@ -7028,12 +7028,28 @@ export class BaseQuery {
         const memberPath = member.expressionPath();
         const def = member.definition?.();
         const directAlias = def?.aliasMember;
-        const viewResolvedPath = query.resolveViewMemberToCubeMember(memberPath);
         const aliasPairs = [];
 
         const definition = member.definition?.();
 
         if (typeof definition.dynamicSql !== 'function') {
+          const viewResolvedPath = query.resolveViewMemberToCubeMember(memberPath);
+
+          if (directAlias && directAlias !== memberPath) {
+            aliasPairs.push([directAlias, memberPath]);
+
+            if (member instanceof BaseTimeDimension && member.granularity) {
+              aliasPairs.push([`${directAlias}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
+            }
+          }
+
+          if (viewResolvedPath && viewResolvedPath !== memberPath) {
+            aliasPairs.push([viewResolvedPath, memberPath]);
+
+            if (member instanceof BaseTimeDimension && member.granularity) {
+              aliasPairs.push([`${viewResolvedPath}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
+            }
+          }
 
           // If underlying member uses dynamicSql with a single dependency, treat that dependency as an alias source too.
           const basePath = viewResolvedPath || directAlias;
@@ -7047,10 +7063,10 @@ export class BaseQuery {
                 deps
                   .filter(Boolean)
                   .forEach((dep) => {
+                    aliasPairs.push([dep, memberPath]);
+
                     if (member instanceof BaseTimeDimension && member.granularity) {
                       aliasPairs.push([`${dep}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
-                    } else {
-                      aliasPairs.push([dep, memberPath]);
                     }
                   });
               }
