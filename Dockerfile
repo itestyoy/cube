@@ -27,7 +27,7 @@ ARG TARGETPLATFORM=linux/amd64
 # Replicates: cubestore_linux job (lines 584-664)
 # Note: Build on target platform to avoid cross-compilation issues
 # -----------------------------------------------------------------------------
-FROM --platform=$TARGETPLATFORM rust:1.90.0-bookworm AS cubestore-builder
+FROM --platform=$TARGETPLATFORM rust:1.84.1-bookworm AS cubestore-builder
 
 # Set environment variables from workflow
 ENV OPENSSL_STATIC=1 \
@@ -56,14 +56,14 @@ WORKDIR /cube
 COPY rust ./rust
 
 # Install nightly toolchain as per workflow (line 628)
-# Workflow uses: nightly-2025-08-01
-RUN rustup toolchain install nightly-2025-08-01 && \
-    rustup component add rustfmt --toolchain nightly-2025-08-01
+# Workflow uses: nightly-2024-01-29
+RUN rustup toolchain install nightly-2024-01-29 && \
+    rustup component add rustfmt --toolchain nightly-2024-01-29
 
 # Build CubeStore (workflow command from line 640)
 # Building natively on target platform, no cross-compilation needed
 RUN cd rust/cubestore && \
-    cargo +nightly-2025-08-01 build --release -p cubestore
+    cargo +nightly-2024-01-29 build --release -p cubestore
 
 # The binary will be at: rust/cubestore/target/release/cubestored
 
@@ -72,11 +72,11 @@ RUN cd rust/cubestore && \
 # Replicates: native_linux job (lines 71-150)
 # Note: Build on target platform to avoid cross-compilation issues
 # -----------------------------------------------------------------------------
-FROM --platform=$TARGETPLATFORM node:22.20.0-bookworm AS native-builder
+FROM --platform=$TARGETPLATFORM node:20.x-bookworm AS native-builder
 
-# Install Rust (toolchain 1.90.0 as per workflow line 101)
+# Install Rust (toolchain 1.84.1 as per workflow line 101)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-    sh -s -- -y --default-toolchain 1.90.0 && \
+    sh -s -- -y --default-toolchain 1.84.1 && \
     . "$HOME/.cargo/env" && \
     rustup component add rustfmt
 
@@ -122,11 +122,11 @@ RUN npm install && \
 # Replicates: npm job (lines 14-70)
 # Note: Build on target platform for consistency
 # -----------------------------------------------------------------------------
-FROM --platform=$TARGETPLATFORM node:22.20.0-bookworm AS nodejs-builder
+FROM --platform=$TARGETPLATFORM node:20.x-bookworm AS nodejs-builder
 
 # Install Rust for potential native module builds during yarn install
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-    sh -s -- -y --default-toolchain 1.90.0
+    sh -s -- -y --default-toolchain 1.84.1
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Install system dependencies (exact from workflow line 14)
@@ -192,7 +192,7 @@ RUN cp /tmp/native-backup/index.node packages/cubejs-backend-native/index.node
 # Stage 4: Production - Assemble final image
 # Replicates: docker-default job + latest.Dockerfile
 # -----------------------------------------------------------------------------
-FROM --platform=$TARGETPLATFORM node:22.20.0-bookworm-slim
+FROM --platform=$TARGETPLATFORM node:20.x-bookworm-slim
 
 # Build-time arguments
 ARG IMAGE_VERSION=unknown
