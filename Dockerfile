@@ -25,31 +25,18 @@ ARG TARGETPLATFORM=linux/amd64
 # -----------------------------------------------------------------------------
 # Stage 1: CubeStore Builder - Build Rust OLAP engine
 # Replicates: cubestore_linux job (lines 584-664)
+# Uses the same pre-configured image as GitHub Actions workflow
+# Container image: cubejs/rust-cross:x86_64-unknown-linux-gnu-15082024
+# This includes all necessary build tools, OpenSSL, and cross-compilation support
 # Note: Build on target platform to avoid cross-compilation issues
 # -----------------------------------------------------------------------------
-FROM --platform=$TARGETPLATFORM rust:1.84.1-bookworm AS cubestore-builder
+FROM cubejs/rust-cross:x86_64-unknown-linux-gnu-15082024 AS cubestore-builder
 
 # Set environment variables from workflow
 ENV OPENSSL_STATIC=1 \
     CARGO_INCREMENTAL=0 \
     CARGO_NET_RETRY=10 \
     RUSTUP_MAX_RETRIES=10
-
-# Install build dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        binutils \
-        cmake \
-        g++ \
-        gcc \
-        make \
-        libssl-dev \
-        libclang-dev \
-        clang \
-        pkg-config \
-        ca-certificates \
-        git && \
-    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /cube
 
