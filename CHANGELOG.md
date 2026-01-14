@@ -3,6 +3,61 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.6.2](https://github.com/cube-js/cube/compare/v1.6.1...v1.6.2) (2026-01-10)
+
+### Bug Fixes
+
+- **athena-driver:** accept AWS assume role parameters as part of the ([#10300](https://github.com/cube-js/cube/issues/10300)) ([6dfef20](https://github.com/cube-js/cube/commit/6dfef2003f9d782c7bb2bf917dd95c7dce6259bf))
+- **client-core:** Isolate internalDayjs instance to prevent global dayjs pollution ([#10279](https://github.com/cube-js/cube/issues/10279)) ([3cf4f74](https://github.com/cube-js/cube/commit/3cf4f74073c168707a79f60b7bef0a690a0a0e6f))
+- **client-core:** preserve zero values with fillWithValue in pivot ([#10225](https://github.com/cube-js/cube/issues/10225)) ([#10226](https://github.com/cube-js/cube/issues/10226)) ([ee02a4f](https://github.com/cube-js/cube/commit/ee02a4f35f79ffdec1f01febfffee0d50c239a9b))
+
+### Features
+
+- Allow to specify key for dimensions in schema ([#10270](https://github.com/cube-js/cube/issues/10270)) ([df8161c](https://github.com/cube-js/cube/commit/df8161c4c1ad782493e83088c9260043996eb4c0))
+- replace connect to bi page in playground with cube bi page ([#10293](https://github.com/cube-js/cube/issues/10293)) ([258a6d0](https://github.com/cube-js/cube/commit/258a6d032cf68b0eda7fc1fa6cc1cc4a14aab226))
+
+## [1.6.1](https://github.com/cube-js/cube/compare/v1.6.0...v1.6.1) (2025-12-18)
+
+**Note:** Version bump only for package cubejs
+
+# [1.6.0](https://github.com/cube-js/cube/compare/v1.5.16...v1.6.0) (2025-12-18)
+
+### Bug Fixes
+
+- **api-gateway:** subscribe, added POST method ([#10266](https://github.com/cube-js/cube/issues/10266)) ([af53f8f](https://github.com/cube-js/cube/commit/af53f8f63ecb384c73fac3d0a88032ec152db8e3))
+- **server-core:** Access policies row filtering should respect member visibility ([#10257](https://github.com/cube-js/cube/issues/10257)) ([cc0e582](https://github.com/cube-js/cube/commit/cc0e5821669d6babe43d52264ebb3708fe8d1c0f))
+
+### Features
+
+- **cubestore:** Upgrade to DataFusion 46.0.1 ([#10215](https://github.com/cube-js/cube/issues/10215)) ([4ef3442](https://github.com/cube-js/cube/commit/4ef3442827b5c105c0f707674d4dae5ce282ae96))
+- **schema-compiler:** view's cubes multiple join path validation ([#10264](https://github.com/cube-js/cube/issues/10264)) ([d5fe933](https://github.com/cube-js/cube/commit/d5fe93351149362a52d73da36ce773c6960980d8))
+
+### BREAKING CHANGES
+
+- **server-core:** Policies not applicable due to member visibility may stop applying changing row level security filters
+
+- Linter
+
+## [1.5.16](https://github.com/cube-js/cube/compare/v1.5.15...v1.5.16) (2025-12-17)
+
+### Bug Fixes
+
+- **snowflake-driver:** Fix type mapping for `fixed` type ([#10258](https://github.com/cube-js/cube/issues/10258)) ([ec7944c](https://github.com/cube-js/cube/commit/ec7944c0bec0bd4cb4ac003f5597bc0e044d08f5))
+- **snowflake-driver:** Fix type mapping for numerics with scale ([#10259](https://github.com/cube-js/cube/issues/10259)) ([3915e5a](https://github.com/cube-js/cube/commit/3915e5a26d49b812f70a537ec9fde0d0f762692e))
+
+### Features
+
+- **cubesql:** Support `DISTINCT` flag in UDAFs ([#10252](https://github.com/cube-js/cube/issues/10252)) ([1d93825](https://github.com/cube-js/cube/commit/1d93825d5b010c16e52dcf10b5cd1b395fb308f4))
+- **cubesql:** Support `STRING_AGG` SQL push down ([#10256](https://github.com/cube-js/cube/issues/10256)) ([8c82fa5](https://github.com/cube-js/cube/commit/8c82fa5e9d3503bb4c7b5b7fbe85afa8d5656d14))
+- **server:** Introduce CUBEJS_MAX_REQUEST_SIZE env variable ([#10260](https://github.com/cube-js/cube/issues/10260)) ([71ca412](https://github.com/cube-js/cube/commit/71ca4120296a26176a543045eb06ac4261832579))
+
+## [1.5.15](https://github.com/cube-js/cube/compare/v1.5.14...v1.5.15) (2025-12-15)
+
+### Bug Fixes
+
+- **api-gateway:** Allow messageId to be int in unsubscribe WS request ([#10250](https://github.com/cube-js/cube/issues/10250)) ([1e2e7cb](https://github.com/cube-js/cube/commit/1e2e7cb382bfb95376f1149f9f91608914ff4bc1))
+- **client-ws-transport:** Handle WebSocket close code 1009 (Message Too Big) ([#10246](https://github.com/cube-js/cube/issues/10246)) ([5652f0f](https://github.com/cube-js/cube/commit/5652f0f9e46fe0da942a2f23dbf41f6594fef2b8))
+
 ## [1.5.14](https://github.com/cube-js/cube/compare/v1.5.13...v1.5.14) (2025-12-11)
 
 ### Bug Fixes
