@@ -38,6 +38,15 @@ ENV OPENSSL_STATIC=1 \
     CARGO_NET_RETRY=10 \
     RUSTUP_MAX_RETRIES=10
 
+# Install Rust and ensure cargo is in PATH (if not already present)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+    echo 'source $HOME/.cargo/env' >> $HOME/.bashrc
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Verify Rust installation
+RUN cargo --version && rustc --version
+
 WORKDIR /cube
 
 # Copy Rust projects (each has its own Cargo.toml and Cargo.lock)
