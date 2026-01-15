@@ -7028,42 +7028,22 @@ export class BaseQuery {
         const memberPath = member.expressionPath();
         const def = member.definition?.();
         const directAlias = def?.aliasMember;
-        const viewResolvedPath = query.resolveViewMemberToCubeMember(memberPath);
         const aliasPairs = [];
+        const collectedDynamicMembers = [];
 
         const definition = member.definition?.();
+        const resolvedPath = query.resolveViewMemberToCubeMember(memberPath);
+        const baseCube = this.cubeEvaluator.cubeNameFromPath(resolvedPath);
 
-        if (typeof definition.dynamicSql !== 'function') {
-
-          // If underlying member uses dynamicSql with a single dependency, treat that dependency as an alias source too.
-          const basePath = viewResolvedPath || directAlias;
-          if (basePath) {
-            try {
-              const baseCube = this.cubeEvaluator.cubeNameFromPath(basePath);
-              const baseDef = this.cubeEvaluator.byPathAnyType(basePath);
-              const baseDynSql = baseDef?.dynamicSql;
-              if (typeof baseDynSql === 'function') {
-                const deps = this.getDynamicSqlDependencies(baseCube, baseDynSql);
-                deps
-                  .filter(Boolean)
-                  .forEach((dep) => {
-                    if (member instanceof BaseTimeDimension && member.granularity) {
-                      aliasPairs.push([`${dep}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
-                    } else {
-                      aliasPairs.push([dep, memberPath]);
-                    }
-                  });
-              }
-            } catch (_e) {
-              // best-effort: ignore resolution errors
-            }
-          }
-        }
+        if (typeof definition.dynamicSql == 'function') {
+          const collectedDynamicMembers = this.getDynamicSqlDependencies(baseCube, definition.dynamicSql);
+        } 
 
         const collectedMembers = query.evaluateSymbolSqlWithContext(
           () => query.collectFrom([member], query.collectMemberNamesFor.bind(query), 'collectMemberNamesFor'),
           { aliasGathering: true }
-        );
+        ).concat(collectedDynamicMembers);
+
         let nonAliasSeen = false;
         return aliasPairs.concat(collectedMembers
           .filter(d => {
