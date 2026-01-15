@@ -7029,57 +7029,21 @@ export class BaseQuery {
         const def = member.definition?.();
         const directAlias = def?.aliasMember;
         const aliasPairs = [];
+        const collectedDynamicMembers = [];
 
         const definition = member.definition?.();
+        const resolvedPath = query.resolveViewMemberToCubeMember(memberPath);
+        const baseCube = this.cubeEvaluator.cubeNameFromPath(resolvedPath);
 
         if (typeof definition.dynamicSql == 'function') {
-          const viewResolvedPath = query.resolveViewMemberToCubeMember(memberPath);
-
-          if (directAlias && directAlias !== memberPath) {
-            aliasPairs.push([directAlias, memberPath]);
-
-            if (member instanceof BaseTimeDimension && member.granularity) {
-              aliasPairs.push([`${directAlias}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
-            }
-          }
-
-          if (viewResolvedPath && viewResolvedPath !== memberPath) {
-            aliasPairs.push([viewResolvedPath, memberPath]);
-
-            if (member instanceof BaseTimeDimension && member.granularity) {
-              aliasPairs.push([`${viewResolvedPath}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
-            }
-          }
-
-          // If underlying member uses dynamicSql with a single dependency, treat that dependency as an alias source too.
-          const basePath = viewResolvedPath || directAlias;
-          if (basePath) {
-            try {
-              const baseCube = this.cubeEvaluator.cubeNameFromPath(basePath);
-              const baseDef = this.cubeEvaluator.byPathAnyType(basePath);
-              const baseDynSql = baseDef?.dynamicSql;
-              if (typeof baseDynSql === 'function') {
-                const deps = this.getDynamicSqlDependencies(baseCube, baseDynSql);
-                deps
-                  .filter(Boolean)
-                  .forEach((dep) => {
-                    aliasPairs.push([dep, memberPath]);
-
-                    if (member instanceof BaseTimeDimension && member.granularity) {
-                      aliasPairs.push([`${dep}.${member.granularity}`, `${memberPath}.${member.granularity}`]);
-                    }
-                  });
-              }
-            } catch (_e) {
-              // best-effort: ignore resolution errors
-            }
-          }
-        }
+          const collectedDynamicMembers = this.getDynamicSqlDependencies(baseCube, definition.dynamicSql);
+        } 
 
         const collectedMembers = query.evaluateSymbolSqlWithContext(
           () => query.collectFrom([member], query.collectMemberNamesFor.bind(query), 'collectMemberNamesFor'),
           { aliasGathering: true }
-        );
+        ).concat(collectedDynamicMembers);
+
         let nonAliasSeen = false;
         return aliasPairs.concat(collectedMembers
           .filter(d => {
