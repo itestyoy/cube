@@ -6902,7 +6902,7 @@ export class BaseQuery {
    * @returns {Array<BaseMeasure | BaseDimension | BaseSegment>}
    */
   flattenAllMembers(excludeSegments = false) {
-    return R.flatten(
+    const flattened = R.flatten(
       this.measures
         .concat(this.dimensions)
         .concat(excludeSegments ? [] : this.segments)
@@ -6911,6 +6911,47 @@ export class BaseQuery {
         .concat(this.timeDimensions)
         .map(m => m.getMembers()),
     );
+
+    // Collect and add members referenced in dynamicSql functions
+    // This ensures pre-aggregations with dynamicSql-referenced members are properly detected
+    const dynamicSqlMemberPaths = [];
+    const allMembers = [
+      ...this.measures,
+      ...this.dimensions,
+      ...this.filters,
+      ...this.measureFilters,
+      ...this.timeDimensions
+    ];
+
+    allMembers.forEach(member => {
+      try {
+        const definition = member.definition?.();
+        if (definition && definition.dynamicSql && typeof definition.dynamicSql === 'function') {
+          const memberPath = member.expressionPath();
+          const baseCube = this.cubeEvaluator.cubeNameFromPath(memberPath);
+          const dynamicMembers = this.getDynamicSqlDependencies(baseCube, definition.dynamicSql);
+          dynamicSqlMemberPaths.push(...dynamicMembers);
+        }
+      } catch (e) {
+        // Best-effort: ignore failures
+      }
+    });
+
+    // Add synthetic members for dynamicSql-referenced members
+    if (dynamicSqlMemberPaths.length > 0) {
+      const syntheticMembers = [...new Set(dynamicSqlMemberPaths)].map(memberPath => ({
+        expressionPath: () => memberPath,
+        definition: () => ({ aliasMember: null, ownedByCube: true }),
+        getMembers: () => [{
+          expressionPath: () => memberPath,
+          definition: () => ({ aliasMember: null, ownedByCube: true })
+        }]
+      }));
+
+      return flattened.concat(syntheticMembers);
+    }
+
+    return flattened;
   }
 
   /**
@@ -7025,28 +7066,20 @@ export class BaseQuery {
 
     const aliases = Object.fromEntries(members.flatMap(
       member => {
-        const memberPath = member.expressionPath();
-        const aliasPairs = [];
-
-        const definition = member.definition?.();
-        const baseCube = this.cubeEvaluator.cubeNameFromPath(memberPath);
-
-        const collectedDynamicMembers = this.getDynamicSqlDependencies(baseCube, definition.dynamicSql);
-
         const collectedMembers = query.evaluateSymbolSqlWithContext(
           () => query.collectFrom([member], query.collectMemberNamesFor.bind(query), 'collectMemberNamesFor'),
           { aliasGathering: true }
-        ).concat(collectedDynamicMembers);
-
+        );
+        const memberPath = member.expressionPath();
         let nonAliasSeen = false;
-        return aliasPairs.concat(collectedMembers
+        return collectedMembers
           .filter(d => {
             if (!query.cubeEvaluator.byPathAnyType(d).aliasMember) {
               nonAliasSeen = true;
             }
             return !nonAliasSeen;
-        })
-        .map(d => [query.cubeEvaluator.byPathAnyType(d).aliasMember, memberPath]));
+          })
+          .map(d => [query.cubeEvaluator.byPathAnyType(d).aliasMember, memberPath]);
       }
     ));
 
@@ -7083,6 +7116,7 @@ export class BaseQuery {
 
     return res;
   }
+
 
   buildJoinPathFn() {
     const query = this;
