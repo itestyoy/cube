@@ -3310,12 +3310,15 @@ export class BaseQuery {
    * @returns {Object|null} Filter object with only this member's filters, or null if none
    */
   getMemberFilters(cubeName, memberName) {
-    if (!this.options || !this.options.filters) {
+    if (!this.options || !Array.isArray(this.options.filters) || this.options.filters.length === 0) {
       return null;
     }
 
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
-    return this.extractMemberFiltersRecursive(this.options.filters, memberPath);
+    const result = this.extractMemberFiltersRecursive(this.options.filters, memberPath);
+    
+    // Only return if we found filters for this member
+    return result || null;
   }
 
   /**
