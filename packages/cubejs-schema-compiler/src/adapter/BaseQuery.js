@@ -3372,6 +3372,28 @@ export class BaseQuery {
 
     return null;
   }
+  
+  /**
+   * Get the used granularity for a time dimension member.
+   * @param {string} cubeName The cube name
+   * @param {string} memberName The time dimension name
+   * @returns {string|null} The granularity string (e.g., 'day', 'month') or null if not used
+   */
+  getUsedGranularity(cubeName, memberName) {
+    const options = this.safeEvaluateSymbolContext().options;
+    if (!options || !options.granularities) {
+      return null;
+    }
+
+    const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
+    
+    // granularities is typically an object mapping memberPath to granularity
+    if (options.granularities[memberPath]) {
+      return options.granularities[memberPath];
+    }
+    
+    return null;
+  }
 
   evaluateSymbolSql(cubeName, name, symbol, memberExpressionType, subPropertyName) {
     const isMemberExpr = !!memberExpressionType;

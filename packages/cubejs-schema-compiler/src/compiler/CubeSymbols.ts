@@ -1342,6 +1342,18 @@ export class CubeSymbols implements TranspilerSymbolResolver, CompilerInterface 
             return query.getMemberFilters(cubeName, refProperty);
           };
         }
+        // Support for usedGranularity() method to get the used granularity for a time dimension
+        if (propertyName === 'usedGranularity') {
+          return () => {
+            if (!refProperty) {
+              throw new UserError(`usedGranularity() can only be called on a member, not on a cube`);
+            }
+            if (!query || typeof query.getUsedGranularity !== 'function') {
+              return null;
+            }
+            return query.getUsedGranularity(cubeName, refProperty);
+          };
+        }
         if (refProperty &&
           cube[refProperty].type === 'time' &&
           self.resolveGranularity([cubeName, refProperty, 'granularities', propertyName], cube)
