@@ -3310,13 +3310,12 @@ export class BaseQuery {
    * @returns {Object|null} Filter object with only this member's filters, or null if none
    */
   getMemberFilters(cubeName, memberName) {
-    const options = this.safeEvaluateSymbolContext().options;
-    if (!options || !options.filters) {
+    if (!this.options || !this.options.filters) {
       return null;
     }
 
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
-    return this.extractMemberFiltersRecursive(options.filters, memberPath);
+    return this.extractMemberFiltersRecursive(this.options.filters, memberPath);
   }
 
   /**
@@ -3372,7 +3371,7 @@ export class BaseQuery {
 
     return null;
   }
-  
+
   /**
    * Get the used granularity for a time dimension member.
    * @param {string} cubeName The cube name
@@ -3380,16 +3379,15 @@ export class BaseQuery {
    * @returns {string|null} The granularity string (e.g., 'day', 'month') or null if not used
    */
   getUsedGranularity(cubeName, memberName) {
-    const options = this.safeEvaluateSymbolContext().options;
-    if (!options || !options.granularities) {
+    if (!this.options || !this.options.granularities) {
       return null;
     }
 
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
     
     // granularities is typically an object mapping memberPath to granularity
-    if (options.granularities[memberPath]) {
-      return options.granularities[memberPath];
+    if (this.options.granularities[memberPath]) {
+      return this.options.granularities[memberPath];
     }
     
     return null;
