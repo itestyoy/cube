@@ -7023,7 +7023,7 @@ export class BaseQuery {
   backAliasMembers(members) {
     const query = this;
 
-    // Collect members referenced in dynamicSql functions
+    // Collect members referenced in dynamicSql functions with granularity info
     const dynamicSqlMemberPaths = [];
     members.forEach(member => {
       try {
@@ -7032,7 +7032,14 @@ export class BaseQuery {
           const memberPath = member.expressionPath();
           const baseCube = this.cubeEvaluator.cubeNameFromPath(memberPath);
           const dynamicMembers = this.getDynamicSqlDependencies(baseCube, definition.dynamicSql);
-          dynamicSqlMemberPaths.push(...dynamicMembers);
+          
+          // Get granularity directly from member (if timeDimension)
+          const granularity = member.granularity || null;
+          
+          dynamicMembers.forEach(depPath => {
+            const pathWithGranularity = granularity ? `${depPath}.${granularity}` : depPath;
+            dynamicSqlMemberPaths.push(pathWithGranularity);
+          });
         }
       } catch (e) {
         // Best-effort: ignore failures
