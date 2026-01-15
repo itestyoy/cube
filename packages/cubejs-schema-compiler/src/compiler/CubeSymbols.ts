@@ -1318,6 +1318,30 @@ export class CubeSymbols implements TranspilerSymbolResolver, CompilerInterface 
         if (propertyName === 'sql') {
           return () => query.cubeSql(cube.cubeName());
         }
+        // Support for isMemberUsed() method to check if member was used in the query
+        if (propertyName === 'isMemberUsed') {
+          return () => {
+            if (!refProperty) {
+              throw new UserError(`isMemberUsed() can only be called on a member, not on a cube`);
+            }
+            if (!query || typeof query.isMemberUsed !== 'function') {
+              return false;
+            }
+            return query.isMemberUsed(cubeName, refProperty);
+          };
+        }
+        // Support for filters() method to get all filters for a member
+        if (propertyName === 'filters') {
+          return () => {
+            if (!refProperty) {
+              throw new UserError(`filters() can only be called on a member, not on a cube`);
+            }
+            if (!query || typeof query.getMemberFilters !== 'function') {
+              return null;
+            }
+            return query.getMemberFilters(cubeName, refProperty);
+          };
+        }
         if (refProperty &&
           cube[refProperty].type === 'time' &&
           self.resolveGranularity([cubeName, refProperty, 'granularities', propertyName], cube)
