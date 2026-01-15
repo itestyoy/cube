@@ -1318,11 +1318,11 @@ export class CubeSymbols implements TranspilerSymbolResolver, CompilerInterface 
         if (propertyName === 'sql') {
           return () => query.cubeSql(cube.cubeName());
         }
-        // Support for isMemberUsed() method to check if member was used in the query
-        if (propertyName === 'isMemberUsed') {
+        // Support for isUsed() method to check if member was used in the query
+        if (propertyName === 'isUsed') {
           return () => {
             if (!refProperty) {
-              throw new UserError(`isMemberUsed() can only be called on a member, not on a cube`);
+              throw new UserError(`isUsed() can only be called on a member, not on a cube`);
             }
             if (!query || typeof query.isMemberUsed !== 'function') {
               return false;
@@ -1330,11 +1330,11 @@ export class CubeSymbols implements TranspilerSymbolResolver, CompilerInterface 
             return query.isMemberUsed(cubeName, refProperty);
           };
         }
-        // Support for filters() method to get all filters for a member
-        if (propertyName === 'filters') {
+        // Support for usedFilters() method to get all filters for a member
+        if (propertyName === 'usedFilters') {
           return () => {
             if (!refProperty) {
-              throw new UserError(`filters() can only be called on a member, not on a cube`);
+              throw new UserError(`usedFilters() can only be called on a member, not on a cube`);
             }
             if (!query || typeof query.getMemberFilters !== 'function') {
               return null;
