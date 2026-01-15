@@ -7026,18 +7026,12 @@ export class BaseQuery {
     const aliases = Object.fromEntries(members.flatMap(
       member => {
         const memberPath = member.expressionPath();
-        const def = member.definition?.();
-        const directAlias = def?.aliasMember;
         const aliasPairs = [];
-        const collectedDynamicMembers = [];
 
         const definition = member.definition?.();
-        const resolvedPath = query.resolveViewMemberToCubeMember(memberPath);
-        const baseCube = this.cubeEvaluator.cubeNameFromPath(resolvedPath);
+        const baseCube = this.cubeEvaluator.cubeNameFromPath(memberPath);
 
-        if (typeof definition.dynamicSql == 'function') {
-          const collectedDynamicMembers = this.getDynamicSqlDependencies(baseCube, definition.dynamicSql);
-        } 
+        const collectedDynamicMembers = this.getDynamicSqlDependencies(baseCube, definition.dynamicSql);
 
         const collectedMembers = query.evaluateSymbolSqlWithContext(
           () => query.collectFrom([member], query.collectMemberNamesFor.bind(query), 'collectMemberNamesFor'),
