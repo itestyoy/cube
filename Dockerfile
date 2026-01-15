@@ -243,10 +243,6 @@ WORKDIR /cube/conf
 # 3030 - CubeStore
 EXPOSE 4000 3030
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:4000/readyz', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
-
 # Default command (exact from latest.Dockerfile line 54)
 CMD ["cubejs", "server"]
 
