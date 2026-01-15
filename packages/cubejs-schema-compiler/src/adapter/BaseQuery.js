@@ -3287,6 +3287,114 @@ export class BaseQuery {
     return this.evaluateSymbolContext || {};
   }
 
+  /**
+   * Check if a member was used in the query evaluation.
+   * @param {string} cubeName The cube name
+   * @param {string} memberName The member name
+   * @returns {boolean} true if the member was used, false otherwise
+   */
+  isMemberUsed(cubeName, memberName) {
+    const usedMembers = this.safeEvaluateSymbolContext().usedMembers;
+    if (!usedMembers) {
+      return false;
+    }
+    const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
+    return usedMembers.has(memberPath);
+  }
+
+  /**
+   * Get all filters for a specific member, preserving AND/OR structure.
+   * Removes all other members but keeps the nesting structure intact.
+   * @param {string} cubeName The cube name
+   * @param {string} memberName The member name
+   * @returns {Object|null} Filter object with only this member's filters, or null if none
+   */
+  getMemberFilters(cubeName, memberName) {
+    const options = this.safeEvaluateSymbolContext().options;
+    if (!options || !options.filters) {
+      return null;
+    }
+
+    const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
+    return this.extractMemberFiltersRecursive(options.filters, memberPath);
+  }
+
+  /**
+   * Recursively extract filters for a specific member, preserving AND/OR structure.
+   * @private
+   */
+  extractMemberFiltersRecursive(filters, targetMemberPath) {
+    if (!filters) {
+      return null;
+    }
+
+    // Handle array of filters
+    if (Array.isArray(filters)) {
+      const extracted = filters
+        .map(f => this.extractMemberFiltersRecursive(f, targetMemberPath))
+        .filter(f => f !== null);
+      
+      return extracted.length > 0 ? extracted : null;
+    }
+
+    // Handle AND condition
+    if (filters.and) {
+      const extracted = filters.and
+        .map(f => this.extractMemberFiltersRecursive(f, targetMemberPath))
+        .filter(f => f !== null);
+      
+      if (extracted.length === 0) {
+        return null;
+      }
+
+      return { and: extracted };
+    }
+
+    // Handle OR condition
+    if (filters.or) {
+      const extracted = filters.or
+        .map(f => this.extractMemberFiltersRecursive(f, targetMemberPath))
+        .filter(f => f !== null);
+      
+      if (extracted.length === 0) {
+        return null;
+      }
+      
+      return { or: extracted };
+    }
+
+    // Handle single filter
+    const filterMember = filters.member || filters.dimension;
+    if (filterMember === targetMemberPath) {
+      // Return the filter without modifying it
+      return { ...filters };
+    }
+
+    return null;
+  }
+  
+  /**
+   * Get the used granularity for a time dimension member.
+   * @param {string} cubeName The cube name
+   * @param {string} memberName The time dimension name
+   * @returns {string|null} The granularity string (e.g., 'day', 'month') or null if not used
+   */
+  getUsedGranularity(cubeName, memberName) {
+    const options = this.safeEvaluateSymbolContext().options;
+    if (!options || !options.granularities) {
+      return null;
+    }
+
+    const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
+    
+    // granularities is typically an object mapping memberPath to granularity
+    if (options.granularities[memberPath]) {
+      return options.granularities[memberPath];
+    }
+    
+    return null;
+  }
+
   evaluateSymbolSql(cubeName, name, symbol, memberExpressionType, subPropertyName) {
     const isMemberExpr = !!memberExpressionType;
     if (!memberExpressionType) {
@@ -3315,6 +3423,12 @@ export class BaseQuery {
         type = 'segment';
       }
     }
+
+    // Track used members for isMemberUsed() functionality
+    if (!this.safeEvaluateSymbolContext().usedMembers) {
+      this.safeEvaluateSymbolContext().usedMembers = new Set();
+    }
+    this.safeEvaluateSymbolContext().usedMembers.add(memberPath);
 
     const parentMember = this.safeEvaluateSymbolContext().currentMember;
     if (this.safeEvaluateSymbolContext().memberChildren && parentMember) {
