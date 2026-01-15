@@ -7032,7 +7032,7 @@ export class BaseQuery {
 
         const definition = member.definition?.();
 
-        if (typeof definition.dynamicSql !== 'function') {
+        if (typeof definition.dynamicSql == 'function') {
           const viewResolvedPath = query.resolveViewMemberToCubeMember(memberPath);
 
           if (directAlias && directAlias !== memberPath) {
