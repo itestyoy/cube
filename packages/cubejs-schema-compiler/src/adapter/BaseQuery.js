@@ -3294,7 +3294,7 @@ export class BaseQuery {
    * @returns {boolean} true if the member was used, false otherwise
    */
   isMemberUsed(cubeName, memberName) {
-    const usedMembers = this.safeEvaluateSymbolContext().usedMembers;
+    const usedMembers = this.collectUsedMembersFromQuery();
     if (!usedMembers) {
       return false;
     }
