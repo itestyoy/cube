@@ -3326,8 +3326,8 @@ export class BaseQuery {
       }
 
       const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
-      // Resolve view member to underlying cube member for proper matching
-      const resolvedPath = this.resolveViewMemberToCubeMember(memberPath);
+      // Resolve to final alias member for proper matching
+      const resolvedPath = this.resolveToFinalAliasMember(memberPath);
       return usedMembers.includes(resolvedPath);
     } catch (error) {
       // If any error occurs during collection, return false as safe default
@@ -3349,12 +3349,46 @@ export class BaseQuery {
     }
 
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
-    // Resolve view member to underlying cube member for proper matching
-    const resolvedPath = this.resolveViewMemberToCubeMember(memberPath);
+    // Resolve to final alias member for proper matching
+    const resolvedPath = this.resolveToFinalAliasMember(memberPath);
     const result = this.extractMemberFiltersRecursive(this.options.filters, resolvedPath);
 
     // Only return if we found filters for this member
     return result || null;
+  }
+
+  /**
+   * Resolve a member path to its final aliasMember by following the chain.
+   * Returns the original path if no aliasMember exists.
+   * @param {string} memberPath
+   * @returns {string}
+   */
+  resolveToFinalAliasMember(memberPath) {
+    if (!memberPath || typeof memberPath !== 'string') {
+      return memberPath;
+    }
+
+    const visited = new Set();
+    let current = memberPath;
+
+    while (current && !visited.has(current)) {
+      visited.add(current);
+
+      let def;
+      try {
+        def = this.cubeEvaluator.byPathAnyType(current);
+      } catch {
+        break;
+      }
+
+      if (!def?.aliasMember) {
+        break;
+      }
+
+      current = def.aliasMember;
+    }
+
+    return current || memberPath;
   }
 
   /**
@@ -3404,8 +3438,8 @@ export class BaseQuery {
     // Handle single filter
     const filterMember = filters.member || filters.dimension;
     if (filterMember) {
-      // Resolve view member to underlying cube member for proper matching
-      const resolvedFilterMember = this.resolveViewMemberToCubeMember(filterMember);
+      // Resolve to final alias member for proper matching
+      const resolvedFilterMember = this.resolveToFinalAliasMember(filterMember);
       if (resolvedFilterMember === targetMemberPath) {
         // Return the filter without modifying it
         return { ...filters };
@@ -3427,12 +3461,12 @@ export class BaseQuery {
     }
 
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
-    // Resolve view member to underlying cube member for proper matching
-    const resolvedPath = this.resolveViewMemberToCubeMember(memberPath);
+    // Resolve to final alias member for proper matching
+    const resolvedPath = this.resolveToFinalAliasMember(memberPath);
 
     // Find the time dimension that matches the member path and has a granularity
     const timeDimension = this.timeDimensions.find(td => {
-      const resolvedTdPath = this.resolveViewMemberToCubeMember(td.dimension);
+      const resolvedTdPath = this.resolveToFinalAliasMember(td.dimension);
       return resolvedTdPath === resolvedPath;
     });
 
