@@ -3425,15 +3425,6 @@ export class BaseQuery {
       }
     }
 
-    // Track used members for isMemberUsed() functionality
-    const symbolContext = this.safeEvaluateSymbolContext();
-    if (symbolContext && !symbolContext.usedMembers) {
-      symbolContext.usedMembers = new Set();
-    }
-    if (symbolContext) {
-      symbolContext.usedMembers.add(memberPath);
-    }
-
     const parentMember = this.safeEvaluateSymbolContext().currentMember;
     if (this.safeEvaluateSymbolContext().memberChildren && parentMember) {
       this.safeEvaluateSymbolContext().memberChildren[parentMember] = this.safeEvaluateSymbolContext().memberChildren[parentMember] || [];
