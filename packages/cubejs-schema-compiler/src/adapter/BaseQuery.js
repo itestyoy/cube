@@ -7155,17 +7155,10 @@ export class BaseQuery {
       }
     });
 
-    // Add synthetic members for dynamicSql-referenced members
+    // Add dynamicSql-referenced members
     let allMembers = members;
     if (dynamicSqlMemberPaths.length > 0) {
-      const syntheticMembers = [...new Set(dynamicSqlMemberPaths)].map(memberPath => ({
-        expressionPath: () => memberPath,
-        definition: () => ({ aliasMember: null, ownedByCube: true }),
-        getMembers: () => [{
-          expressionPath: () => memberPath,
-          definition: () => ({ aliasMember: null, ownedByCube: true })
-        }]
-      }));
+      const syntheticMembers = [...new Set(dynamicSqlMemberPaths)].map(memberPath => query.cubeEvaluator.byPathAnyType(memberPath));
       allMembers = members.concat(syntheticMembers);
     }
 
