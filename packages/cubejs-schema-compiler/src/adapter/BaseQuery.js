@@ -3326,7 +3326,9 @@ export class BaseQuery {
       }
 
       const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
-      return usedMembers.includes(memberPath);
+      // Resolve view member to underlying cube member for proper matching
+      const resolvedPath = this.resolveViewMemberToCubeMember(memberPath);
+      return usedMembers.includes(resolvedPath);
     } catch (error) {
       // If any error occurs during collection, return false as safe default
       // This prevents cascading errors in user code
@@ -3347,8 +3349,10 @@ export class BaseQuery {
     }
 
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
-    const result = this.extractMemberFiltersRecursive(this.options.filters, memberPath);
-    
+    // Resolve view member to underlying cube member for proper matching
+    const resolvedPath = this.resolveViewMemberToCubeMember(memberPath);
+    const result = this.extractMemberFiltersRecursive(this.options.filters, resolvedPath);
+
     // Only return if we found filters for this member
     return result || null;
   }
@@ -3399,9 +3403,13 @@ export class BaseQuery {
 
     // Handle single filter
     const filterMember = filters.member || filters.dimension;
-    if (filterMember === targetMemberPath) {
-      // Return the filter without modifying it
-      return { ...filters };
+    if (filterMember) {
+      // Resolve view member to underlying cube member for proper matching
+      const resolvedFilterMember = this.resolveViewMemberToCubeMember(filterMember);
+      if (resolvedFilterMember === targetMemberPath) {
+        // Return the filter without modifying it
+        return { ...filters };
+      }
     }
 
     return null;
@@ -3419,9 +3427,14 @@ export class BaseQuery {
     }
 
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
+    // Resolve view member to underlying cube member for proper matching
+    const resolvedPath = this.resolveViewMemberToCubeMember(memberPath);
 
     // Find the time dimension that matches the member path and has a granularity
-    const timeDimension = this.timeDimensions.find(td => td.dimension === memberPath);
+    const timeDimension = this.timeDimensions.find(td => {
+      const resolvedTdPath = this.resolveViewMemberToCubeMember(td.dimension);
+      return resolvedTdPath === resolvedPath;
+    });
 
     if (timeDimension && timeDimension.granularity) {
       return timeDimension.granularity;
