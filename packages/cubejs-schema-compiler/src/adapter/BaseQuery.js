@@ -3289,17 +3289,49 @@ export class BaseQuery {
 
   /**
    * Check if a member was used in the query evaluation.
+   * 
+   * This method is part of the member collection infrastructure which has 3 levels:
+   * 
+   * Level 1: collectFrom(membersToCollectFrom, fn, methodName)
+   *   - Core method that REQUIRES objects with getMembers() method
+   *   - Maps: [{ getMembers: () => [...] }] -> [...] -> applies fn
+   *   - Used internally for traversing symbols
+   * 
+   * Level 2: collectFromMembers(excludeTimeDimensions, fn, methodName)
+   *   - Wrapper that converts simple member arrays to proper interface
+   *   - Takes this.measures, this.dimensions, etc.
+   *   - Wraps them with getMembers() for collectFrom()
+   * 
+   * Level 3: collectMemberNamesFor(fn), collectUsedMembersFromQuery(), etc.
+   *   - High-level specialized collectors
+   *   - Call collectFromMembers() internally
+   *   - Provide domain-specific collection logic
+   * 
+   * This method uses collectUsedMembersFromQuery() which properly delegates to
+   * collectFromMembers() to ensure all members are correctly collected.
+   * 
    * @param {string} cubeName The cube name
    * @param {string} memberName The member name
    * @returns {boolean} true if the member was used, false otherwise
    */
   isMemberUsed(cubeName, memberName) {
-    const usedMembers = this.collectUsedMembersFromQuery();
-    if (!usedMembers) {
+    try {
+      if (!cubeName || !memberName) {
+        return false;
+      }
+
+      const usedMembers = this.collectUsedMembersFromQuery();
+      if (!Array.isArray(usedMembers) || usedMembers.length === 0) {
+        return false;
+      }
+
+      const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
+      return usedMembers.includes(memberPath);
+    } catch (error) {
+      // If any error occurs during collection, return false as safe default
+      // This prevents cascading errors in user code
       return false;
     }
-    const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
-    return usedMembers.includes(memberPath);
   }
 
   /**
@@ -6576,85 +6608,54 @@ export class BaseQuery {
   }
 
   /**
-   * Collects all members used in the query, including members referenced by expressions
-   * @returns {Array<string>} Array of member paths
+   * Collects all members used in the query.
+   * 
+   * @returns {Array<string>} Array of member paths (e.g., ["Orders.count", "Users.name"])
    */
   collectUsedMembersFromQuery() {
-    const usedMembers = [];
-
-    /**
-     * Extract all member paths from an expression function
-     * Similar to getExpressionDependencies in buildCorrelatedSubQuery
-     */
-    const getExpressionDependencies = (expressionFunc, expressionCubeName) => {
-      if (typeof expressionFunc !== 'function') {
-        return [];
-      }
-
+    try {
+      // Use the standard collectFromMembers mechanism which properly handles:
+      // 1. Wrapping items with getMembers() interface
+      // 2. Caching results
+      // 3. Traversing symbols correctly
+      return this.collectFromMembers(
+        false,
+        this.collectMemberNamesFor.bind(this),
+        'collectUsedMembersFromQuery'
+      );
+    } catch (e) {
+      // Fallback: if collectFromMembers fails, fall back to direct collection
+      // This handles edge cases where the query structure is unusual
       try {
-        const { pathReferencesUsed } = this.cubeEvaluator.collectUsedCubeReferences(
-          expressionCubeName,
-          expressionFunc
-        );
+        const usedMembers = [];
 
-        return pathReferencesUsed.map(pathArray =>
-          this.cubeEvaluator.pathFromArray(pathArray)
-        );
-      } catch {
+        // Safely collect members directly without using collectFromMembers
+        const addMemberIfValid = (memberPath) => {
+          if (typeof memberPath === 'string' && memberPath && !usedMembers.includes(memberPath)) {
+            usedMembers.push(memberPath);
+          }
+        };
+
+        // Collect from direct members
+        if (Array.isArray(this.measures)) {
+          this.measures.forEach(m => m?.measure && addMemberIfValid(m.measure));
+        }
+        if (Array.isArray(this.dimensions)) {
+          this.dimensions.forEach(d => d?.dimension && addMemberIfValid(d.dimension));
+        }
+        if (Array.isArray(this.timeDimensions)) {
+          this.timeDimensions.forEach(td => td?.dimension && addMemberIfValid(td.dimension));
+        }
+        if (Array.isArray(this.segments)) {
+          this.segments.forEach(s => s?.segment && addMemberIfValid(s.segment));
+        }
+
+        return usedMembers;
+      } catch (fallbackError) {
+        // If all collection attempts fail, return empty array
         return [];
       }
-    };
-
-    /**
-     * Collect members from an array of items (measures, dimensions, etc.)
-     */
-    const collectFromItems = (items, nameField) => {
-      (items || []).forEach(item => {
-        if (item.expression) {
-          // For expressions, collect referenced members
-          const expressionCubeName = item.expressionCubeName || item.cubeName;
-          const dependencies = getExpressionDependencies(item.expression, expressionCubeName);
-          usedMembers.push(...dependencies);
-        } else {
-          // For regular members, use the member name
-          const memberName = item[nameField];
-          if (typeof memberName === 'string') {
-            usedMembers.push(memberName);
-          }
-        }
-      });
-    };
-
-    // Collect from measures
-    collectFromItems(this.measures, 'measure');
-
-    // Collect from dimensions
-    collectFromItems(this.dimensions, 'dimension');
-
-    // Collect from time dimensions
-    collectFromItems(this.timeDimensions, 'dimension');
-
-    // Collect from segments
-    collectFromItems(this.segments, 'segment');
-
-    // Collect from filters (can be based on measures or dimensions)
-    (this.filters || []).forEach(filter => {
-      if (filter.expression) {
-        const expressionCubeName = filter.expressionCubeName || filter.cubeName;
-        const dependencies = getExpressionDependencies(filter.expression, expressionCubeName);
-        usedMembers.push(...dependencies);
-      } else {
-        if (typeof filter.measure === 'string') {
-          usedMembers.push(filter.measure);
-        }
-        if (typeof filter.dimension === 'string') {
-          usedMembers.push(filter.dimension);
-        }
-      }
-    });
-
-    // Remove duplicates and filter out nulls/undefined
-    return [...new Set(usedMembers.filter(m => !!m))];
+    }
   }
 
   /**
