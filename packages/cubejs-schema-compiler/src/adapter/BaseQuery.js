@@ -7134,7 +7134,7 @@ export class BaseQuery {
     const query = this;
 
     // Collect members referenced in dynamicSql functions with granularity info
-    const dynamicSqlMemberPaths = [];
+    const dynamicSqlMemberPairs = [];
     members.forEach(member => {
       try {
         const definition = member.definition?.();
@@ -7147,8 +7147,10 @@ export class BaseQuery {
           const granularity = member.granularity || null;
           
           dynamicMembers.forEach(depPath => {
-            const pathWithGranularity = granularity ? `${depPath}.${granularity}` : depPath;
-            dynamicSqlMemberPaths.push(pathWithGranularity);
+            const depMember = query.cubeEvaluator.byPathAnyType(depPath);
+            if (depMember.aliasMember) {
+              dynamicSqlMemberPairs.push([depMember.aliasMember, memberPath]);
+            }
           });
         }
       } catch (e) {
@@ -7156,14 +7158,7 @@ export class BaseQuery {
       }
     });
 
-    // Add dynamicSql-referenced members
-    let allMembers = members;
-    if (dynamicSqlMemberPaths.length > 0) {
-      const syntheticMembers = [...new Set(dynamicSqlMemberPaths)].map(memberPath => query.cubeEvaluator.byPathAnyType(memberPath));
-      allMembers = members.concat(syntheticMembers);
-    }
-
-    const aliases = Object.fromEntries(allMembers.flatMap(
+    const aliases = Object.fromEntries(members.flatMap(
       member => {
         const collectedMembers = query.evaluateSymbolSqlWithContext(
           () => query.collectFrom([member], query.collectMemberNamesFor.bind(query), 'collectMemberNamesFor'),
@@ -7180,7 +7175,7 @@ export class BaseQuery {
           })
           .map(d => [query.cubeEvaluator.byPathAnyType(d).aliasMember, memberPath]);
       }
-    ));
+    ).concat(dynamicSqlMemberPairs));
 
     // No join/graph  might be in place when collecting members from the query with some injected filters,
     // like FILTER_PARAMS or securityContext...
