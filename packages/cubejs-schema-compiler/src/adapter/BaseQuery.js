@@ -3414,17 +3414,19 @@ export class BaseQuery {
    * @returns {string|null} The granularity string (e.g., 'day', 'month') or null if not used
    */
   getUsedGranularity(cubeName, memberName) {
-    if (!this.options || !this.options.granularities) {
+    if (!this.timeDimensions || this.timeDimensions.length === 0) {
       return null;
     }
 
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
-    
-    // granularities is typically an object mapping memberPath to granularity
-    if (this.options.granularities[memberPath]) {
-      return this.options.granularities[memberPath];
+
+    // Find the time dimension that matches the member path and has a granularity
+    const timeDimension = this.timeDimensions.find(td => td.dimension === memberPath);
+
+    if (timeDimension && timeDimension.granularity) {
+      return timeDimension.granularity;
     }
-    
+
     return null;
   }
 
