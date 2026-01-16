@@ -3299,7 +3299,7 @@ export class BaseQuery {
       return false;
     }
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
-    return usedMembers.has(memberPath);
+    return usedMembers.includes(memberPath);
   }
 
   /**
