@@ -3321,14 +3321,19 @@ export class BaseQuery {
       }
 
       const usedMembers = this.collectUsedMembersFromQuery();
-      if (!Array.isArray(usedMembers) || usedMembers.length === 0) {
-        return false;
-      }
-
       const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
       // Resolve to final alias member for proper matching
       const resolvedPath = this.resolveToFinalAliasMember(memberPath);
-      return usedMembers.includes(resolvedPath);
+
+      // Check regular members (case-insensitive comparison)
+      const normalizedPath = resolvedPath.toLowerCase();
+      if (Array.isArray(usedMembers) && usedMembers.some(m => m.toLowerCase() === normalizedPath)) {
+        return true;
+      }
+
+      // Check if member is used as dependency in expression members (SQL pushdown)
+      const expressionMembers = this.findExpressionMembersWithDependency(memberPath);
+      return expressionMembers.length > 0;
     } catch (error) {
       // If any error occurs during collection, return false as safe default
       // This prevents cascading errors in user code
@@ -3349,11 +3354,22 @@ export class BaseQuery {
     }
 
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
-    // Resolve to final alias member for proper matching
-    const resolvedPath = this.resolveToFinalAliasMember(memberPath);
-    const result = this.extractMemberFiltersRecursive(this.options.filters, resolvedPath);
+    // Resolve to final alias member for proper matching (case-insensitive)
+    const resolvedPath = this.resolveToFinalAliasMember(memberPath).toLowerCase();
 
-    // Only return if we found filters for this member
+    // Check filters for the member itself
+    let result = this.extractMemberFiltersRecursive(this.options.filters, resolvedPath);
+
+    // Also check filters for expression members where this member is a dependency (SQL pushdown)
+    const expressionMembers = this.findExpressionMembersWithDependency(memberPath);
+    for (const expr of expressionMembers) {
+      // expressionName is already lowercase from findExpressionMembersWithDependency
+      const exprFilters = this.extractMemberFiltersRecursive(this.options.filters, expr.expressionName.toLowerCase());
+      if (exprFilters) {
+        result = result ? { and: [result, exprFilters] } : exprFilters;
+      }
+    }
+
     return result || null;
   }
 
@@ -3389,6 +3405,56 @@ export class BaseQuery {
     }
 
     return current || memberPath;
+  }
+
+  /**
+   * Find expression members in the query where the given member is a dependency.
+   * Used for SQL pushdown where members don't have traditional member paths.
+   * @param {string} memberPath - The member path to check as dependency
+   * @returns {Array<{expressionName: string, dependencies: string[]}>} Expression members info
+   */
+  findExpressionMembersWithDependency(memberPath) {
+    if (!memberPath || typeof memberPath !== 'string') {
+      return [];
+    }
+
+    const resolvedPath = this.resolveToFinalAliasMember(memberPath);
+    const normalizedPath = resolvedPath.toLowerCase();
+    const result = [];
+
+    const checkMembers = (members) => {
+      (members || []).forEach(member => {
+        if (member.expression && typeof member.expression === 'function') {
+          const expressionCubeName = member.expressionCubeName || member.cubeName;
+          try {
+            const { pathReferencesUsed } = this.cubeEvaluator.collectUsedCubeReferences(
+              expressionCubeName,
+              member.expression
+            );
+            const dependencies = pathReferencesUsed.map(pathArray => {
+              const depPath = this.cubeEvaluator.pathFromArray(pathArray);
+              return this.resolveToFinalAliasMember(depPath).toLowerCase();
+            });
+
+            if (dependencies.includes(normalizedPath)) {
+              const expressionName = member.expressionName ||
+                (member.cubeName && member.name ? `${member.cubeName}.${member.name}` : null);
+              if (expressionName) {
+                result.push({ expressionName, dependencies });
+              }
+            }
+          } catch {
+            // Ignore errors
+          }
+        }
+      });
+    };
+
+    checkMembers(this.dimensions);
+    checkMembers(this.timeDimensions);
+    checkMembers(this.measures);
+
+    return result;
   }
 
   /**
@@ -3438,8 +3504,8 @@ export class BaseQuery {
     // Handle single filter
     const filterMember = filters.member || filters.dimension;
     if (filterMember) {
-      // Resolve to final alias member for proper matching
-      const resolvedFilterMember = this.resolveToFinalAliasMember(filterMember);
+      // Resolve to final alias member for proper matching (case-insensitive)
+      const resolvedFilterMember = this.resolveToFinalAliasMember(filterMember).toLowerCase();
       if (resolvedFilterMember === targetMemberPath) {
         // Return the filter without modifying it
         return { ...filters };
@@ -3461,13 +3527,38 @@ export class BaseQuery {
     }
 
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
-    // Resolve to final alias member for proper matching
-    const resolvedPath = this.resolveToFinalAliasMember(memberPath);
+    // Resolve to final alias member for proper matching (case-insensitive)
+    const resolvedPath = this.resolveToFinalAliasMember(memberPath).toLowerCase();
 
     // Find the time dimension that matches the member path and has a granularity
     const timeDimension = this.timeDimensions.find(td => {
-      const resolvedTdPath = this.resolveToFinalAliasMember(td.dimension);
-      return resolvedTdPath === resolvedPath;
+      // Check regular dimension path
+      if (td.dimension) {
+        const resolvedTdPath = this.resolveToFinalAliasMember(td.dimension).toLowerCase();
+        if (resolvedTdPath === resolvedPath) {
+          return true;
+        }
+      }
+      // Check expression time dimension dependencies (SQL pushdown)
+      if (td.expression && typeof td.expression === 'function') {
+        const expressionCubeName = td.expressionCubeName || td.cubeName;
+        try {
+          const { pathReferencesUsed } = this.cubeEvaluator.collectUsedCubeReferences(
+            expressionCubeName,
+            td.expression
+          );
+          const dependencies = pathReferencesUsed.map(pathArray => {
+            const depPath = this.cubeEvaluator.pathFromArray(pathArray);
+            return this.resolveToFinalAliasMember(depPath).toLowerCase();
+          });
+          if (dependencies.includes(resolvedPath)) {
+            return true;
+          }
+        } catch {
+          // Ignore errors
+        }
+      }
+      return false;
     });
 
     if (timeDimension && timeDimension.granularity) {
