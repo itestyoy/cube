@@ -24,6 +24,7 @@ impl SplitRules {
             ("Upper", false),
             ("Ceil", false),
             ("Floor", false),
+            ("Abs", true),
             ("CharacterLength", false),
             ("Substr", false),
             ("Lpad", false),

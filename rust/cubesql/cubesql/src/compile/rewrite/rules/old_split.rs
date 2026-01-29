@@ -1993,6 +1993,20 @@ impl RewriteRules for OldSplitRules {
                     vec![outer_aggregate_split_replacer("?expr", "?cube")],
                 ),
             ),
+            // Abs
+            rewrite(
+                "split-push-down-abs-inner-aggr-replacer",
+                inner_aggregate_split_replacer(self.fun_expr("Abs", vec!["?expr"]), "?cube"),
+                inner_aggregate_split_replacer("?expr", "?cube"),
+            ),
+            rewrite(
+                "split-push-down-abs-outer-aggr-replacer",
+                outer_aggregate_split_replacer(self.fun_expr("Abs", vec!["?expr"]), "?cube"),
+                self.fun_expr(
+                    "Abs",
+                    vec![outer_aggregate_split_replacer("?expr", "?cube")],
+                ),
+            ),
             // Cast
             transforming_chain_rewrite(
                 "split-push-down-cast-inner-replacer",
