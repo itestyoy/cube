@@ -1048,7 +1048,7 @@ impl LogicalPlanAnalysis {
                     panic!("Expected ScalarUDF but got: {:?}", expr);
                 }
             }
-            LogicalPlanLanguage::ScalarFunctionExpr(_) => {
+            LogicalPlanLanguage::ScalarFunctionExpr(params) => {
                 let expr = node_to_expr(
                     enode,
                     &egraph.analysis.cube_context,
@@ -1058,6 +1058,11 @@ impl LogicalPlanAnalysis {
                 .ok()?;
 
                 if let Expr::ScalarFunction { fun, .. } = &expr {
+                    if let BuiltinScalarFunction::Abs = fun {
+                        if let Some(value) = Self::fold_abs_constant(constant_node(params[1])) {
+                            return Some(ConstantFolding::Scalar(value));
+                        }
+                    }
                     // Removed stable evaluation as it affects caching and SQL push down.
                     // Whatever stable function should be evaluated it should be addressed as a special rewrite rule
                     // as it seems LogicalPlanAnalysis can't change it's state.
@@ -1160,6 +1165,32 @@ impl LogicalPlanAnalysis {
                     .flatten()
                     .collect(),
             ),
+            _ => None,
+        }
+    }
+
+    fn fold_abs_constant(args_constant: Option<ConstantFolding>) -> Option<ScalarValue> {
+        match args_constant? {
+            ConstantFolding::Scalar(v) => Self::abs_scalar_value(&v),
+            ConstantFolding::List(list) => list.first().and_then(Self::abs_scalar_value),
+        }
+    }
+
+    fn abs_scalar_value(value: &ScalarValue) -> Option<ScalarValue> {
+        match value {
+            ScalarValue::Int8(Some(v)) => v.checked_abs().map(|v| ScalarValue::Int8(Some(v))),
+            ScalarValue::Int16(Some(v)) => v.checked_abs().map(|v| ScalarValue::Int16(Some(v))),
+            ScalarValue::Int32(Some(v)) => v.checked_abs().map(|v| ScalarValue::Int32(Some(v))),
+            ScalarValue::Int64(Some(v)) => v.checked_abs().map(|v| ScalarValue::Int64(Some(v))),
+            ScalarValue::UInt8(Some(v)) => Some(ScalarValue::UInt8(Some(*v))),
+            ScalarValue::UInt16(Some(v)) => Some(ScalarValue::UInt16(Some(*v))),
+            ScalarValue::UInt32(Some(v)) => Some(ScalarValue::UInt32(Some(*v))),
+            ScalarValue::UInt64(Some(v)) => Some(ScalarValue::UInt64(Some(*v))),
+            ScalarValue::Float32(Some(v)) => Some(ScalarValue::Float32(Some(v.abs()))),
+            ScalarValue::Float64(Some(v)) => Some(ScalarValue::Float64(Some(v.abs()))),
+            ScalarValue::Decimal128(Some(v), precision, scale) => v
+                .checked_abs()
+                .map(|v| ScalarValue::Decimal128(Some(v), *precision, *scale)),
             _ => None,
         }
     }
@@ -1380,5 +1411,42 @@ impl Analysis<LogicalPlanLanguage> for LogicalPlanAnalysis {
 
     fn allow_ematching_cycles(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn abs_scalar_value_handles_integers() {
+        assert_eq!(
+            LogicalPlanAnalysis::abs_scalar_value(&ScalarValue::Int64(Some(-5))),
+            Some(ScalarValue::Int64(Some(5)))
+        );
+        assert_eq!(
+            LogicalPlanAnalysis::abs_scalar_value(&ScalarValue::Int32(Some(-1))),
+            Some(ScalarValue::Int32(Some(1)))
+        );
+    }
+
+    #[test]
+    fn abs_scalar_value_handles_unsigned_and_float() {
+        assert_eq!(
+            LogicalPlanAnalysis::abs_scalar_value(&ScalarValue::UInt16(Some(7))),
+            Some(ScalarValue::UInt16(Some(7)))
+        );
+        assert_eq!(
+            LogicalPlanAnalysis::abs_scalar_value(&ScalarValue::Float64(Some(-3.5))),
+            Some(ScalarValue::Float64(Some(3.5)))
+        );
+    }
+
+    #[test]
+    fn abs_scalar_value_handles_decimal128() {
+        assert_eq!(
+            LogicalPlanAnalysis::abs_scalar_value(&ScalarValue::Decimal128(Some(-1234), 10, 2)),
+            Some(ScalarValue::Decimal128(Some(1234), 10, 2))
+        );
     }
 }
