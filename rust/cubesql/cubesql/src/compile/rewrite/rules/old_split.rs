@@ -4423,6 +4423,23 @@ impl RewriteRules for OldSplitRules {
             true,
             None,
         ));
+        // Abs
+        rules.extend(self.outer_aggr_group_expr_aggr_combinator_rewrite(
+            "split-push-down-abs-replacer",
+            |split_replacer| split_replacer(self.fun_expr("Abs", vec!["?expr"]), "?cube"),
+            |_| vec![],
+            |split_replacer| {
+                self.fun_expr(
+                    "Abs",
+                    vec![split_replacer("?expr".to_string(), "?cube")],
+                )
+            },
+            |_, _| true,
+            true,
+            false,
+            true,
+            Some(vec![("?expr", column_expr("?column"))]),
+        ));
         // Substr
         rules.extend(self.outer_aggr_group_expr_aggr_combinator_rewrite(
             "split-push-down-substr-replacer",
