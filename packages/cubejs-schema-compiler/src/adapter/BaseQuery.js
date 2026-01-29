@@ -4623,7 +4623,7 @@ export class BaseQuery {
      * Resolve view member to underlying cube member (preserves granularity)
      */
     const resolveViewPath = (path) => typeof path === 'string'
-      ? this.resolveViewMemberToCubeMember(path)
+      ? this.resolveToFinalAliasMember(path)
       : path;
 
     /**
@@ -6814,7 +6814,7 @@ export class BaseQuery {
       if (!memberPath || typeof memberPath !== 'string') {
         return null;
       }
-      return this.resolveViewMemberToCubeMember(memberPath);
+      return this.resolveToFinalAliasMember(memberPath);
     };
 
     // Helper to categorize a member path
@@ -6940,7 +6940,7 @@ export class BaseQuery {
             .map(path => this.cubeEvaluator.pathFromArray(path))
             .concat(depsFromArgs)
             // Map view members back to base cube members so rollup matching works with dynamicSql
-            .map(path => this.resolveViewMemberToCubeMember(path))
+            .map(path => this.resolveToFinalAliasMember(path))
         )
       ];
 
@@ -7183,86 +7183,6 @@ export class BaseQuery {
    */
   allBackAliasMembers() {
     return this.backAliasMembers(this.flattenAllMembers());
-  }
-
-  /**
-   * Resolve a member path from a view to its underlying cube member.
-   * Returns the original path if no alias chain is found.
-   * @param {string} memberPath
-   * @returns {string}
-   */
-  resolveViewMemberToCubeMember(memberPath) {
-    if (!memberPath || typeof memberPath !== 'string') {
-      return memberPath;
-    }
-
-    const { path } = this.cubeEvaluator.constructor.joinHintFromPath(memberPath);
-    const parts = path.split('.');
-    let granularity;
-
-    if (parts.length === 3) {
-      granularity = parts.pop();
-    }
-
-    let current = parts.join('.');
-    const visited = new Set();
-    const originalCubeName = parts[0];
-    const originalCube = originalCubeName && this.cubeEvaluator.cubeFromPath(originalCubeName);
-    const originalIsView = !!originalCube?.isView;
-
-    while (current && !visited.has(current)) {
-      visited.add(current);
-      let def;
-      try {
-        def = this.cubeEvaluator.byPathAnyType(current);
-      } catch {
-        // If the path isn't defined on the view, try to resolve it through includedMembers
-        if (originalIsView && current.startsWith(`${originalCubeName}.`)) {
-          const field = current.split('.').slice(1).join('.');
-          const included = originalCube?.includedMembers || [];
-          const matchedIncluded = included.find(m => m.name === field || m.memberPath?.endsWith(`.${field}`));
-          if (matchedIncluded?.memberPath) {
-            current = matchedIncluded.memberPath;
-            continue;
-          }
-        }
-        break;
-      }
-
-      // For view members included without aliasMember, try to hop via includedMembers metadata
-      if (!def?.aliasMember && originalIsView && current.startsWith(`${originalCubeName}.`)) {
-        const field = current.split('.').slice(1).join('.');
-        const included = originalCube?.includedMembers || [];
-        const matchedIncluded = included.find(m => m.name === field || m.memberPath?.endsWith(`.${field}`));
-        if (matchedIncluded?.memberPath && matchedIncluded.memberPath !== current) {
-          current = matchedIncluded.memberPath;
-          continue;
-        }
-      }
-
-      if (!def?.aliasMember) {
-        break;
-      }
-
-      const target = def.aliasMember;
-      const targetCubeName = target?.split('.')?.[0];
-      const targetCube = targetCubeName && this.cubeEvaluator.cubeFromPath(targetCubeName);
-      const targetIsView = !!targetCube?.isView;
-
-      // If starting from a view and the alias points to a non-view, stop at the first hop
-      if (originalIsView && !targetIsView) {
-        current = target;
-        break;
-      }
-
-      current = target;
-    }
-
-    if (!current) {
-      return memberPath;
-    }
-
-    return granularity ? `${current}.${granularity}` : current;
   }
 
   /**
