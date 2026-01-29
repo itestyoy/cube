@@ -31,12 +31,15 @@ export type SegmentDefinition = {
 export type DimensionDefinition = {
   type: string;
   sql(): string;
+  dynamicSql?: (...args: Array<unknown>) => () => string;
   primaryKey?: true;
   ownedByCube: boolean;
   fieldType?: string;
   multiStage?: boolean;
   shiftInterval?: string;
   order?: 'asc' | 'desc';
+  key?: (...args: any[]) => ToString;
+  keyReference?: string;
 };
 
 export type TimeShiftDefinition = {
@@ -55,7 +58,18 @@ export type TimeShiftDefinitionReference = {
 
 export type MeasureDefinition = {
   type: string;
-  sql(): string;
+  sql: () => string;
+  dynamicSql?: (...args: Array<unknown>) => () => string;
+  correlatedQuery?: {
+    // Each entry: [leftDimension, operator?] or just leftDimension string
+    allowedDimensions?: (string | [string, string?] | [[string, string?], string?])[];
+    calculateMeasures?: string[];
+    optionOverrides?: Record<string, any>;
+    subQueryAlias?: string;
+    includeFilters?: any[];
+    excludeFilters?: string[];
+    filtersRequiresDimension?: string[];
+  };
   ownedByCube: boolean;
   rollingWindow?: any
   filters?: any

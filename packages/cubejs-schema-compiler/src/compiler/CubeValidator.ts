@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import cronParser from 'cron-parser';
 
-import type { CubeSymbols, CubeDefinition } from './CubeSymbols';
+import { CubeSymbols, CubeDefinition, ToString } from './CubeSymbols';
 import type { ErrorReporter } from './ErrorReporter';
 import { CompilerInterface } from './PrepareCompiler';
 
@@ -268,6 +268,7 @@ const BaseDimensionWithoutSubQuery = {
   public: Joi.boolean().strict(),
   title: Joi.string(),
   description: Joi.string(),
+  dynamicSql: Joi.func(),
   suggestFilterValues: Joi.boolean().strict(),
   enableSuggestions: Joi.boolean().strict(),
   format: Joi.when('type', {
@@ -279,6 +280,8 @@ const BaseDimensionWithoutSubQuery = {
   }),
   meta: Joi.any(),
   order: Joi.string().valid('asc', 'desc'),
+  key: Joi.func(),
+  keyReference: Joi.string(),
   values: Joi.when('type', {
     is: 'switch',
     then: Joi.array().items(Joi.string()),
@@ -395,6 +398,33 @@ const BaseMeasure = {
   ),
   title: Joi.string(),
   description: Joi.string(),
+  dynamicSql: Joi.func(),
+  correlatedQuery: Joi.object({
+    allowedDimensions: Joi.array().items(
+      Joi.alternatives().try(
+        Joi.string(),
+        Joi.array().items(
+          Joi.alternatives().try(
+            Joi.string(),
+            Joi.array().items(Joi.string().required(), Joi.string()).min(1).max(2)
+          ).required(),
+          Joi.string(),
+          Joi.string()
+        ).min(1).max(3)
+      )
+    ),
+    calculateMeasures: Joi.array().items(Joi.string()).min(1),
+    subQueryAlias: Joi.string(),
+    optionOverrides: Joi.object(),
+    includeFilters: Joi.array().items(Joi.object()),
+    excludeFilters: Joi.array().items(Joi.string()),
+    filtersRequiresDimension: Joi.array().items(Joi.string()),
+  }).custom((value, helpers) => {
+    if (!value.allowedDimensions?.length && !value.calculateMeasures?.length) {
+      return helpers.error('any.invalid', { message: 'correlatedQuery requires allowedDimensions or calculateMeasures' });
+    }
+    return value;
+  }),
   rollingWindow: Joi.alternatives().conditional(
     Joi.ref('.type'), [
       { is: 'year_to_date', then: YearToDate },
@@ -1148,6 +1178,11 @@ export class CubeValidator implements CompilerInterface {
     };
     const result = cube.isView ? viewSchema.validate(cube, options) : cubeSchema.validate(cube, options);
 
+    if (cube.isView) {
+      // We need to verify that leaf cubes in view are present only once
+      this.validateUniqueLeafCubes(cube.name, cube.cubes, errorReporter);
+    }
+
     if (result.error != null) {
       errorReporter.error(formatErrorMessage(result.error));
     } else {
@@ -1155,6 +1190,55 @@ export class CubeValidator implements CompilerInterface {
     }
 
     return result;
+  }
+
+  /**
+   * Validates that each cube appears only once within each root path in a view.
+   * This ensures that there is only one path to reach each cube within each root's join graph.
+   * For example: 'a.b.c' + 'd.b.c' is valid (different roots), but 'a.b.c' + 'a.d.c' is invalid (same root 'a').
+   */
+  private validateUniqueLeafCubes(viewName: string, cubesArray: any[], errorReporter: ErrorReporter) {
+    if (!cubesArray || cubesArray.length === 0) {
+      return;
+    }
+
+    const rootCubePaths = new Map<string, Map<string, Set<string>>>();
+
+    for (const cube of cubesArray) {
+      try {
+        const fullPath = this.cubeSymbols.evaluateReferences(null, cube.joinPath as () => ToString, { collectJoinHints: true });
+        const split = fullPath.split('.');
+        const rootCube = split[0];
+
+        if (!rootCubePaths.has(rootCube)) {
+          rootCubePaths.set(rootCube, new Map<string, Set<string>>());
+        }
+
+        const cubesJoinPaths = rootCubePaths.get(rootCube)!;
+
+        for (let i = 0; i < split.length; i++) {
+          const cubeName = split[i];
+          const path = split.slice(0, i + 1).join('.');
+
+          if (!cubesJoinPaths.has(cubeName)) {
+            cubesJoinPaths.set(cubeName, new Set<string>());
+          }
+          cubesJoinPaths.get(cubeName)!.add(path);
+        }
+      } catch (e) {
+        // Ignore errors during joinPath evaluation - cube may not be defined yet
+      }
+    }
+
+    // Check for cubes with multiple paths within each root
+    for (const [rootCube, cubesJoinPaths] of rootCubePaths.entries()) {
+      for (const [cubeName, paths] of cubesJoinPaths.entries()) {
+        if (paths.size > 1) {
+          const pathList = Array.from(paths).map(path => `'${path}'`).join(', ');
+          errorReporter.error(`Views can't define multiple join paths to the same cube. View '${viewName}' has multiple paths to '${cubeName}' within root '${rootCube}': ${pathList}. Use extends to create a child cube and reference it instead`);
+        }
+      }
+    }
   }
 
   public isCubeValid(cube: CubeDefinition): boolean {
