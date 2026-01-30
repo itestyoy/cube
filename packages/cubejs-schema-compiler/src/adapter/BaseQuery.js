@@ -5046,7 +5046,7 @@ export class BaseQuery {
      * 
      * Result: Array of validated dimension mappings with metadata
      */
-    const validatedAllowedDimensions = allowedDimensions
+    let validatedAllowedDimensions = allowedDimensions
       .map(({ leftDimension, rightDimension, operator }) => {
         const normalizedRightDimension = normalizeDimensionPath(rightDimension);
         if (!normalizedRightDimension) return null;
@@ -5102,11 +5102,11 @@ export class BaseQuery {
       });
 
     // Create quick-lookup sets
-    const allowedSubQueryDimensions = new Set(
+    let allowedSubQueryDimensions = new Set(
       hasAllowedDimensions ? validatedAllowedDimensions.map(d => d.leftDimension) : []
     );
 
-    const allowedRightDimensionsSet = new Set(
+    let allowedRightDimensionsSet = new Set(
       validatedAllowedDimensions.map(d => d.rightDimension)
     );
 
@@ -5185,6 +5185,8 @@ export class BaseQuery {
     // Path B: Implicit expression dimensions (via dependencies)
     const processedExpressions = new Set();
     
+    const expressionsWithAllDeps = [];
+
     validatedAllowedDimensions.forEach(({ rightDimension }) => {
       const expressionsUsingDep = [
         ...(mainQueryContext.dimensions.map.get(rightDimension) || []),
@@ -5242,9 +5244,38 @@ export class BaseQuery {
               `[${[...leftCubeNames].join(', ')}]. All must remap to same cube.`
             );
           }
+
+          // Mark expressions whose dependencies are fully covered
+          expressionsWithAllDeps.push(item);
         }
       }
     });
+
+    /**
+     * Auto-include expression dimension in allowedDimensions when all its dependencies are allowed.
+     * This keeps correlation symmetric: expression is present on both sides, not just its dependencies.
+     */
+    if (hasAllowedDimensions && expressionsWithAllDeps.length) {
+      expressionsWithAllDeps.forEach((exprItem) => {
+        const exprName = exprItem.expressionName;
+
+        // Skip if already explicitly allowed
+        if (allowedRightDimensionsSet.has(exprName)) return;
+
+        const synthesized = {
+          leftDimension: exprName,
+          rightDimension: exprName,
+          originalRightDimension: exprItem.expressionName,
+          operator: '=',
+          isExpressionDimension: true,
+          expressionMetadata: exprItem
+        };
+
+        validatedAllowedDimensions.push(synthesized);
+        allowedRightDimensionsSet.add(exprName);
+        allowedSubQueryDimensions.add(exprName);
+      });
+    }
 
     // ============================================================================
     // STEP 7: Validate calculateMeasures
@@ -5305,8 +5336,8 @@ export class BaseQuery {
         return {
           expression: originalDim.expression,
           cubeName: leftCubeName,
-          name: leftDimension.split('.').pop(),
-          expressionName: leftDimension,
+          name: originalDim.name,
+          expressionName: originalDim.expressionName,
           definition: originalDim.definition
         };
       };
@@ -5705,17 +5736,14 @@ export class BaseQuery {
      * This is the key difference: Expression dimensions in WHERE clause use their SQL expression,
      * not just a column reference
      */
-    const getMainQueryDimensionSql = (rightDimension, granularityOverride) => {
+    const getMainQueryDimensionSql = (rightDimension) => {
       const mainQueryDimension = findDimensionInArray(rightDimension, mainQueryTimeDimensionsForJoin) ||
                                 findDimensionInArray(rightDimension, mainQueryDimensionsForJoin);
-
-      const contextOverride = {};
-      if(granularityOverride) contextOverride.granularityOverride = granularityOverride;
 
       if(mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
         const rewrittenSql = this.evaluateSymbolSqlWithContext(
           () => mainQueryDimension.dimensionSql(),
-          { ...contextOverride, renderedReference: mainQueryRenderedReference, rollupQuery: true }
+          { renderedReference: mainQueryRenderedReference, rollupQuery: true }
         );
         
         if (typeof rewrittenSql === 'string') return rewrittenSql;
@@ -5760,25 +5788,6 @@ export class BaseQuery {
         
         if (!subQueryDimension) return null;
 
-        let granularityOverride = null;
-
-        if (subQueryDimension?.expression) {
-          const deps = getExpressionDependencies(
-            subQueryDimension.expression,
-            subQueryDimension.expressionCubeName || subQueryDimension.cubeName
-          );
-
-          const depsGranularities = deps
-            .map(dep => parseGranularityFromPath(normalizeDimensionPath(dep)).granularity)
-            .filter(Boolean);
-
-          const depsMinGranularity = depsGranularities
-            .reduce((acc, g) => this.minGranularity(acc, g), null);
-
-          granularityOverride = depsMinGranularity;
-
-        }
-
         const mainQueryDimension = findDimensionInArray(rightDimension, mainQueryTimeDimensionsForJoin) ||
                                   findDimensionInArray(rightDimension, mainQueryDimensionsForJoin);
 
@@ -5788,7 +5797,7 @@ export class BaseQuery {
         if (!subQueryColumnName) return null;
 
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(subQueryColumnName)}`;
-        const mainQueryColumn = getMainQueryDimensionSql(rightDimension, granularityOverride);
+        const mainQueryColumn = getMainQueryDimensionSql(rightDimension);
 
         return `${subQueryColumn} ${operator} ${mainQueryColumn}`;
       })
