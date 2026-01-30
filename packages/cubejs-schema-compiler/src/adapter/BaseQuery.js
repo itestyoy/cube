@@ -5409,10 +5409,12 @@ export class BaseQuery {
                                       !existsInMainQueryDimensions && 
                                       !existsInMainQueryTimeDimensions;
           
+          if (existsInMainQueryDimensions) {
+            addDimension(leftDimension, rightDimension);
+          }
+
           if (existsInMainQueryTimeDimensions) {
             addTimeDimension(leftDimension, rightDimension);
-          } else if (existsInMainQueryDimensions) {
-            addDimension(leftDimension, rightDimension);
           } else if (existsOnlyInFilters && !(leftIsTimeDimension && rightIsTimeDimension)) {
             addDimension(leftDimension, rightDimension);
           }
@@ -5682,12 +5684,16 @@ export class BaseQuery {
      */
     const getSubQueryColumnName = (dimension) => {
       const timeDimensionConfig = findDimensionInArray(dimension, subQueryTimeDimensions);
-      if (timeDimensionConfig) return timeDimensionConfig.unescapedAliasName();
+      if (timeDimensionConfig) {
+        if (timeDimensionConfig.granularity) {
+          return timeDimensionConfig.unescapedAliasName();
+        }
+      }
 
       const dimensionConfig = findDimensionInArray(dimension, subQueryDimensions);
       if (dimensionConfig?.unescapedAliasName) return dimensionConfig.unescapedAliasName();
 
-      return this.aliasName(dimension);
+      return null;
     };
 
     /**
@@ -5736,13 +5742,16 @@ export class BaseQuery {
 
         if (!mainQueryDimension) return null;
 
-        const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(getSubQueryColumnName(leftDimension))}`;
+        const subQueryColumnName = getSubQueryColumnName(leftDimension);
+        if (!subQueryColumnName) return null;
+
+        const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(subQueryColumnName)}`;
         const mainQueryColumn = getMainQueryDimensionSql(rightDimension);
 
         return `${subQueryColumn} ${operator} ${mainQueryColumn}`;
       })
       .filter(Boolean)
-      .join(' AND ') || '1=1';
+      .join(' AND ') || 'true';
 
     // ============================================================================
     // STEP 16: Return result
