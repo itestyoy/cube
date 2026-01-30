@@ -5705,20 +5705,43 @@ export class BaseQuery {
      * This is the key difference: Expression dimensions in WHERE clause use their SQL expression,
      * not just a column reference
      */
-    const getMainQueryDimensionSql = (rightDimension) => {
+    const getMainQueryDimensionSql = (rightDimension, granularityOverride) => {
       const mainQueryDimension = findDimensionInArray(rightDimension, mainQueryTimeDimensionsForJoin) ||
                                 findDimensionInArray(rightDimension, mainQueryDimensionsForJoin);
 
-      if (mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
+      const contextOverride = {};
+      if(granularityOverride) contextOverride.granularityOverride = granularityOverride;
+
+      if(mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
         const rewrittenSql = this.evaluateSymbolSqlWithContext(
           () => mainQueryDimension.dimensionSql(),
-          { renderedReference: mainQueryRenderedReference, rollupQuery: true }
+          { ...contextOverride, renderedReference: mainQueryRenderedReference, rollupQuery: true }
         );
         
         if (typeof rewrittenSql === 'string') return rewrittenSql;
       }
 
       return mainQueryDimension?.dimensionSql?.() || this.dimensionSql(mainQueryDimension);
+    };
+
+    const parseGranularityFromPath = (path) => {
+      if (!path) return { dimPath: null, granularity: null };
+
+      const parts = path.split('.');
+
+      if (parts.length < 3) return { dimPath: path, granularity: null };
+
+      const maybeGranularity = parts[parts.length - 1];
+      const knownGranularity = standardGranularitiesParents[maybeGranularity];
+
+      if (knownGranularity) {
+        return {
+          dimPath: parts.slice(0, parts.length - 1).join('.'),
+          granularity: maybeGranularity
+        };
+      }
+
+      return { dimPath: path, granularity: null };
     };
 
     /**
@@ -5732,10 +5755,29 @@ export class BaseQuery {
      */
     const correlatedWhereClause = validatedAllowedDimensions
       .map(({ leftDimension, rightDimension, operator }) => {
-        const existsInSubQuery = findDimensionInArray(leftDimension, subQueryTimeDimensions) ||
-                                findDimensionInArray(leftDimension, subQueryDimensions);
+        const subQueryTimeDimension = findDimensionInArray(leftDimension, subQueryTimeDimensions);
+        const subQueryDimension = subQueryTimeDimension || findDimensionInArray(leftDimension, subQueryDimensions);
         
-        if (!existsInSubQuery) return null;
+        if (!subQueryDimension) return null;
+
+        let granularityOverride = null;
+
+        if (subQueryDimension?.expression) {
+          const deps = getExpressionDependencies(
+            subQueryDimension.expression,
+            subQueryDimension.expressionCubeName || subQueryDimension.cubeName
+          );
+
+          const depsGranularities = deps
+            .map(dep => parseGranularityFromPath(normalizeDimensionPath(dep)).granularity)
+            .filter(Boolean);
+
+          const depsMinGranularity = depsGranularities
+            .reduce((acc, g) => this.minGranularity(acc, g), null);
+
+          granularityOverride = depsMinGranularity;
+
+        }
 
         const mainQueryDimension = findDimensionInArray(rightDimension, mainQueryTimeDimensionsForJoin) ||
                                   findDimensionInArray(rightDimension, mainQueryDimensionsForJoin);
@@ -5746,7 +5788,7 @@ export class BaseQuery {
         if (!subQueryColumnName) return null;
 
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(subQueryColumnName)}`;
-        const mainQueryColumn = getMainQueryDimensionSql(rightDimension);
+        const mainQueryColumn = getMainQueryDimensionSql(rightDimension, granularityOverride);
 
         return `${subQueryColumn} ${operator} ${mainQueryColumn}`;
       })
