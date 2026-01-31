@@ -5324,8 +5324,8 @@ export class BaseQuery {
        * Input:  { expression: (o) => o.total / o.count, expressionName: 'Orders.avgPrice', cubeName: 'Orders' }
        * Output: { expression: (o) => o.total / o.count, expressionName: 'Activity.avgPrice', cubeName: 'Activity' }
        */
-      const createExpressionDimension = (leftDimension, originalDim) => {
-        const leftCubeName = getCubeName(leftDimension);
+      const createExpressionDimension = (leftDimension, originalDim, expressionMetadata) => {
+        const leftCubeName = getCubeName(leftDimension) || expressionMetadata.cubeName;
 
         if (!leftCubeName) {
           throw new UserError(
@@ -5354,7 +5354,7 @@ export class BaseQuery {
         if (expressionMetadata) {
           // Explicit expression dimension
           timeDimension = {
-            dimension: createExpressionDimension(leftDimension, expressionMetadata.original),
+            dimension: createExpressionDimension(leftDimension, expressionMetadata.original, expressionMetadata),
             granularity: expressionMetadata.original.granularity,
             dateRange: expressionMetadata.original.dateRange,
             boundaryDateRange: expressionMetadata.original.boundaryDateRange
@@ -5366,7 +5366,7 @@ export class BaseQuery {
 
           if (rightTdMetadata?.isExpression) {
             timeDimension = {
-              dimension: createExpressionDimension(leftDimension, rightTdMetadata.original),
+              dimension: createExpressionDimension(leftDimension, rightTdMetadata.original, expressionMetadata),
               granularity: rightTdMetadata.original.granularity,
               dateRange: rightTdMetadata.original.dateRange,
               boundaryDateRange: rightTdMetadata.original.boundaryDateRange
@@ -5402,13 +5402,13 @@ export class BaseQuery {
         if (processed.dimensions.has(leftDimension)) return;
 
         if (expressionMetadata) {
-          subQueryDimensions.push(createExpressionDimension(leftDimension, expressionMetadata.original));
+          subQueryDimensions.push(createExpressionDimension(leftDimension, expressionMetadata.original, expressionMetadata));
         } else {
           const rightDimItems = mainQueryContext.dimensions.map.get(rightDimension) || [];
           const rightDimMetadata = rightDimItems.find(item => !item.isExpression) || rightDimItems[0];
 
           if (rightDimMetadata?.isExpression) {
-            subQueryDimensions.push(createExpressionDimension(leftDimension, rightDimMetadata.original));
+            subQueryDimensions.push(createExpressionDimension(leftDimension, rightDimMetadata.original, expressionMetadata));
           } else {
             subQueryDimensions.push(leftDimension);
           }
