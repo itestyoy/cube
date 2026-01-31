@@ -4795,7 +4795,7 @@ export class BaseQuery {
             
             if (dependencies.length > 0) {
 
-              const resolvedExpressionCubeNames = new Set(dependencies.map(e => getCubeName(normalizeDimensionPath(e))));
+              const resolvedExpressionCubeNames = [...new Set(dependencies.map(e => getCubeName(normalizeDimensionPath(e))))];
               // Create entry for each dependency
               dependencies.forEach(depPath => {
                 result.push({
