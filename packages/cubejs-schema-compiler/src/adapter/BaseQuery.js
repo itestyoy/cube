@@ -5326,7 +5326,14 @@ export class BaseQuery {
        * Output: { expression: (o) => o.total / o.count, expressionName: 'Activity.avgPrice', cubeName: 'Activity' }
        */
       const createExpressionDimension = (originalDim) => {
-        return originalDim;
+        return {
+          expression: originalDim.expression,
+          cubeName: originalDim.cubeName,
+          name: originalDim.name,
+          expressionName: originalDim.expressionName,
+          definition: originalDim.definition,
+          groupingSet: originalDim.groupingSet
+        };
       };
 
       /**
@@ -5607,14 +5614,6 @@ export class BaseQuery {
     const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
 
     const subQuery = this.newSubQuery(subQueryOptions);
-
-    throw new UserError(
-      `Error, subQuery: ${JSON.stringify(subQueryOptions)}`
-    );
-
-    subQueryOptions.dimensions = [];
-    subQueryOptions.timeDimensions = [];
-
 
     this.registerSubQueryPreAggregations(subQuery);
     const subQuerySql = subQuery.buildParamAnnotatedSql();
