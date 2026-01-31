@@ -5355,16 +5355,15 @@ export class BaseQuery {
         } else {
           // Regular dimension or implicit expression dependency
           const rightTdItems = mainQueryContext.timeDimensions.map.get(rightDimension) || [];
+          const originalMetadata = rightTdItems.find(item => !item.isExpression)?.original;
 
-          for (const rItem of rightTdItems){
-            if(!rItem.original.isExpression)
-              subQueryTimeDimensions.push({
-                dimension: leftDimension,
-                granularity: rItem.original.granularity,
-                dateRange: config.excludeFilters.has(rightDimension) ? null : rItem.original.dateRange,
-                boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : rItem.original.boundaryDateRange
-              });
-          }
+          if(!isExpressionDimension && originalMetadata)
+            subQueryTimeDimensions.push({
+              dimension: leftDimension,
+              granularity: originalMetadata.granularity,
+              dateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.dateRange,
+              boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.boundaryDateRange
+          });
         }
 
         processed.timeDimensions.add(leftDimension);
@@ -5381,7 +5380,8 @@ export class BaseQuery {
         if (expressionMetadata && isExpressionDimension && !expressionMetadata.original) {
           subQueryDimensions.push(createExpressionDimension(expressionMetadata));
         } else {
-          subQueryDimensions.push(leftDimension);
+            if(!isExpressionDimension)
+              subQueryDimensions.push(leftDimension);
         }
 
         processed.dimensions.add(leftDimension);
