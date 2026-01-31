@@ -5606,7 +5606,16 @@ export class BaseQuery {
                           this.aliasName(`${cubeName}_${memberName}_subquery`);
     const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
 
-    const subQuery = this.newSubQuery(subQueryOptions);
+    let subQuery;
+
+    try{
+        subQuery = this.newSubQuery(subQueryOptions);
+    } catch (e) {
+        throw new UserError(
+          `Error, subQuery: ${JSON.stringify(subQueryOptions)}`
+        );
+    }
+
     this.registerSubQueryPreAggregations(subQuery);
     const subQuerySql = subQuery.buildParamAnnotatedSql();
 
