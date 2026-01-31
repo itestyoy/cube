@@ -5265,7 +5265,7 @@ export class BaseQuery {
         const synthesized = {
           leftDimension: exprName,
           rightDimension: exprName,
-          originalRightDimension: exprItem.expressionName,
+          originalRightDimension: exprName,
           operator: '=',
           isExpressionDimension: true,
           expressionMetadata: exprItem
@@ -5324,18 +5324,11 @@ export class BaseQuery {
        * Input:  { expression: (o) => o.total / o.count, expressionName: 'Orders.avgPrice', cubeName: 'Orders' }
        * Output: { expression: (o) => o.total / o.count, expressionName: 'Activity.avgPrice', cubeName: 'Activity' }
        */
-      const createExpressionDimension = (leftDimension, originalDim, expressionMetadata) => {
-        const leftCubeName = getCubeName(leftDimension) || expressionMetadata.cubeName;
-
-        if (!leftCubeName) {
-          throw new UserError(
-            `Cannot remap expression to '${leftDimension}': must include cube name.`
-          );
-        }
+      const createExpressionDimension = (originalDim) => {
 
         return {
           expression: originalDim.expression,
-          cubeName: leftCubeName,
+          cubeName: originalDim.cubeName,
           name: originalDim.name,
           expressionName: originalDim.expressionName,
           definition: originalDim.definition
@@ -5353,43 +5346,26 @@ export class BaseQuery {
         
         if (expressionMetadata) {
           // Explicit expression dimension
-          timeDimension = {
-            dimension: createExpressionDimension(leftDimension, expressionMetadata.original, expressionMetadata),
-            granularity: expressionMetadata.original.granularity,
-            dateRange: expressionMetadata.original.dateRange,
-            boundaryDateRange: expressionMetadata.original.boundaryDateRange
-          };
+          subQueryTimeDimensions.push({
+            dimension: createExpressionDimension(expressionMetadata),
+            granularity: expressionMetadata.granularity,
+            dateRange: config.excludeFilters.has(rightDimension) ? null : expressionMetadata.dateRange,
+            boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : expressionMetadata.boundaryDateRange
+          });
         } else {
           // Regular dimension or implicit expression dependency
           const rightTdItems = mainQueryContext.timeDimensions.map.get(rightDimension) || [];
-          const rightTdMetadata = rightTdItems.find(item => !item.isExpression) || rightTdItems[0];
 
-          if (rightTdMetadata?.isExpression) {
-            timeDimension = {
-              dimension: createExpressionDimension(leftDimension, rightTdMetadata.original, expressionMetadata),
-              granularity: rightTdMetadata.original.granularity,
-              dateRange: rightTdMetadata.original.dateRange,
-              boundaryDateRange: rightTdMetadata.original.boundaryDateRange
-            };
-          } else if (rightTdMetadata) {
-            timeDimension = {
+          for (const rItem of rightTdItems){
+            subQueryTimeDimensions.push({
               dimension: leftDimension,
-              granularity: rightTdMetadata.original.granularity,
-              dateRange: rightTdMetadata.original.dateRange,
-              boundaryDateRange: rightTdMetadata.original.boundaryDateRange
-            };
-          } else {
-            timeDimension = { dimension: leftDimension };
+              granularity: rItem.original.granularity,
+              dateRange: config.excludeFilters.has(rightDimension) ? null : rItem.original.dateRange,
+              boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : rItem.original.boundaryDateRange
+            });
           }
         }
 
-        // Apply excludeFilters: remove date filtering
-        if (config.excludeFilters.has(rightDimension)) {
-          timeDimension.dateRange = null;
-          timeDimension.boundaryDateRange = null;
-        }
-
-        subQueryTimeDimensions.push(timeDimension);
         processed.timeDimensions.add(leftDimension);
         allowedSubQueryDimensions.add(leftDimension);
       };
@@ -5402,16 +5378,9 @@ export class BaseQuery {
         if (processed.dimensions.has(leftDimension)) return;
 
         if (expressionMetadata) {
-          subQueryDimensions.push(createExpressionDimension(leftDimension, expressionMetadata.original, expressionMetadata));
+          subQueryDimensions.push(createExpressionDimension(expressionMetadata));
         } else {
-          const rightDimItems = mainQueryContext.dimensions.map.get(rightDimension) || [];
-          const rightDimMetadata = rightDimItems.find(item => !item.isExpression) || rightDimItems[0];
-
-          if (rightDimMetadata?.isExpression) {
-            subQueryDimensions.push(createExpressionDimension(leftDimension, rightDimMetadata.original, expressionMetadata));
-          } else {
-            subQueryDimensions.push(leftDimension);
-          }
+          subQueryDimensions.push(leftDimension);
         }
 
         processed.dimensions.add(leftDimension);
@@ -5441,13 +5410,13 @@ export class BaseQuery {
                                       !existsInMainQueryTimeDimensions;
           
           if (existsInMainQueryDimensions) {
-            addDimension(leftDimension, rightDimension);
+            addDimension(leftDimension, rightDimension, expressionMetadata);
           }
 
           if (existsInMainQueryTimeDimensions) {
-            addTimeDimension(leftDimension, rightDimension);
+            addTimeDimension(leftDimension, rightDimension, expressionMetadata);
           } else if (existsOnlyInFilters && !(leftIsTimeDimension && rightIsTimeDimension)) {
-            addDimension(leftDimension, rightDimension);
+            addDimension(leftDimension, rightDimension, expressionMetadata);
           }
         }
       });
