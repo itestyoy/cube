@@ -5379,7 +5379,7 @@ export class BaseQuery {
         if (expressionMetadata && expressionMetadata.original && isExpressionDimension) {
           subQueryDimensions.push(createExpressionDimension(expressionMetadata.original));
         } else {
-            if(!isExpressionDimension && !expressionMetadata.original.isExpression)
+            if(!isExpressionDimension && !expressionMetadata?.original?.isExpression)
               subQueryDimensions.push(leftDimension);
         }
 
