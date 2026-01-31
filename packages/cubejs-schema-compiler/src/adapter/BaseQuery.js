@@ -4789,36 +4789,20 @@ export class BaseQuery {
           if (dimObj.expression) {
             const expressionCubeName = dimObj.expressionCubeName || dimObj.cubeName;
             const dependencies = getExpressionDependencies(dimObj.expression, expressionCubeName);
-            const rawExpressionName = dimObj.expressionName || 
-                                  (dimObj.cubeName && dimObj.name ? `${dimObj.cubeName}.${dimObj.name}` : null);
-            const expressionName = normalizeDimensionPath(rawExpressionName);
-            
-            if (dependencies.length > 0) {
 
-              const resolvedExpressionCubeNames = [...new Set(dependencies.map(e => getCubeName(normalizeDimensionPath(e))))];
+            if (dependencies.length > 0) {
               // Create entry for each dependency
               dependencies.forEach(depPath => {
                 result.push({
                   path: depPath,
                   original: dimObj,
                   isExpression: true,
-                  expressionName,
-                  resolvedExpressionCubeNames: resolvedExpressionCubeNames,
+                  expressionCubeName: getCubeName(normalizeDimensionPath(depPath)),
                   allDependencies: dependencies
                 });
               });
             } else {
               // Expression without dependencies (e.g., constant expression)
-              if (expressionName) {
-                result.push({
-                  path: expressionName,
-                  original: dimObj,
-                  isExpression: true,
-                  expressionName,
-                  resolvedExpressionCubeNames: null,
-                  allDependencies: []
-                });
-              }
             }
           }
         } else {
@@ -4832,8 +4816,7 @@ export class BaseQuery {
               path,
               original: dimObj,
               isExpression: false,
-              expressionName: null,
-              resolvedExpressionCubeNames: null, 
+              expressionCubeName: getCubeName(path), 
               allDependencies: []
             });
           }
@@ -5198,8 +5181,8 @@ export class BaseQuery {
       ].filter(item => item.isExpression);
 
       for (const item of expressionsUsingDep) {
-        if (processedExpressions.has(item.expressionName)) continue;
-        processedExpressions.add(item.expressionName);
+        if (processedExpressions.has(item.original?.expressionName)) continue;
+        processedExpressions.add(item.original?.expressionName);
 
         // Validate: all dependencies from same cube
         if (item.allDependencies.length > 0) {
@@ -5211,7 +5194,7 @@ export class BaseQuery {
 
           if (dependenciesFromDifferentCubes.length > 0) {
             throw new UserError(
-              `Expression dimension '${item.expressionName}' has dependencies from different cubes. ` +
+              `Expression dimension '${item.original?.expressionName}' has dependencies from different cubes. ` +
               `All dependencies must be from the same cube.`
             );
           }
@@ -5227,7 +5210,7 @@ export class BaseQuery {
 
         if (presentDependencies.length > 0 && missingDependencies.length > 0) {
           throw new UserError(
-            `Expression dimension '${item.expressionName}' has partial dependency coverage. ` +
+            `Expression dimension '${item.original?.expressionName}' has partial dependency coverage. ` +
             `Present: [${presentDependencies.join(', ')}]. Missing: [${missingDependencies.join(', ')}]. ` +
             `Include all dependencies or none.`
           );
@@ -5244,7 +5227,7 @@ export class BaseQuery {
 
           if (leftCubeNames.size > 1) {
             throw new UserError(
-              `Expression dimension '${item.expressionName}' dependencies remap to different cubes: ` +
+              `Expression dimension '${item.original?.expressionName}' dependencies remap to different cubes: ` +
               `[${[...leftCubeNames].join(', ')}]. All must remap to same cube.`
             );
           }
@@ -5331,15 +5314,15 @@ export class BaseQuery {
        * Output: { expression: (o) => o.total / o.count, expressionName: 'Activity.avgPrice', cubeName: 'Activity' }
        */
       const createExpressionDimension = (expressionMetadata) => {
-        if(expressionMetadata?.resolvedExpressionCubeNames?.length != 1) {
+        if(!expressionMetadata?.expressionCubeName) {
           throw new UserError(
-            `Only allowed expression '${expressionMetadata.original.expressionName}' with single cube references, ` +
-            `references ${expressionMetadata?.resolvedExpressionCubeNames}`
+            `Only allowed expression '${expressionMetadata.original?.expressionName}' with cube references, ` +
+            `references ${expressionMetadata?.expressionCubeName}`
           );
         }
         return {
           expression: expressionMetadata.original.expression,
-          cubeName: expressionMetadata.resolvedExpressionCubeNames[0],
+          cubeName: expressionMetadata.expressionCubeName,
           name: expressionMetadata.original.name,
           expressionName: expressionMetadata.original.expressionName,
           definition: expressionMetadata.original.definition,
@@ -5367,7 +5350,7 @@ export class BaseQuery {
           const rightTdItems = mainQueryContext.timeDimensions.map.get(rightDimension) || [];
           const originalMetadata = rightTdItems.find(item => !item.isExpression);
 
-          if(!isExpressionDimension && originalMetadata && !expressionMetadata) {
+          if(!isExpressionDimension && originalMetadata && !expressionMetadata.original?.isExpression) {
               subQueryTimeDimensions.push({
                 dimension: leftDimension,
                 granularity: originalMetadata.original.granularity,
@@ -5393,7 +5376,7 @@ export class BaseQuery {
         if (expressionMetadata && expressionMetadata.original && !expressionMetadata.original.isExpression && isExpressionDimension) {
           subQueryDimensions.push(createExpressionDimension(expressionMetadata));
         } else {
-          if(!isExpressionDimension && !expressionMetadata  && !expressionMetadata) {
+          if(!isExpressionDimension && !expressionMetadata && !expressionMetadata.original?.isExpression) {
             subQueryDimensions.push(leftDimension);
           } else {
             return;
