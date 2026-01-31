@@ -5256,10 +5256,12 @@ export class BaseQuery {
      */
     if (hasAllowedDimensions && expressionsWithAllDeps.length) {
       expressionsWithAllDeps.forEach((exprItem) => {
-        const exprName = exprItem.expressionName;
+        const exprName = exprItem?.original?.expressionName;
 
         // Skip if already explicitly allowed
         if (allowedRightDimensionsSet.has(exprName)) return;
+
+        if (!exprName) return;
 
         const synthesized = {
           leftDimension: exprName,
@@ -5324,14 +5326,7 @@ export class BaseQuery {
        * Output: { expression: (o) => o.total / o.count, expressionName: 'Activity.avgPrice', cubeName: 'Activity' }
        */
       const createExpressionDimension = (originalDim) => {
-
-        return {
-          expression: originalDim.expression,
-          cubeName: originalDim.cubeName,
-          name: originalDim.name,
-          expressionName: originalDim.expressionName,
-          definition: originalDim.definition
-        };
+        return originalDim;
       };
 
       /**
@@ -5341,8 +5336,6 @@ export class BaseQuery {
       const addTimeDimension = (leftDimension, rightDimension, isExpressionDimension, expressionMetadata = null) => {
         if (processed.timeDimensions.has(leftDimension)) return;
 
-        let timeDimension;
-        
         if (expressionMetadata && expressionMetadata.original && isExpressionDimension) {
           // Explicit expression dimension
           subQueryTimeDimensions.push({
@@ -5354,15 +5347,18 @@ export class BaseQuery {
         } else {
           // Regular dimension or implicit expression dependency
           const rightTdItems = mainQueryContext.timeDimensions.map.get(rightDimension) || [];
-          const originalMetadata = rightTdItems.find(item => !item.isExpression)?.original;
+          const originalMetadata = rightTdItems.find(item => !item.isExpression);
 
-          if(!isExpressionDimension && originalMetadata)
-            subQueryTimeDimensions.push({
-              dimension: leftDimension,
-              granularity: originalMetadata.granularity,
-              dateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.dateRange,
-              boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.boundaryDateRange
-          });
+          if(!isExpressionDimension && originalMetadata) {
+              subQueryTimeDimensions.push({
+                dimension: leftDimension,
+                granularity: originalMetadata.original.granularity,
+                dateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.original.dateRange,
+                boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.original.boundaryDateRange
+            });
+          } else {
+            return;
+          }
         }
 
         processed.timeDimensions.add(leftDimension);
@@ -5379,8 +5375,11 @@ export class BaseQuery {
         if (expressionMetadata && expressionMetadata.original && isExpressionDimension) {
           subQueryDimensions.push(createExpressionDimension(expressionMetadata.original));
         } else {
-            if(!isExpressionDimension && !expressionMetadata?.original?.isExpression)
-              subQueryDimensions.push(leftDimension);
+          if(!isExpressionDimension && !expressionMetadata) {
+            subQueryDimensions.push(leftDimension);
+          } else {
+            return;
+          }
         }
 
         processed.dimensions.add(leftDimension);
@@ -5389,7 +5388,7 @@ export class BaseQuery {
 
       // Process all validated allowed dimensions
       validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata }) => {
-        if (isExpressionDimension && expressionMetadata) {
+        if (isExpressionDimension && expressionMetadata && expressionMetadata.original) {
           // Explicit expression dimension in allowedDimensions
           const isTimeDimension = expressionMetadata.type === 'timeDimension';
           
