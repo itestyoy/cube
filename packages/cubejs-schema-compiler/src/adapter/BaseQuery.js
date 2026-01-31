@@ -4794,6 +4794,8 @@ export class BaseQuery {
             const expressionName = normalizeDimensionPath(rawExpressionName);
             
             if (dependencies.length > 0) {
+
+              const resolvedExpressionCubeNames = new Set(dependencies.map(e => getCubeName(normalizeDimensionPath(e))));
               // Create entry for each dependency
               dependencies.forEach(depPath => {
                 result.push({
@@ -4801,6 +4803,7 @@ export class BaseQuery {
                   original: dimObj,
                   isExpression: true,
                   expressionName,
+                  resolvedExpressionCubeNames: resolvedExpressionCubeNames,
                   allDependencies: dependencies
                 });
               });
@@ -4812,6 +4815,7 @@ export class BaseQuery {
                   original: dimObj,
                   isExpression: true,
                   expressionName,
+                  resolvedExpressionCubeNames: null,
                   allDependencies: []
                 });
               }
@@ -4829,6 +4833,7 @@ export class BaseQuery {
               original: dimObj,
               isExpression: false,
               expressionName: null,
+              resolvedExpressionCubeNames: null, 
               allDependencies: []
             });
           }
@@ -5325,14 +5330,20 @@ export class BaseQuery {
        * Input:  { expression: (o) => o.total / o.count, expressionName: 'Orders.avgPrice', cubeName: 'Orders' }
        * Output: { expression: (o) => o.total / o.count, expressionName: 'Activity.avgPrice', cubeName: 'Activity' }
        */
-      const createExpressionDimension = (originalDim) => {
+      const createExpressionDimension = (expressionMetadata) => {
+        if(expressionMetadata?.resolvedExpressionCubeNames?.length != 1) {
+          throw new UserError(
+            `Only allowed expression '${expressionMetadata.original.expressionName}' with single cube references, ` +
+            `references ${expressionMetadata?.resolvedExpressionCubeNames}`
+          );
+        }
         return {
-          expression: originalDim.expression,
-          cubeName: originalDim.cubeName,
-          name: originalDim.name,
-          expressionName: originalDim.expressionName,
-          definition: originalDim.definition,
-          groupingSet: originalDim.groupingSet
+          expression: expressionMetadata.original.expression,
+          cubeName: expressionMetadata.resolvedExpressionCubeNames[0],
+          name: expressionMetadata.original.name,
+          expressionName: expressionMetadata.original.expressionName,
+          definition: expressionMetadata.original.definition,
+          groupingSet: expressionMetadata.original.groupingSet
         };
       };
 
@@ -5346,7 +5357,7 @@ export class BaseQuery {
         if (expressionMetadata && expressionMetadata.original && !expressionMetadata.original.isExpression && isExpressionDimension) {
           // Explicit expression dimension
           subQueryTimeDimensions.push({
-            dimension: createExpressionDimension(expressionMetadata.original),
+            dimension: createExpressionDimension(expressionMetadata),
             granularity: expressionMetadata.original.granularity,
             dateRange: config.excludeFilters.has(rightDimension) ? null : expressionMetadata.original.dateRange,
             boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : expressionMetadata.original.boundaryDateRange
@@ -5380,7 +5391,7 @@ export class BaseQuery {
         if (processed.dimensions.has(leftDimension)) return;
 
         if (expressionMetadata && expressionMetadata.original && !expressionMetadata.original.isExpression && isExpressionDimension) {
-          subQueryDimensions.push(createExpressionDimension(expressionMetadata.original));
+          subQueryDimensions.push(createExpressionDimension(expressionMetadata));
         } else {
           if(!isExpressionDimension && !expressionMetadata  && !expressionMetadata) {
             subQueryDimensions.push(leftDimension);
