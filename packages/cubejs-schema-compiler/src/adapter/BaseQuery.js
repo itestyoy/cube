@@ -5339,12 +5339,12 @@ export class BaseQuery {
        * Add time dimension to subQuery
        * Handles both explicit expression dimensions and implicit dependencies
        */
-      const addTimeDimension = (leftDimension, rightDimension, expressionMetadata = null) => {
+      const addTimeDimension = (leftDimension, rightDimension, isExpressionDimension, expressionMetadata = null) => {
         if (processed.timeDimensions.has(leftDimension)) return;
 
         let timeDimension;
         
-        if (expressionMetadata) {
+        if (expressionMetadata && isExpressionDimension && !expressionMetadata.original) {
           // Explicit expression dimension
           subQueryTimeDimensions.push({
             dimension: createExpressionDimension(expressionMetadata),
@@ -5357,12 +5357,13 @@ export class BaseQuery {
           const rightTdItems = mainQueryContext.timeDimensions.map.get(rightDimension) || [];
 
           for (const rItem of rightTdItems){
-            subQueryTimeDimensions.push({
-              dimension: leftDimension,
-              granularity: rItem.original.granularity,
-              dateRange: config.excludeFilters.has(rightDimension) ? null : rItem.original.dateRange,
-              boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : rItem.original.boundaryDateRange
-            });
+            if(!rItem.original.isExpression)
+              subQueryTimeDimensions.push({
+                dimension: leftDimension,
+                granularity: rItem.original.granularity,
+                dateRange: config.excludeFilters.has(rightDimension) ? null : rItem.original.dateRange,
+                boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : rItem.original.boundaryDateRange
+              });
           }
         }
 
@@ -5374,10 +5375,10 @@ export class BaseQuery {
        * Add dimension to subQuery
        * Prefers regular dimensions over expression dependencies when both exist
        */
-      const addDimension = (leftDimension, rightDimension, expressionMetadata = null) => {
+      const addDimension = (leftDimension, rightDimension, isExpressionDimension, expressionMetadata = null) => {
         if (processed.dimensions.has(leftDimension)) return;
 
-        if (expressionMetadata) {
+        if (expressionMetadata && isExpressionDimension && !expressionMetadata.original) {
           subQueryDimensions.push(createExpressionDimension(expressionMetadata));
         } else {
           subQueryDimensions.push(leftDimension);
@@ -5394,9 +5395,9 @@ export class BaseQuery {
           const isTimeDimension = expressionMetadata.type === 'timeDimension';
           
           if (isTimeDimension) {
-            addTimeDimension(leftDimension, rightDimension, expressionMetadata);
+            addTimeDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
           } else {
-            addDimension(leftDimension, rightDimension, expressionMetadata);
+            addDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
           }
         } else {
           // Regular dimension or implicit expression dependency
@@ -5410,13 +5411,13 @@ export class BaseQuery {
                                       !existsInMainQueryTimeDimensions;
           
           if (existsInMainQueryDimensions) {
-            addDimension(leftDimension, rightDimension, expressionMetadata);
+            addDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
           }
 
           if (existsInMainQueryTimeDimensions) {
-            addTimeDimension(leftDimension, rightDimension, expressionMetadata);
+            addTimeDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
           } else if (existsOnlyInFilters && !(leftIsTimeDimension && rightIsTimeDimension)) {
-            addDimension(leftDimension, rightDimension, expressionMetadata);
+            addDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
           }
         }
       });
