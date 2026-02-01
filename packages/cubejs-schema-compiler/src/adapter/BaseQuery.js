@@ -4706,8 +4706,8 @@ export class BaseQuery {
         return pathReferencesUsed.map(pathArray => {
           const pathString = this.cubeEvaluator.pathFromArray(pathArray);
           const resolvedPath = resolveViewPath(pathString);
-          const { path } = this.cubeEvaluator.constructor.joinHintFromPath(resolvedPath);
-          return path.toLowerCase();
+          // const { path } = this.cubeEvaluator.constructor.joinHintFromPath(resolvedPath);
+          return resolvedPath.toLowerCase();
         });
       } catch {
         return [];
@@ -4729,8 +4729,8 @@ export class BaseQuery {
     const normalizeDimensionPath = (dim) => {
       if (typeof dim === 'string') {
         const resolved = resolveViewPath(dim);
-        const { path } = this.cubeEvaluator.constructor.joinHintFromPath(resolved);
-        return path.toLowerCase();
+        // const { path } = this.cubeEvaluator.constructor.joinHintFromPath(resolved);
+        return resolved.toLowerCase();
       }
 
       if (dim?.expression) {
@@ -4779,7 +4779,7 @@ export class BaseQuery {
      *   { path: 'orders.count', isExpression: true, expressionName: 'orders.avgprice', allDependencies: [...] }
      * ]
      */
-    const collectDimensionsMetadata = (dimensionsArray) => {
+    const collectDimensionsMetadata = (dimensionsArray, type) => {
       const result = [];
       
       (dimensionsArray || []).forEach(dimObj => {
@@ -4790,26 +4790,20 @@ export class BaseQuery {
             const expressionCubeName = dimObj.expressionCubeName || dimObj.cubeName;
             const dependencies = getExpressionDependencies(dimObj.expression, expressionCubeName);
 
-            if (dependencies.length > 0) {
-              // Create entry for each dependency
-              dependencies.forEach(depPath => {
-                result.push({
-                  path: depPath,
-                  original: {
-                    expression: dimObj.expression,
-                    cubeName: dimObj.expressionCubeName,
-                    name: dimObj.expressionName,
-                    expressionName: dimObj.expressionName,
-                    definition: dimObj.expression
-                  },
-                  isExpression: true,
-                  expressionCubeName: getCubeName(normalizeDimensionPath(depPath)),
-                  allDependencies: dependencies
-                });
-              });
-            } else {
-              // Expression without dependencies (e.g., constant expression)
-            }
+            result.push({
+              path: dimObj.expressionName,
+              type: type,
+              original: {
+                expression: dimObj.expression,
+                cubeName: dimObj.expressionCubeName,
+                name: dimObj.expressionName,
+                expressionName: dimObj.expressionName,
+                definition: dimObj.expression
+              },
+              isExpression: true,
+              allDependencies: dependencies
+            });
+
           }
         } else {
           // Regular dimension
@@ -4820,9 +4814,9 @@ export class BaseQuery {
             
             result.push({
               path,
+              type: type,
               original: dimObj,
               isExpression: false,
-              expressionCubeName: getCubeName(path), 
               allDependencies: []
             });
           }
@@ -4898,8 +4892,8 @@ export class BaseQuery {
     // STEP 3: Collect and index main query context
     // ============================================================================
 
-    const mainQueryDimensionsMetadata = collectDimensionsMetadata(this.dimensions);
-    const mainQueryTimeDimensionsMetadata = collectDimensionsMetadata(this.timeDimensions);
+    const mainQueryDimensionsMetadata = collectDimensionsMetadata(this.dimensions, 'dimension');
+    const mainQueryTimeDimensionsMetadata = collectDimensionsMetadata(this.timeDimensions, 'timeDimensions');
 
     /**
      * Main query context structure:
@@ -5029,7 +5023,7 @@ export class BaseQuery {
     // ============================================================================
     // STEP 5: Validate and normalize allowedDimensions
     // ============================================================================
-    
+  
     /**
      * Process each allowedDimension entry:
      * 1. Normalize rightDimension for lookups
@@ -5045,7 +5039,7 @@ export class BaseQuery {
         if (!normalizedRightDimension) return null;
         
         // Check if rightDimension is expression dimension by name
-        const expressionMetadata = findExpressionDimensionByName(normalizedRightDimension);
+        // const expressionMetadata = findExpressionDimensionByName(normalizedRightDimension);
 
         return {
           leftDimension,
@@ -5053,7 +5047,7 @@ export class BaseQuery {
           originalRightDimension: rightDimension,
           operator,
           isExpressionDimension: false,
-          expressionMetadata
+          expressionMetadata: null
         };
       })
       .filter(Boolean)
@@ -5102,6 +5096,7 @@ export class BaseQuery {
       validatedAllowedDimensions.map(d => d.rightDimension)
     );
 
+
     // ============================================================================
     // STEP 6: Validate expression dimensions dependencies
     // ============================================================================
@@ -5120,143 +5115,27 @@ export class BaseQuery {
      */
 
     // Path A: Explicit expression dimensions in allowedDimensions
-    validatedAllowedDimensions.forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata }) => {
-      if (!expressionMetadata) return;
-      
-      const rightCubeName = getCubeName(rightDimension);
-      const leftCubeName = getCubeName(leftDimension);
-      
-      if (!rightCubeName || !leftCubeName) {
-        throw new UserError(
-          `Expression dimension '${rightDimension}' must have cube names in both ` +
-          `left and right dimensions (format: CubeName.dimensionName).`
-        );
-      }
-      
-      // Validate: all dependencies from same cube
-      const dependenciesFromDifferentCubes = expressionMetadata.allDependencies.filter(dep => {
-        const depCubeName = getCubeName(dep);
-        return depCubeName && depCubeName !== rightCubeName;
-      });
 
-      if (dependenciesFromDifferentCubes.length > 0) {
-        throw new UserError(
-          `Expression dimension '${rightDimension}' has dependencies from different cubes. ` +
-          `All dependencies [${expressionMetadata.allDependencies.join(', ')}] must be from cube '${rightCubeName}'.`
-        );
-      }
-      
-      // Validate: all dependencies present
-      const missingDependencies = expressionMetadata.allDependencies.filter(dep =>
-        !allowedRightDimensionsSet.has(dep)
-      );
-      
-      if (missingDependencies.length > 0) {
-        throw new UserError(
-          `Expression dimension '${rightDimension}' requires all its dependencies in allowedDimensions. ` +
-          `Missing: [${missingDependencies.join(', ')}].`
-        );
-      }
-      
-      // Validate: dependencies remap to same target cube
-      expressionMetadata.allDependencies.forEach(dep => {
-        const depMapping = validatedAllowedDimensions.find(d => d.rightDimension === dep);
-        if (depMapping) {
-          const depLeftCubeName = getCubeName(depMapping.leftDimension);
-          if (depLeftCubeName !== leftCubeName) {
-            throw new UserError(
-              `Expression dimension '${rightDimension}' remaps to cube '${leftCubeName}', ` +
-              `but dependency '${dep}' remaps to cube '${depLeftCubeName}'. ` +
-              `All dependencies must remap to the same target cube.`
-            );
-          }
-        }
-      });
-    });
-
-    // Path B: Implicit expression dimensions (via dependencies)
-    const processedExpressions = new Set();
-    
-    const expressionsWithAllDeps = [];
-
-    validatedAllowedDimensions.forEach(({ rightDimension }) => {
-      const expressionsUsingDep = [
-        ...(mainQueryContext.dimensions.map.get(rightDimension) || []),
-        ...(mainQueryContext.timeDimensions.map.get(rightDimension) || [])
-      ].filter(item => item.isExpression);
-
-      for (const item of expressionsUsingDep) {
-        if (processedExpressions.has(item.original?.expressionName)) continue;
-        processedExpressions.add(item.original?.expressionName);
-
-        // Validate: all dependencies from same cube
-        if (item.allDependencies.length > 0) {
-          const rightCubeName = getCubeName(item.allDependencies[0]);
-          const dependenciesFromDifferentCubes = item.allDependencies.filter(dep => {
-            const depCubeName = getCubeName(dep);
-            return depCubeName && depCubeName !== rightCubeName;
-          });
-
-          if (dependenciesFromDifferentCubes.length > 0) {
-            throw new UserError(
-              `Expression dimension '${item.original?.expressionName}' has dependencies from different cubes. ` +
-              `All dependencies must be from the same cube.`
-            );
-          }
-        }
-
-        // Validate: no partial coverage
-        const presentDependencies = item.allDependencies.filter(
-          dep => allowedRightDimensionsSet.has(dep)
-        );
-        const missingDependencies = item.allDependencies.filter(
-          dep => !allowedRightDimensionsSet.has(dep)
-        );
-
-        if (presentDependencies.length > 0 && missingDependencies.length > 0) {
-          throw new UserError(
-            `Expression dimension '${item.original?.expressionName}' has partial dependency coverage. ` +
-            `Present: [${presentDependencies.join(', ')}]. Missing: [${missingDependencies.join(', ')}]. ` +
-            `Include all dependencies or none.`
-          );
-        }
-
-        // Validate: cross-cube remapping consistency
-        if (presentDependencies.length === item.allDependencies.length) {
-          const leftCubeNames = new Set(
-            presentDependencies.map(dep => {
-              const mapping = validatedAllowedDimensions.find(d => d.rightDimension === dep);
-              return mapping ? getCubeName(mapping.leftDimension) : null;
-            }).filter(Boolean)
-          );
-
-          if (leftCubeNames.size > 1) {
-            throw new UserError(
-              `Expression dimension '${item.original?.expressionName}' dependencies remap to different cubes: ` +
-              `[${[...leftCubeNames].join(', ')}]. All must remap to same cube.`
-            );
-          }
-
-          // Mark expressions whose dependencies are fully covered
-          expressionsWithAllDeps.push(item);
-        }
-      }
-    });
 
     /**
      * Auto-include expression dimension in allowedDimensions when all its dependencies are allowed.
      * This keeps correlation symmetric: expression is present on both sides, not just its dependencies.
      */
+    const expressionsWithAllDeps = [
+        ...(mainQueryContext.dimensions.map.get(rightDimension) || []),
+        ...(mainQueryContext.timeDimensions.map.get(rightDimension) || [])
+      ].filter(item => item.isExpression && item?.original?.expression);
+
     if (hasAllowedDimensions && expressionsWithAllDeps.length) {
-      expressionsWithAllDeps.forEach((exprItem) => {
+      expressionsWithAllDeps.map((exprItem) => {
         const exprName = exprItem?.original?.expressionName;
 
         // Skip if already explicitly allowed
-        if (allowedRightDimensionsSet.has(exprName)) return;
+        if (allowedRightDimensionsSet.has(exprName)) return null;
 
-        if (!exprName) return;
+        if (!exprName) return null;
 
-        const synthesized = {
+        return {
           leftDimension: exprName,
           rightDimension: exprName,
           originalRightDimension: exprName,
@@ -5265,9 +5144,76 @@ export class BaseQuery {
           expressionMetadata: exprItem
         };
 
-        validatedAllowedDimensions.push(synthesized);
+      }).filter(Boolean)
+      .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, operator }) => {
+        if (!expressionMetadata) return;
+        
+        const rightCubeName = getCubeName(rightDimension);
+        const leftCubeName = getCubeName(leftDimension);
+        
+        if (!rightCubeName || !leftCubeName) {
+          throw new UserError(
+            `Expression dimension '${rightDimension}' must have cube names in both ` +
+            `left and right dimensions (format: CubeName.dimensionName).`
+          );
+        }
+        
+        // Validate: all dependencies from same cube
+        const dependenciesFromDifferentCubes = expressionMetadata.allDependencies.filter(dep => {
+          const depCubeName = getCubeName(dep);
+          return depCubeName && depCubeName !== rightCubeName;
+        });
+
+        if (dependenciesFromDifferentCubes.length > 0) {
+          throw new UserError(
+            `Expression dimension '${rightDimension}' has dependencies from different cubes. ` +
+            `All dependencies [${expressionMetadata.allDependencies.join(', ')}] must be from cube '${rightCubeName}'.`
+          );
+        }
+        
+        // Validate: all dependencies present
+        const missingDependencies = expressionMetadata.allDependencies.filter(dep =>
+          !allowedRightDimensionsSet.has(dep)
+        );
+        
+        if (missingDependencies.length > 0) {
+          throw new UserError(
+            `Expression dimension '${rightDimension}' requires all its dependencies in allowedDimensions. ` +
+            `Missing: [${missingDependencies.join(', ')}].`
+          );
+        }
+        
+        // Validate: dependencies remap to same target cube
+        expressionMetadata.allDependencies.forEach(dep => {
+          const depMapping = validatedAllowedDimensions.find(d => d.rightDimension === dep);
+          if (depMapping) {
+            const depLeftCubeName = getCubeName(depMapping.leftDimension);
+            if (depLeftCubeName !== leftCubeName) {
+              throw new UserError(
+                `Expression dimension '${rightDimension}' remaps to cube '${leftCubeName}', ` +
+                `but dependency '${dep}' remaps to cube '${depLeftCubeName}'. ` +
+                `All dependencies must remap to the same target cube.`
+              );
+            }
+          }
+        });
+
+        validatedAllowedDimensions.push(
+          { 
+            rightDimension, 
+            leftDimension, 
+            isExpressionDimension, 
+            expressionMetadata, 
+            originalRightDimension, 
+            operator 
+          }
+        );
+
+        const exprName = exprItem?.original?.expressionName;
+
         allowedRightDimensionsSet.add(exprName);
         allowedSubQueryDimensions.add(exprName);
+        
       });
     }
 
