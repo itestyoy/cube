@@ -4795,7 +4795,13 @@ export class BaseQuery {
               dependencies.forEach(depPath => {
                 result.push({
                   path: depPath,
-                  original: dimObj,
+                  original: {
+                    expression: dimObj.expression,
+                    cubeName: dimObj.expressionCubeName,
+                    name: dimObj.expressionName,
+                    expressionName: dimObj.expressionName,
+                    definition: dimObj.expression
+                  },
                   isExpression: true,
                   expressionCubeName: getCubeName(normalizeDimensionPath(depPath)),
                   allDependencies: dependencies
@@ -4836,9 +4842,6 @@ export class BaseQuery {
       if (typeof dimObj === 'string') return dimObj;
       if (dimObj.expression) {
         return dimObj.expressionName;
-      }
-      if (dimObj.dimension?.expression) {
-        return dimObj.dimension?.expressionName;
       }
       return dimObj.dimension;
     };
@@ -5316,19 +5319,18 @@ export class BaseQuery {
        * Output: { expression: (o) => o.total / o.count, expressionName: 'Activity.avgPrice', cubeName: 'Activity' }
        */
       const createExpressionDimension = (expressionMetadata) => {
-        if(!expressionMetadata?.expressionCubeName) {
+        if(!expressionMetadata?.original?.cubeName) {
           throw new UserError(
             `Only allowed expression '${expressionMetadata.original?.expressionName}' with cube references, ` +
-            `references ${expressionMetadata?.expressionCubeName}`
+            `references ${expressionMetadata?.original?.cubeName}`
           );
         }
         return {
-          expression: expressionMetadata.original.expression,
-          cubeName: expressionMetadata.expressionCubeName,
-          name: expressionMetadata.original.name,
-          expressionName: expressionMetadata.original.expressionName,
-          definition: expressionMetadata.original.definition,
-          groupingSet: expressionMetadata.original.groupingSet
+          expression: expressionMetadata.original?.expression,
+          cubeName: expressionMetadata.original?.cubeName,
+          name: expressionMetadata.original?.name,
+          expressionName: expressionMetadata.original?.expressionName,
+          definition: expressionMetadata.original?.definition
         };
       };
 
@@ -5614,7 +5616,7 @@ export class BaseQuery {
     // this.registerSubQueryPreAggregations(subQuery);
     // const subQuerySql = subQuery.buildParamAnnotatedSql();
 
-    const subQuerySql = JSON.stringify([subQueryOptions, mainQueryDimensionsMetadata, mainQueryTimeDimensionsMetadata, validatedAllowedDimensions]);
+    const subQuerySql = JSON.stringify([subQueryOptions, mainQueryDimensionsMetadata]);
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
