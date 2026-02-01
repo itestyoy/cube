@@ -4835,8 +4835,10 @@ export class BaseQuery {
     const extractDimensionPath = (dimObj) => {
       if (typeof dimObj === 'string') return dimObj;
       if (dimObj.expression) {
-        return dimObj.expressionName || 
-              (dimObj.cubeName && dimObj.name ? `${dimObj.cubeName}.${dimObj.name}` : null);
+        return dimObj.expressionName;
+      }
+      if (dimObj.dimension?.expression) {
+        return dimObj.dimension?.expressionName;
       }
       return dimObj.dimension;
     };
@@ -5607,10 +5609,12 @@ export class BaseQuery {
                           this.aliasName(`${cubeName}_${memberName}_subquery`);
     const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
 
-    const subQuery = this.newSubQuery(subQueryOptions);
+    // const subQuery = this.newSubQuery(subQueryOptions);
 
-    this.registerSubQueryPreAggregations(subQuery);
-    const subQuerySql = subQuery.buildParamAnnotatedSql();
+    // this.registerSubQueryPreAggregations(subQuery);
+    // const subQuerySql = subQuery.buildParamAnnotatedSql();
+
+    const subQuerySql = JSON.stringify(subQueryOptions);
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
@@ -5661,8 +5665,8 @@ export class BaseQuery {
     // STEP 15: Build correlatedWhereClause
     // ============================================================================
     
-    const subQueryTimeDimensions = subQuery.timeDimensions || [];
-    const subQueryDimensions = subQuery.dimensions || [];
+    const subQueryTimeDimensions = subQueryOptions.timeDimensions || [];
+    const subQueryDimensions = subQueryOptions.dimensions || [];
     const mainQueryTimeDimensionsForJoin = this.timeDimensions || [];
     const mainQueryDimensionsForJoin = this.dimensions || [];
 
@@ -5751,7 +5755,7 @@ export class BaseQuery {
      * - Regular: subquery.activity_total = orders.total
      * - Expression: subquery.activity_avgprice = orders.total / orders.count
      */
-    const correlatedWhereClause = validatedAllowedDimensions
+    const correlatedWhereClause = 'true' || validatedAllowedDimensions
       .map(({ leftDimension, rightDimension, operator }) => {
         const subQueryTimeDimension = findDimensionInArray(leftDimension, subQueryTimeDimensions);
         const subQueryDimension = subQueryTimeDimension || findDimensionInArray(leftDimension, subQueryDimensions);
