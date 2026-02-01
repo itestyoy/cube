@@ -5122,8 +5122,8 @@ export class BaseQuery {
      * This keeps correlation symmetric: expression is present on both sides, not just its dependencies.
      */
     const expressionsWithAllDeps = [
-        ...(mainQueryContext.dimensions.map.get(rightDimension) || []),
-        ...(mainQueryContext.timeDimensions.map.get(rightDimension) || [])
+        ...(mainQueryDimensionsMetadata || []),
+        ...(mainQueryTimeDimensionsMetadata || [])
       ].filter(item => item.isExpression && item?.original?.expression);
 
     if (hasAllowedDimensions && expressionsWithAllDeps.length) {
