@@ -5614,7 +5614,7 @@ export class BaseQuery {
     // this.registerSubQueryPreAggregations(subQuery);
     // const subQuerySql = subQuery.buildParamAnnotatedSql();
 
-    const subQuerySql = JSON.stringify(subQueryOptions);
+    const subQuerySql = JSON.stringify([subQueryOptions, mainQueryDimensionsMetadata, mainQueryTimeDimensionsMetadata, validatedAllowedDimensions]);
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
