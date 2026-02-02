@@ -5696,13 +5696,13 @@ export class BaseQuery {
 
         if (!mainQueryDimension) return null;
 
-        //const subQueryColumnName = getSubQueryColumnName(leftDimension, isExpressionDimension);
-        //if (!subQueryColumnName) return null;
+        const subQueryColumnName = getSubQueryColumnName(leftDimension, isExpressionDimension);
+        if (!subQueryColumnName) return null;
 
-        //const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(subQueryColumnName)}`;
+        const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(subQueryColumnName)}`;
         // const mainQueryColumn = getMainQueryDimensionSql(rightDimension, isExpressionDimension);
 
-        return `${leftDimension} ${operator} ${rightDimension}`;
+        return `${subQueryColumn} ${operator} ${rightDimension}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
