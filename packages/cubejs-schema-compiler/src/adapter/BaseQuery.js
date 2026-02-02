@@ -5640,7 +5640,7 @@ export class BaseQuery {
       const mainQueryDimension = findDimensionInArray(rightDimension, mainQueryTimeDimensionsForJoin) ||
                                 findDimensionInArray(rightDimension, mainQueryDimensionsForJoin);
 
-      if(false && mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
+      if(mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
         const rewrittenSql = this.evaluateSymbolSqlWithContext(
           () => mainQueryDimension.dimensionSql(),
           { renderedReference: mainQueryRenderedReference, rollupQuery: true }
@@ -5682,7 +5682,7 @@ export class BaseQuery {
      * - Expression: subquery.activity_avgprice = orders.total / orders.count
      */
     const correlatedWhereClause = validatedAllowedDimensions
-      .map(({ leftDimension, rightDimension, operator, isOnlyFilter }) => {
+      .map(({ leftDimension, rightDimension, operator, isOnlyFilter, isExpressionDimension }) => {
 
         if (isOnlyFilter) return null;
 
@@ -5696,7 +5696,7 @@ export class BaseQuery {
 
         if (!mainQueryDimension) return null;
 
-        const subQueryColumnName = getSubQueryColumnName(leftDimension);
+        const subQueryColumnName = isExpressionDimension ? leftDimension : getSubQueryColumnName(leftDimension);
         if (!subQueryColumnName) return null;
 
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(subQueryColumnName)}`;
