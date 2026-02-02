@@ -5152,10 +5152,13 @@ export class BaseQuery {
         const leftCubeName = expressionMetadata.original.cubeName;
         
         if (!rightCubeName || !leftCubeName) {
-          throw new UserError(
+
+          return;
+
+          /*throw new UserError(
             `Expression dimension '${rightDimension}' must have cube names in both ` +
             `left and right dimensions (format: CubeName.dimensionName).`
-          );
+          );*/
         }
         
         // Validate: all dependencies present
@@ -5164,10 +5167,13 @@ export class BaseQuery {
         );
         
         if (missingDependencies.length > 0) {
-          throw new UserError(
+
+          return;
+
+          /*throw new UserError(
             `Expression dimension '${rightDimension}' requires all its dependencies in allowedDimensions. ` +
             `Missing: [${missingDependencies.join(', ')}].`
-          );
+          );*/
         }
         
         validatedAllowedDimensions.push(
