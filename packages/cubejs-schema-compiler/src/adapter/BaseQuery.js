@@ -5148,8 +5148,8 @@ export class BaseQuery {
       .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, operator }) => {
         if (!expressionMetadata) return;
         
-        const rightCubeName = getCubeName(rightDimension);
-        const leftCubeName = getCubeName(leftDimension);
+        const rightCubeName = expressionMetadata.original.cubeName;
+        const leftCubeName = expressionMetadata.original.cubeName;
         
         if (!rightCubeName || !leftCubeName) {
           throw new UserError(
@@ -5209,10 +5209,8 @@ export class BaseQuery {
           }
         );
 
-        const exprName = exprItem?.original?.expressionName;
-
-        allowedRightDimensionsSet.add(exprName);
-        allowedSubQueryDimensions.add(exprName);
+        allowedRightDimensionsSet.add(rightDimension);
+        allowedSubQueryDimensions.add(rightDimension);
         
       });
     }
