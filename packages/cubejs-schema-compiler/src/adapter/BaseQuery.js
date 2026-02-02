@@ -5600,11 +5600,11 @@ export class BaseQuery {
      * Find dimension in array with case-insensitive comparison
      * Works with both string dimensions and expression dimension objects
      */
-    const findDimensionInArray = (dimension, dimensionsArray) => {
-      const normalizedDimension = normalizeDimensionPath(dimension);
+    const findDimensionInArray = (dimension, dimensionsArray, isExpressionDimension) => {
+      const normalizedDimension = isExpressionDimension ? dimension : normalizeDimensionPath(dimension);
       
       return dimensionsArray.find(d => {
-        const path = normalizeDimensionPath(extractDimensionPath(d));
+        const path = d.expression ? d.expressionName : normalizeDimensionPath(extractDimensionPath(d));
         return path === normalizedDimension;
       });
     };
@@ -5613,15 +5613,15 @@ export class BaseQuery {
      * Get column alias for dimension in subQuery
      * Uses unescapedAliasName() method from dimension object
      */
-    const getSubQueryColumnName = (dimension) => {
-      const timeDimensionConfig = findDimensionInArray(dimension, mainQueryTimeDimensionsForJoin);
+    const getSubQueryColumnName = (dimension, isExpressionDimension) => {
+      const timeDimensionConfig = findDimensionInArray(dimension, mainQueryTimeDimensionsForJoin, isExpressionDimension);
       if (timeDimensionConfig) {
         if (timeDimensionConfig.granularity) {
           return timeDimensionConfig.unescapedAliasName();
         }
       }
 
-      const dimensionConfig = findDimensionInArray(dimension, mainQueryDimensionsForJoin);
+      const dimensionConfig = findDimensionInArray(dimension, mainQueryDimensionsForJoin, isExpressionDimension);
       if (dimensionConfig?.unescapedAliasName) return dimensionConfig.unescapedAliasName();
 
       return null;
@@ -5636,9 +5636,9 @@ export class BaseQuery {
      * This is the key difference: Expression dimensions in WHERE clause use their SQL expression,
      * not just a column reference
      */
-    const getMainQueryDimensionSql = (rightDimension) => {
-      const mainQueryDimension = findDimensionInArray(rightDimension, mainQueryTimeDimensionsForJoin) ||
-                                findDimensionInArray(rightDimension, mainQueryDimensionsForJoin);
+    const getMainQueryDimensionSql = (rightDimension, isExpressionDimension) => {
+      const mainQueryDimension = findDimensionInArray(rightDimension, mainQueryTimeDimensionsForJoin, isExpressionDimension) ||
+                                findDimensionInArray(rightDimension, mainQueryDimensionsForJoin, isExpressionDimension);
 
       if(mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
         const rewrittenSql = this.evaluateSymbolSqlWithContext(
@@ -5686,23 +5686,23 @@ export class BaseQuery {
 
         if (isOnlyFilter) return null;
 
-        const subQueryTimeDimension = findDimensionInArray(leftDimension, subQueryTimeDimensions);
-        const subQueryDimension = subQueryTimeDimension || findDimensionInArray(leftDimension, subQueryDimensions);
+        const subQueryTimeDimension = findDimensionInArray(leftDimension, subQueryTimeDimensions, isExpressionDimension);
+        const subQueryDimension = subQueryTimeDimension || findDimensionInArray(leftDimension, subQueryDimensions, isExpressionDimension);
         
         if (!subQueryDimension) return null;
 
-        const mainQueryDimension = findDimensionInArray(rightDimension, mainQueryTimeDimensionsForJoin) ||
-                                  findDimensionInArray(rightDimension, mainQueryDimensionsForJoin);
+        const mainQueryDimension = findDimensionInArray(rightDimension, mainQueryTimeDimensionsForJoin, isExpressionDimension) ||
+                                  findDimensionInArray(rightDimension, mainQueryDimensionsForJoin, isExpressionDimension);
 
         if (!mainQueryDimension) return null;
 
-        const subQueryColumnName = isExpressionDimension ? leftDimension : getSubQueryColumnName(leftDimension);
+        const subQueryColumnName = getSubQueryColumnName(leftDimension, isExpressionDimension);
         if (!subQueryColumnName) return null;
 
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(subQueryColumnName)}`;
-        const mainQueryColumn = getMainQueryDimensionSql(rightDimension);
+        const mainQueryColumn = getMainQueryDimensionSql(rightDimension, isExpressionDimension);
 
-        return `${subQueryColumn} ${operator} ${mainQueryColumn}`;
+        return `${subQueryColumn} ${operator}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
