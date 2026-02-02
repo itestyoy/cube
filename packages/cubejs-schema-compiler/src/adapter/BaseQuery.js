@@ -5041,25 +5041,28 @@ export class BaseQuery {
         // Check if rightDimension is expression dimension by name
         // const expressionMetadata = findExpressionDimensionByName(normalizedRightDimension);
 
+        // Validate existence
+        const existsInMainQuery = 
+          mainQueryContext.dimensions.set.has(normalizedRightDimension) || 
+          mainQueryContext.timeDimensions.set.has(normalizedRightDimension);
+     
+        const existsInMainQueryFilters = 
+          mainQueryContext.filterMembers.has(normalizedRightDimension);
+
+        if (!existsInMainQuery && !existsInMainQueryFilters) return null;
+
         return {
           leftDimension,
           rightDimension: normalizedRightDimension,
           originalRightDimension: rightDimension,
           operator,
           isExpressionDimension: false,
-          expressionMetadata: null
+          expressionMetadata: null,
+          isOnlyFilter: !existsInMainQuery && existsInMainQueryFilters
         };
       })
       .filter(Boolean)
       .filter(({ leftDimension, rightDimension, originalRightDimension, isExpressionDimension, expressionMetadata }) => {
-        // Validate existence
-        const existsInMainQuery = 
-          mainQueryContext.dimensions.set.has(rightDimension) || 
-          mainQueryContext.timeDimensions.set.has(rightDimension) || 
-          mainQueryContext.filterMembers.has(rightDimension) ||
-          !!expressionMetadata;
-        
-        if (!existsInMainQuery) return false;
 
         // Validate type compatibility
         const leftDimensionType = getDimensionType(leftDimension);
@@ -5141,7 +5144,8 @@ export class BaseQuery {
           originalRightDimension: exprName,
           operator: '=',
           isExpressionDimension: true,
-          expressionMetadata: exprItem
+          expressionMetadata: exprItem,
+          isOnlyFilter: false
         };
 
       }).filter(Boolean)
@@ -5314,8 +5318,8 @@ export class BaseQuery {
       };
 
       // Process all validated allowed dimensions
-      validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata }) => {
-        if (isExpressionDimension && expressionMetadata && expressionMetadata.original) {
+      validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata, isOnlyFilter }) => {
+        if (isExpressionDimension && expressionMetadata && expressionMetadata.original && !isOnlyFilter) {
           // Explicit expression dimension in allowedDimensions
           const isTimeDimension = expressionMetadata.type === 'timeDimension';
           
@@ -5335,13 +5339,13 @@ export class BaseQuery {
                                       !existsInMainQueryDimensions && 
                                       !existsInMainQueryTimeDimensions;
           
-          if (existsInMainQueryDimensions) {
+          if (existsInMainQueryDimensions && !isOnlyFilter) {
             addDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
           }
 
-          if (existsInMainQueryTimeDimensions) {
+          if (existsInMainQueryTimeDimensions && !isOnlyFilter) {
             addTimeDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
-          } else if (existsOnlyInFilters && !(leftIsTimeDimension && rightIsTimeDimension)) {
+          } else if (existsOnlyInFilters && !(leftIsTimeDimension && rightIsTimeDimension) && !isOnlyFilter) {
             addDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
           }
         }
@@ -5533,12 +5537,12 @@ export class BaseQuery {
                           this.aliasName(`${cubeName}_${memberName}_subquery`);
     const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
 
-    // const subQuery = this.newSubQuery(subQueryOptions);
+    const subQuery = this.newSubQuery(subQueryOptions);
 
-    // this.registerSubQueryPreAggregations(subQuery);
-    // const subQuerySql = subQuery.buildParamAnnotatedSql();
+    this.registerSubQueryPreAggregations(subQuery);
+    const subQuerySql = subQuery.buildParamAnnotatedSql();
 
-    const subQuerySql = JSON.stringify([subQueryOptions, mainQueryDimensionsMetadata]);
+    // const subQuerySql = JSON.stringify([subQueryOptions, mainQueryDimensionsMetadata]);
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
