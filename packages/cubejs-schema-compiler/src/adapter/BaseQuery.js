@@ -5640,7 +5640,7 @@ export class BaseQuery {
       const mainQueryDimension = findDimensionInArray(rightDimension, mainQueryTimeDimensionsForJoin) ||
                                 findDimensionInArray(rightDimension, mainQueryDimensionsForJoin);
 
-      if(mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
+      if(false && mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
         const rewrittenSql = this.evaluateSymbolSqlWithContext(
           () => mainQueryDimension.dimensionSql(),
           { renderedReference: mainQueryRenderedReference, rollupQuery: true }
@@ -5649,7 +5649,7 @@ export class BaseQuery {
         if (typeof rewrittenSql === 'string') return rewrittenSql;
       }
 
-      return mainQueryDimension?.dimensionSql?.() || this.dimensionSql(mainQueryDimension);
+      return mainQueryDimension?.dimensionSql?.();
     };
 
     const parseGranularityFromPath = (path) => {
