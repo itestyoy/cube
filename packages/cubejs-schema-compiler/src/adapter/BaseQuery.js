@@ -5158,19 +5158,6 @@ export class BaseQuery {
           );
         }
         
-        // Validate: all dependencies from same cube
-        const dependenciesFromDifferentCubes = expressionMetadata.allDependencies.filter(dep => {
-          const depCubeName = getCubeName(dep);
-          return depCubeName && depCubeName !== rightCubeName;
-        });
-
-        if (dependenciesFromDifferentCubes.length > 0) {
-          throw new UserError(
-            `Expression dimension '${rightDimension}' has dependencies from different cubes. ` +
-            `All dependencies [${expressionMetadata.allDependencies.join(', ')}] must be from cube '${rightCubeName}'.`
-          );
-        }
-        
         // Validate: all dependencies present
         const missingDependencies = expressionMetadata.allDependencies.filter(dep =>
           !allowedRightDimensionsSet.has(dep)
@@ -5183,21 +5170,6 @@ export class BaseQuery {
           );
         }
         
-        // Validate: dependencies remap to same target cube
-        expressionMetadata.allDependencies.forEach(dep => {
-          const depMapping = validatedAllowedDimensions.find(d => d.rightDimension === dep);
-          if (depMapping) {
-            const depLeftCubeName = getCubeName(depMapping.leftDimension);
-            if (depLeftCubeName !== leftCubeName) {
-              throw new UserError(
-                `Expression dimension '${rightDimension}' remaps to cube '${leftCubeName}', ` +
-                `but dependency '${dep}' remaps to cube '${depLeftCubeName}'. ` +
-                `All dependencies must remap to the same target cube.`
-              );
-            }
-          }
-        });
-
         validatedAllowedDimensions.push(
           { 
             rightDimension, 
