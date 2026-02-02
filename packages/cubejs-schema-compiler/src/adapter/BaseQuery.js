@@ -5540,9 +5540,7 @@ export class BaseQuery {
     const subQuery = this.newSubQuery(subQueryOptions);
 
     this.registerSubQueryPreAggregations(subQuery);
-    const subQuerySql = subQuery.buildParamAnnotatedSql();
-
-    // const subQuerySql = JSON.stringify([subQueryOptions, mainQueryDimensionsMetadata]);
+    const subQuerySql = `/*${JSON.stringify(subQueryOptions, null, 2)}*/\n` + subQuery.buildParamAnnotatedSql();
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
@@ -5683,8 +5681,11 @@ export class BaseQuery {
      * - Regular: subquery.activity_total = orders.total
      * - Expression: subquery.activity_avgprice = orders.total / orders.count
      */
-    const correlatedWhereClause = 'true' || validatedAllowedDimensions
-      .map(({ leftDimension, rightDimension, operator }) => {
+    const correlatedWhereClause = validatedAllowedDimensions
+      .map(({ leftDimension, rightDimension, operator, isOnlyFilter }) => {
+
+        if (isOnlyFilter) return null;
+
         const subQueryTimeDimension = findDimensionInArray(leftDimension, subQueryTimeDimensions);
         const subQueryDimension = subQueryTimeDimension || findDimensionInArray(leftDimension, subQueryDimensions);
         
