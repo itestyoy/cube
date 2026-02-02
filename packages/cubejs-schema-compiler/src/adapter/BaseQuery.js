@@ -5636,10 +5636,7 @@ export class BaseQuery {
      * This is the key difference: Expression dimensions in WHERE clause use their SQL expression,
      * not just a column reference
      */
-    const getMainQueryDimensionSql = (rightDimension, isExpressionDimension) => {
-      const mainQueryDimension = findDimensionInArray(rightDimension, mainQueryTimeDimensionsForJoin, isExpressionDimension) ||
-                                findDimensionInArray(rightDimension, mainQueryDimensionsForJoin, isExpressionDimension);
-
+    const getMainQueryDimensionSql = (mainQueryDimension) => {
       if(mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
         const rewrittenSql = this.evaluateSymbolSqlWithContext(
           () => mainQueryDimension.dimensionSql(),
@@ -5700,9 +5697,9 @@ export class BaseQuery {
         if (!subQueryColumnName) return null;
 
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(subQueryColumnName)}`;
-        // const mainQueryColumn = getMainQueryDimensionSql(rightDimension, isExpressionDimension);
+        // const mainQueryColumn = getMainQueryDimensionSql(mainQueryDimension);
 
-        return `${subQueryColumn} ${operator} ${rightDimension}`;
+        return `${subQueryColumn} ${operator} ${mainQueryDimension?.dimensionSql?.()}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
