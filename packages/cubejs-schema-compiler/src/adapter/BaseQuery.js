@@ -5614,14 +5614,14 @@ export class BaseQuery {
      * Uses unescapedAliasName() method from dimension object
      */
     const getSubQueryColumnName = (dimension) => {
-      const timeDimensionConfig = findDimensionInArray(dimension, subQueryTimeDimensions);
+      const timeDimensionConfig = findDimensionInArray(dimension, mainQueryTimeDimensionsForJoin);
       if (timeDimensionConfig) {
         if (timeDimensionConfig.granularity) {
           return timeDimensionConfig.unescapedAliasName();
         }
       }
 
-      const dimensionConfig = findDimensionInArray(dimension, subQueryDimensions);
+      const dimensionConfig = findDimensionInArray(dimension, mainQueryDimensionsForJoin);
       if (dimensionConfig?.unescapedAliasName) return dimensionConfig.unescapedAliasName();
 
       return null;
