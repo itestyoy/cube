@@ -5227,6 +5227,8 @@ export class BaseQuery {
     // ============================================================================
     
     if (hasAllowedDimensions) {
+      const subOriginalTimeDimensionsMetadata = [];
+      const subOriginalDimensionsMetadata = [];
       const subQueryDimensions = [];
       const subQueryTimeDimensions = [];
       const processed = {
@@ -5264,7 +5266,7 @@ export class BaseQuery {
        * Add time dimension to subQuery
        * Handles both explicit expression dimensions and implicit dependencies
        */
-      const addTimeDimension = (leftDimension, rightDimension, isExpressionDimension, expressionMetadata = null) => {
+      const addTimeDimension = (leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata = null) => {
         if (processed.timeDimensions.has(leftDimension)) return;
 
         if (expressionMetadata && expressionMetadata?.original && !expressionMetadata?.original?.isExpression && isExpressionDimension) {
@@ -5275,6 +5277,8 @@ export class BaseQuery {
             dateRange: config.excludeFilters.has(rightDimension) ? null : expressionMetadata.original.dateRange,
             boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : expressionMetadata.original.boundaryDateRange
           });
+
+          subOriginalTimeDimensionsMetadata.push({metadata: expressionMetadata, dimension: expressionMetadata.original?.expressionName, operator: operator});
         } else {
           // Regular dimension or implicit expression dependency
           const rightTdItems = mainQueryContext.timeDimensions.map.get(rightDimension) || [];
@@ -5287,6 +5291,8 @@ export class BaseQuery {
                 dateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.original.dateRange,
                 boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.original.boundaryDateRange
             });
+
+            subOriginalTimeDimensionsMetadata.push({metadata: originalMetadata, dimension: leftDimension, operator: operator});
           } else {
             return;
           }
@@ -5300,14 +5306,16 @@ export class BaseQuery {
        * Add dimension to subQuery
        * Prefers regular dimensions over expression dependencies when both exist
        */
-      const addDimension = (leftDimension, rightDimension, isExpressionDimension, expressionMetadata = null) => {
+      const addDimension = (leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata = null) => {
         if (processed.dimensions.has(leftDimension)) return;
 
         if (expressionMetadata && expressionMetadata?.original && !expressionMetadata?.original?.isExpression && isExpressionDimension) {
           subQueryDimensions.push(createExpressionDimension(expressionMetadata));
+          subOriginalDimensionsMetadata.push({metadata: expressionMetadata, dimension: expressionMetadata.original?.expressionName, operator: operator});
         } else {
           if(!isExpressionDimension && !expressionMetadata && !expressionMetadata?.original?.isExpression) {
             subQueryDimensions.push(leftDimension);
+            subOriginalDimensionsMetadata.push({metadata: expressionMetadata, dimension: leftDimension, operator: operator});
           } else {
             return;
           }
@@ -5318,15 +5326,15 @@ export class BaseQuery {
       };
 
       // Process all validated allowed dimensions
-      validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata, isOnlyFilter }) => {
+      validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata, isOnlyFilter, operator}) => {
         if (isExpressionDimension && expressionMetadata && expressionMetadata.original && !isOnlyFilter) {
           // Explicit expression dimension in allowedDimensions
           const isTimeDimension = expressionMetadata.type === 'timeDimension';
           
           if (isTimeDimension) {
-            addTimeDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
+            addTimeDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
           } else {
-            addDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
+            addDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
           }
         } else {
           // Regular dimension or implicit expression dependency
@@ -5340,13 +5348,13 @@ export class BaseQuery {
                                       !existsInMainQueryTimeDimensions;
           
           if (existsInMainQueryDimensions && !isOnlyFilter) {
-            addDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
+            addDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
           }
 
           if (existsInMainQueryTimeDimensions && !isOnlyFilter) {
-            addTimeDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
+            addTimeDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
           } else if (existsOnlyInFilters && !(leftIsTimeDimension && rightIsTimeDimension) && !isOnlyFilter) {
-            addDimension(leftDimension, rightDimension, isExpressionDimension, expressionMetadata);
+            addDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
           }
         }
       });
@@ -5604,11 +5612,39 @@ export class BaseQuery {
     // ============================================================================
     // STEP 15: Build correlatedWhereClause
     // ============================================================================
-    
-    const subQueryTimeDimensions = subQueryOptions.timeDimensions || [];
-    const subQueryDimensions = subQueryOptions.dimensions || [];
-    const mainQueryTimeDimensionsForJoin = this.timeDimensions || [];
-    const mainQueryDimensionsForJoin = this.dimensions || [];
+
+    /**
+     * Get SQL for dimension in main query
+     * 
+     * For expression dimensions: Returns SQL expression (e.g., "orders.total / orders.count")
+     * For regular dimensions: Returns column reference (e.g., "orders.total")
+     * 
+     * This is the key difference: Expression dimensions in WHERE clause use their SQL expression,
+     * not just a column reference
+     */
+    const getMainQueryDimensionSql = (mainQueryDimension) => {
+      if (mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
+        try {
+          const rewrittenSql = this.evaluateSymbolSqlWithContext(
+            () => mainQueryDimension.dimensionSql(),
+            { renderedReference: mainQueryRenderedReference, rollupQuery: true }
+          );
+          if (rewrittenSql != null) {
+            const asString = typeof rewrittenSql === 'string' ? rewrittenSql : rewrittenSql.toString();
+            if (typeof asString === 'string') return asString;
+          }
+        } catch {
+          // If renderedReference causes resolution issues (e.g. expressionName-only keys),
+          // fall back to plain dimensionSql without rewrites.
+        }
+      }
+      
+      try {
+        return mainQueryDimension?.dimensionSql?.() || null;
+      } catch {
+        return null;
+      }
+    };
 
     const parseGranularityFromPath = (path) => {
       if (!path) return { dimPath: null, granularity: null };
@@ -5632,104 +5668,25 @@ export class BaseQuery {
 
     /**
      * Build WHERE clause for correlation
-     *
+     * 
      * Format: subquery.column_alias = main_query.dimension_sql
-     *
+     * 
      * Examples:
      * - Regular: subquery.activity_total = orders.total
      * - Expression: subquery.activity_avgprice = orders.total / orders.count
      */
-    const correlatedWhereClause = (() => {
-      // Build correlation conditions from validatedAllowedDimensions
-      const correlationConditions = validatedAllowedDimensions
-        .filter(item => !item.isOnlyFilter) // Only include dimensions that are in SELECT, not just filters
-        .map(({ leftDimension, rightDimension, originalRightDimension, operator, isExpressionDimension, expressionMetadata }) => {
-          const comparisonOperator = operator || '=';
+    const correlatedWhereClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
+      .map(({ metadata, dimension, operator }) => {
 
-          // LEFT SIDE: subquery column reference
-          // Format: subquery_alias.column_alias
-          const leftColumnAlias = subQuery.escapeColumnName(subQuery.aliasName(leftDimension));
-          const leftSide = `${escapedSubQueryAlias}.${leftColumnAlias}`;
+        const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimension)}`;
+        const mainQuerySql = getMainQueryDimensionSql(metadata.original);
 
-          // RIGHT SIDE: main query dimension SQL
-          let rightSide;
+        if (!mainQueryColumn) return null;
 
-          // Check if we have pre-aggregation rendered reference
-          if (mainQueryRenderedReference && mainQueryRenderedReference[rightDimension]) {
-            rightSide = mainQueryRenderedReference[rightDimension];
-          } else if (mainQueryRenderedReference && mainQueryRenderedReference[rightDimension.toLowerCase()]) {
-            rightSide = mainQueryRenderedReference[rightDimension.toLowerCase()];
-          } else if (isExpressionDimension && expressionMetadata) {
-            // Expression dimension: evaluate the expression SQL
-            const exprCubeName = expressionMetadata.original?.cubeName || expressionMetadata.cubeName;
-            const exprFunc = expressionMetadata.original?.expression || expressionMetadata.expression;
-
-            if (exprFunc && exprCubeName) {
-              // Evaluate expression SQL using main query context
-              rightSide = this.evaluateSql(exprCubeName, exprFunc);
-            } else {
-              // Fallback: try to find matching dimension in main query
-              const mainDim = mainQueryDimensionsForJoin.find(d =>
-                d.expressionName?.toLowerCase() === rightDimension.toLowerCase()
-              );
-              const mainTimeDim = mainQueryTimeDimensionsForJoin.find(d =>
-                d.expressionName?.toLowerCase() === rightDimension.toLowerCase()
-              );
-
-              if (mainDim) {
-                rightSide = this.dimensionSql(mainDim);
-              } else if (mainTimeDim) {
-                rightSide = mainTimeDim.dimensionSql();
-              } else {
-                // Last resort: try to create dimension and get SQL
-                return null;
-              }
-            }
-          } else {
-            // Regular dimension: find in main query or generate SQL
-            const { dimPath, granularity } = parseGranularityFromPath(originalRightDimension);
-
-            // Try to find the dimension in main query dimensions/timeDimensions
-            const mainDim = mainQueryDimensionsForJoin.find(d =>
-              d.dimension?.toLowerCase() === rightDimension.toLowerCase() ||
-              d.dimension?.toLowerCase() === dimPath?.toLowerCase()
-            );
-
-            const mainTimeDim = mainQueryTimeDimensionsForJoin.find(d => {
-              const tdPath = d.dimension?.toLowerCase();
-              const tdWithGran = d.granularity ? `${d.dimension}.${d.granularity}`.toLowerCase() : null;
-              return tdPath === rightDimension.toLowerCase() ||
-                     tdPath === dimPath?.toLowerCase() ||
-                     tdWithGran === rightDimension.toLowerCase();
-            });
-
-            if (mainDim) {
-              rightSide = this.dimensionSql(mainDim);
-            } else if (mainTimeDim) {
-              // For time dimensions, use dimensionSql which handles granularity
-              rightSide = mainTimeDim.dimensionSql();
-            } else {
-              // Dimension is only in filters, not in SELECT - generate SQL directly
-              try {
-                const newDim = this.newDimension(originalRightDimension);
-                rightSide = this.dimensionSql(newDim);
-              } catch {
-                // If we can't create dimension, skip this correlation
-                return null;
-              }
-            }
-          }
-
-          if (!rightSide) return null;
-
-          return `${leftSide} ${comparisonOperator} ${rightSide}`;
-        })
-        .filter(Boolean);
-
-      return correlationConditions.length > 0
-        ? correlationConditions.join(' AND ')
-        : null;
-    })();
+        return `${subQueryColumn} ${operator} ${mainQuerySql}`;
+      })
+      .filter(Boolean)
+      .join(' AND ') || 'true';
 
     // ============================================================================
     // STEP 16: Return result
