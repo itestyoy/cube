@@ -5586,8 +5586,9 @@ export class BaseQuery {
         const filteredRenderedReference = Object.fromEntries(
           Object.entries(renderedReference).filter(([key]) => {
             try {
-              this.cubeEvaluator.byPathAnyType(key);
-              return true;
+              const member = this.cubeEvaluator.byPathAnyType(key);
+              // Skip expression members so we don't substitute them with aliases
+              return !member?.expression;
             } catch {
               return false;
             }
