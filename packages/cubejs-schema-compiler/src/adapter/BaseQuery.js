@@ -5639,10 +5639,14 @@ export class BaseQuery {
       }
       
       try {
-        return mainQueryDimension?.dimensionSql?.() || null;
+        const rewrittenSql = mainQueryDimension?.dimensionSql?.() || null;
+        const asString = typeof rewrittenSql === 'string' ? rewrittenSql : rewrittenSql.toString();
+        if (typeof asString === 'string') return asString;
       } catch {
         return null;
       }
+      
+      return null;
     };
 
     /**
