@@ -5225,10 +5225,11 @@ export class BaseQuery {
     // ============================================================================
     // STEP 9: Build dimensions and timeDimensions for subQuery
     // ============================================================================
-    
+
+    const subOriginalTimeDimensionsMetadata = [];
+    const subOriginalDimensionsMetadata = [];
+
     if (hasAllowedDimensions) {
-      const subOriginalTimeDimensionsMetadata = [];
-      const subOriginalDimensionsMetadata = [];
       const subQueryDimensions = [];
       const subQueryTimeDimensions = [];
       const processed = {
@@ -5681,7 +5682,7 @@ export class BaseQuery {
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimension)}`;
         const mainQuerySql = getMainQueryDimensionSql(metadata.original);
 
-        if (!mainQueryColumn) return null;
+        if (!mainQuerySql) return null;
 
         return `${subQueryColumn} ${operator} ${mainQuerySql}`;
       })
