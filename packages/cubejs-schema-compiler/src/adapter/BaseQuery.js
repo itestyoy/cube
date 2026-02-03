@@ -5684,7 +5684,15 @@ export class BaseQuery {
         }
       }
 
-      return mainQueryDimension?.dimensionSql?.() || null;
+      try {
+        return mainQueryDimension?.dimensionSql?.() || null;
+      } catch {
+        // Expression dimensions without fully qualified names (e.g. SQL pushdown
+        // columns like `datetrunc_utf8__`) can throw during member resolution.
+        // Swallow the error so correlated joins skip the broken mapping instead
+        // of failing the entire query.
+        return null;
+      }
     };
 
     const parseGranularityFromPath = (path) => {
@@ -5735,13 +5743,13 @@ export class BaseQuery {
         if (!subQueryColumnName) return null;
 
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(subQueryColumnName)}`;
-        const mainQueryColumn = getMainQueryDimensionSql(mainQueryDimension);
+        //const mainQueryColumn = getMainQueryDimensionSql(mainQueryDimension);
 
-        if (!mainQueryColumn) return null;
+        //if (!mainQueryColumn) return null;
 
-        const escapedMainQueryColumn = mainQueryColumn.split(".").map(part => this.escapeColumnName(part)).join(".");
+        // const escapedMainQueryColumn = mainQueryColumn.split(".").map(part => this.escapeColumnName(part)).join(".");
 
-        return `${escapedMainQueryColumn}`;
+        return `${subQueryColumn} ${operator} ${JSON.stringify(mainQueryDimension)}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
