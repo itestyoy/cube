@@ -5581,8 +5581,21 @@ export class BaseQuery {
           );
         });
 
+        // Drop keys that aren’t real cube members (primarily expressionName-only entries),
+        // otherwise evaluateSymbolSql will substitute an expression with a single alias.
+        const filteredRenderedReference = Object.fromEntries(
+          Object.entries(renderedReference).filter(([key]) => {
+            try {
+              this.cubeEvaluator.byPathAnyType(key);
+              return true;
+            } catch {
+              return false;
+            }
+          })
+        );
+
         mainQueryRenderedReference = Object.fromEntries(
-          Object.entries(renderedReference).map(([key, value]) => [key, `${mainQueryAlias}.${value}`])
+          Object.entries(filteredRenderedReference).map(([key, value]) => [key, `${mainQueryAlias}.${value}`])
         );
       }
     }
@@ -5638,30 +5651,14 @@ export class BaseQuery {
      */
     const getMainQueryDimensionSql = (mainQueryDimension) => {
       if (mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
-        // When the main query is fulfilled from a rollup/rollupJoin, renderedReference
-        // contains aliases for every projected column. For expression dimensions we want
-        // to keep the full SQL expression (with its dependencies rewritten), not swap the
-        // whole expression to a single alias column. Drop the direct expression mapping
-        // while preserving mappings for its dependencies.
-        let renderedReference = mainQueryRenderedReference;
-
-        if (mainQueryDimension.expressionName) {
-          const exprKey = mainQueryDimension.expressionName.toLowerCase();
-          renderedReference = Object.fromEntries(
-            Object.entries(mainQueryRenderedReference)
-              .filter(([key]) => key.toLowerCase() !== exprKey)
-          );
-        }
-
         const rewrittenSql = this.evaluateSymbolSqlWithContext(
           () => mainQueryDimension.dimensionSql(),
-          { renderedReference, rollupQuery: true }
+          { renderedReference: mainQueryRenderedReference, rollupQuery: true }
         );
-
         if (typeof rewrittenSql === 'string') return rewrittenSql;
       }
 
-      return mainQueryDimension?.dimensionSql?.();
+      return mainQueryDimension?.dimensionSql?.() || null;
     };
 
     const parseGranularityFromPath = (path) => {
