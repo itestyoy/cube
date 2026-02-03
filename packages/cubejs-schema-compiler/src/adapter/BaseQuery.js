@@ -5541,8 +5541,7 @@ export class BaseQuery {
     // STEP 13: Build subQuery and generate SQL
     // ============================================================================
     
-    const subQueryAlias = correlatedQuery?.subQueryAlias || 
-                          this.aliasName(`${cubeName}_${memberName}_subquery`);
+    const subQueryAlias = correlatedQuery?.subQueryAlias;
     const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
 
     const subQuery = this.newSubQuery(subQueryOptions);
@@ -5646,26 +5645,6 @@ export class BaseQuery {
       }
     };
 
-    const parseGranularityFromPath = (path) => {
-      if (!path) return { dimPath: null, granularity: null };
-
-      const parts = path.split('.');
-
-      if (parts.length < 3) return { dimPath: path, granularity: null };
-
-      const maybeGranularity = parts[parts.length - 1];
-      const knownGranularity = standardGranularitiesParents[maybeGranularity];
-
-      if (knownGranularity) {
-        return {
-          dimPath: parts.slice(0, parts.length - 1).join('.'),
-          granularity: maybeGranularity
-        };
-      }
-
-      return { dimPath: path, granularity: null };
-    };
-
     /**
      * Build WHERE clause for correlation
      * 
@@ -5683,7 +5662,7 @@ export class BaseQuery {
 
         if (!mainQuerySql) return null;
 
-        return `${subQueryColumn} ${operator} ${mainQuerySql}`;
+        return `${subQueryColumn} ${operator} ${dimension}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
