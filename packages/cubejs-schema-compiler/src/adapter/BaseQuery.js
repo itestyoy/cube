@@ -4793,17 +4793,10 @@ export class BaseQuery {
             result.push({
               path: dimObj.expressionName,
               type: type,
-              original: {
-                expression: dimObj.expression,
-                cubeName: dimObj.expressionCubeName,
-                name: dimObj.expressionName,
-                expressionName: dimObj.expressionName,
-                definition: dimObj.expression
-              },
+              original: dimObj,  // Store BaseDimension instance with dimensionSql() method
               isExpression: true,
               allDependencies: dependencies
             });
-
           }
         } else {
           // Regular dimension
@@ -5152,8 +5145,8 @@ export class BaseQuery {
       .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, operator }) => {
         if (!expressionMetadata) return;
         
-        const rightCubeName = expressionMetadata.original.cubeName;
-        const leftCubeName = expressionMetadata.original.cubeName;
+        const rightCubeName = expressionMetadata.original.expressionCubeName;
+        const leftCubeName = expressionMetadata.original.expressionCubeName;
         
         if (!rightCubeName || !leftCubeName) {
 
@@ -5248,18 +5241,20 @@ export class BaseQuery {
        * Output: { expression: (o) => o.total / o.count, expressionName: 'Activity.avgPrice', cubeName: 'Activity' }
        */
       const createExpressionDimension = (expressionMetadata) => {
-        if(!expressionMetadata?.original?.cubeName) {
+        // original is now a BaseDimension instance
+        const baseDim = expressionMetadata?.original;
+        if (!baseDim?.expressionCubeName) {
           throw new UserError(
-            `Only allowed expression '${expressionMetadata.original?.expressionName}' with cube references, ` +
-            `references ${expressionMetadata?.original?.cubeName}`
+            `Only allowed expression '${baseDim?.expressionName}' with cube references, ` +
+            `references ${baseDim?.expressionCubeName}`
           );
         }
         return {
-          expression: expressionMetadata.original?.expression,
-          cubeName: expressionMetadata.original?.cubeName,
-          name: expressionMetadata.original?.name,
-          expressionName: expressionMetadata.original?.expressionName,
-          definition: expressionMetadata.original?.definition
+          expression: baseDim.expression,
+          cubeName: baseDim.expressionCubeName,
+          name: baseDim.expressionName,
+          expressionName: baseDim.expressionName,
+          definition: baseDim.expression  // For expression dimensions, definition is the expression itself
         };
       };
 
@@ -5314,9 +5309,13 @@ export class BaseQuery {
           subQueryDimensions.push(createExpressionDimension(expressionMetadata));
           subOriginalDimensionsMetadata.push({metadata: expressionMetadata, dimension: expressionMetadata.original?.expressionName, operator: operator});
         } else {
-          if(!isExpressionDimension && !expressionMetadata && !expressionMetadata?.original?.isExpression) {
+          // Regular dimension - find original metadata from mainQueryContext (same as addTimeDimension)
+          const rightDimItems = mainQueryContext.dimensions.map.get(rightDimension) || [];
+          const originalMetadata = rightDimItems.find(item => !item.isExpression);
+
+          if (!isExpressionDimension && originalMetadata) {
             subQueryDimensions.push(leftDimension);
-            subOriginalDimensionsMetadata.push({metadata: expressionMetadata, dimension: leftDimension, operator: operator});
+            subOriginalDimensionsMetadata.push({metadata: originalMetadata, dimension: leftDimension, operator: operator});
           } else {
             return;
           }
@@ -5452,9 +5451,9 @@ export class BaseQuery {
               dimension: filter.dimension ? {
                 expression: exprMetadata.original.expression,
                 cubeName: leftCubeName,
-                name: leftMember.split('.').pop(),
+                name: leftMember,
                 expressionName: leftMember,
-                definition: exprMetadata.original.definition
+                definition: exprMetadata.original.expression  // For BaseDimension, expression is the definition
               } : undefined,
               member: filter.member ? leftMember : undefined,
             };
