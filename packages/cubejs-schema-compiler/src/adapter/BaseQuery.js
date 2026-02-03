@@ -5637,12 +5637,27 @@ export class BaseQuery {
      * not just a column reference
      */
     const getMainQueryDimensionSql = (mainQueryDimension) => {
-      if(mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
+      if (mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
+        // When the main query is fulfilled from a rollup/rollupJoin, renderedReference
+        // contains aliases for every projected column. For expression dimensions we want
+        // to keep the full SQL expression (with its dependencies rewritten), not swap the
+        // whole expression to a single alias column. Drop the direct expression mapping
+        // while preserving mappings for its dependencies.
+        let renderedReference = mainQueryRenderedReference;
+
+        if (mainQueryDimension.expressionName) {
+          const exprKey = mainQueryDimension.expressionName.toLowerCase();
+          renderedReference = Object.fromEntries(
+            Object.entries(mainQueryRenderedReference)
+              .filter(([key]) => key.toLowerCase() !== exprKey)
+          );
+        }
+
         const rewrittenSql = this.evaluateSymbolSqlWithContext(
           () => mainQueryDimension.dimensionSql(),
-          { renderedReference: mainQueryRenderedReference, rollupQuery: true }
+          { renderedReference, rollupQuery: true }
         );
-        
+
         if (typeof rewrittenSql === 'string') return rewrittenSql;
       }
 
@@ -5697,9 +5712,10 @@ export class BaseQuery {
         if (!subQueryColumnName) return null;
 
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(subQueryColumnName)}`;
-        // const mainQueryColumn = getMainQueryDimensionSql(mainQueryDimension);
+        const mainQueryColumn = getMainQueryDimensionSql(mainQueryDimension);
+        if (!mainQueryColumn) return null;
 
-        return `${subQueryColumn} ${operator} ${mainQueryDimension?.dimensionSql?.()}`;
+        return `${subQueryColumn} ${operator} ${mainQueryColumn}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
