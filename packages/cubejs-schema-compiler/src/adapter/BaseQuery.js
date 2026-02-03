@@ -5666,31 +5666,10 @@ export class BaseQuery {
           // fall back to plain dimensionSql without rewrites.
         }
       }
-
-      if (mainQueryDimension?.dimensionSql) {
-        // Ensure we don't accidentally reuse an existing renderedReference context
-        // (which would substitute expression to an alias). Clear it explicitly.
-        try {
-          const rewrittenSql = this.evaluateSymbolSqlWithContext(
-            () => mainQueryDimension.dimensionSql(),
-            { renderedReference: {} }
-          );
-          if (rewrittenSql != null) {
-            const asString = typeof rewrittenSql === 'string' ? rewrittenSql : rewrittenSql.toString();
-            if (typeof asString === 'string') return asString;
-          }
-        } catch {
-          // ignore and fall through
-        }
-      }
-
+      
       try {
         return mainQueryDimension?.dimensionSql?.() || null;
       } catch {
-        // Expression dimensions without fully qualified names (e.g. SQL pushdown
-        // columns like `datetrunc_utf8__`) can throw during member resolution.
-        // Swallow the error so correlated joins skip the broken mapping instead
-        // of failing the entire query.
         return null;
       }
     };
@@ -5743,13 +5722,15 @@ export class BaseQuery {
         if (!subQueryColumnName) return null;
 
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(subQueryColumnName)}`;
-        //const mainQueryColumn = getMainQueryDimensionSql(mainQueryDimension);
+        const mainQueryColumn = getMainQueryDimensionSql(mainQueryDimension);
 
-        //if (!mainQueryColumn) return null;
+        throw new UserError(
+            `Log mainQueryColumn ${mainQueryColumn}`
+        );
 
-        // const escapedMainQueryColumn = mainQueryColumn.split(".").map(part => this.escapeColumnName(part)).join(".");
+        if (!mainQueryColumn) return null;
 
-        return `${subQueryColumn} ${operator} ${JSON.stringify(mainQueryDimension)}`;
+        return `${subQueryColumn} ${operator} ${mainQueryColumn}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
