@@ -5736,9 +5736,12 @@ export class BaseQuery {
 
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(subQueryColumnName)}`;
         const mainQueryColumn = getMainQueryDimensionSql(mainQueryDimension);
+
         if (!mainQueryColumn) return null;
 
-        return `${subQueryColumn} ${operator} ${mainQueryColumn}`;
+        const escapedMainQueryColumn = mainQueryColumn.split(".").map(part => this.escapeColumnName(part)).join(".");
+
+        return `${escapedMainQueryColumn}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
