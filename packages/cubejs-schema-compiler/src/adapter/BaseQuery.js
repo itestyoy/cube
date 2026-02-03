@@ -5651,11 +5651,30 @@ export class BaseQuery {
      */
     const getMainQueryDimensionSql = (mainQueryDimension) => {
       if (mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
-        const rewrittenSql = this.evaluateSymbolSqlWithContext(
-          () => mainQueryDimension.dimensionSql(),
-          { renderedReference: mainQueryRenderedReference, rollupQuery: true }
-        );
-        if (typeof rewrittenSql === 'string') return rewrittenSql;
+        try {
+          const rewrittenSql = this.evaluateSymbolSqlWithContext(
+            () => mainQueryDimension.dimensionSql(),
+            { renderedReference: mainQueryRenderedReference, rollupQuery: true }
+          );
+          if (typeof rewrittenSql === 'string') return rewrittenSql;
+        } catch {
+          // If renderedReference causes resolution issues (e.g. expressionName-only keys),
+          // fall back to plain dimensionSql without rewrites.
+        }
+      }
+
+      if (mainQueryDimension?.dimensionSql) {
+        // Ensure we don't accidentally reuse an existing renderedReference context
+        // (which would substitute expression to an alias). Clear it explicitly.
+        try {
+          const rawSql = this.evaluateSymbolSqlWithContext(
+            () => mainQueryDimension.dimensionSql(),
+            { renderedReference: {} }
+          );
+          if (typeof rawSql === 'string') return rawSql;
+        } catch {
+          // ignore and fall through
+        }
       }
 
       return mainQueryDimension?.dimensionSql?.() || null;
