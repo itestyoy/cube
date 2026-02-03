@@ -5657,7 +5657,10 @@ export class BaseQuery {
             () => mainQueryDimension.dimensionSql(),
             { renderedReference: mainQueryRenderedReference, rollupQuery: true }
           );
-          if (typeof rewrittenSql === 'string') return rewrittenSql;
+          if (rewrittenSql != null) {
+            const asString = typeof rewrittenSql === 'string' ? rewrittenSql : rewrittenSql.toString();
+            if (typeof asString === 'string') return asString;
+          }
         } catch {
           // If renderedReference causes resolution issues (e.g. expressionName-only keys),
           // fall back to plain dimensionSql without rewrites.
@@ -5668,11 +5671,14 @@ export class BaseQuery {
         // Ensure we don't accidentally reuse an existing renderedReference context
         // (which would substitute expression to an alias). Clear it explicitly.
         try {
-          const rawSql = this.evaluateSymbolSqlWithContext(
+          const rewrittenSql = this.evaluateSymbolSqlWithContext(
             () => mainQueryDimension.dimensionSql(),
             { renderedReference: {} }
           );
-          if (typeof rawSql === 'string') return rawSql;
+          if (rewrittenSql != null) {
+            const asString = typeof rewrittenSql === 'string' ? rewrittenSql : rewrittenSql.toString();
+            if (typeof asString === 'string') return asString;
+          }
         } catch {
           // ignore and fall through
         }
