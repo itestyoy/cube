@@ -5646,11 +5646,11 @@ export class BaseQuery {
       .map(({ metadata, dimension, operator }) => {
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimension)}`;
 
-        return `${JSON.stringify(mainQueryRenderedReference)}`
-
         try {
           const dimensionSql = metadata?.original?.dimensionSql?.() || null;
           if (!dimensionSql) return null;
+
+          return `${JSON.stringify(mainQueryRenderedReference)} ${dimensionSql}`
 
           const dimensionSqlasString = typeof dimensionSql === 'string' ? dimensionSql : dimensionSql.toString();
           const mainQuerySql = `${getMainQueryDimensionSql(dimensionSqlasString)}`;
