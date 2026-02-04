@@ -5645,7 +5645,7 @@ export class BaseQuery {
       } catch {
         return null;
       }
-      
+
       return null;
     };
 
@@ -5654,19 +5654,23 @@ export class BaseQuery {
      * 
      * Format: subquery.column_alias = main_query.dimension_sql
      * 
-     * Examples:
-     * - Regular: subquery.activity_total = orders.total
-     * - Expression: subquery.activity_avgprice = orders.total / orders.count
      */
     const correlatedWhereClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
       .map(({ metadata, dimension, operator }) => {
 
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimension)}`;
-        const mainQuerySql = getMainQueryDimensionSql(metadata.original);
+
+        let mainQuerySql;
+
+        try {
+          const mainQuerySql = `${getMainQueryDimensionSql(metadata.original)}`;
+        } catch {
+          return null;
+        }
 
         if (!mainQuerySql) return null;
 
-        return `${subQueryColumn} ${operator} ${dimension}`;
+        return `${subQueryColumn} ${operator} ${mainQuerySql}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
