@@ -5593,15 +5593,6 @@ export class BaseQuery {
         mainQueryRenderedReference = Object.fromEntries(
           Object.entries(renderedReference)
             .map(([key, value]) => [key, `${mainQueryAlias}.${value}`])
-            .filter(([key, value]) => {
-              try {
-                const defValue = this.cubeEvaluator.byPathAnyType(value);
-                const defKey = this.cubeEvaluator.byPathAnyType(key);
-                return true
-              } catch {
-                return false
-              }
-            })
         );
       }
     }
@@ -5647,35 +5638,7 @@ export class BaseQuery {
      * This is the key difference: Expression dimensions in WHERE clause use their SQL expression,
      * not just a column reference
      */
-    const getMainQueryDimensionSql = (dimensionSql, metadata) => {
-      const getKnownColumnAliases = (meta) => {
-        const original = meta?.original;
-        if (!original) return [];
-
-        const aliases = new Set();
-
-        if (typeof original.aliasName === 'function') {
-          const alias = original.aliasName();
-          if (alias) aliases.add(alias);
-        }
-
-        if (typeof original.unescapedAliasName === 'function') {
-          const withGranularity = original.unescapedAliasName(original.granularity);
-          if (withGranularity) {
-            aliases.add(this.escapeColumnName(withGranularity));
-          }
-
-          const plainUnescaped = original.unescapedAliasName();
-          if (plainUnescaped) {
-            aliases.add(this.escapeColumnName(plainUnescaped));
-          }
-        }
-
-        return Array.from(aliases);
-      };
-
-      let resultSql = dimensionSql;
-
+    const getMainQueryDimensionSql = (dimensionSql) => {
       if (mainQueryAlias && mainQueryRenderedReference) {
         try {
           const rewrittenSql = this.evaluateSymbolSqlWithContext(
@@ -5683,7 +5646,7 @@ export class BaseQuery {
             { renderedReference: mainQueryRenderedReference, rollupQuery: true }
           );
           if (rewrittenSql != null) {
-            resultSql = rewrittenSql;
+            return rewrittenSql;
           }
         } catch {
           // If renderedReference causes resolution issues (e.g. expressionName-only keys),
@@ -5691,15 +5654,7 @@ export class BaseQuery {
         }
       }
       
-      if (mainQueryAlias && resultSql) {
-        const trimmedSql = resultSql.trim();
-        const knownAliases = getKnownColumnAliases(metadata);
-        if (knownAliases.includes(trimmedSql)) {
-          return `${mainQueryAlias}.${trimmedSql}`;
-        }
-      }
-
-      return resultSql;
+      return dimensionSql;
     };
 
     /**
@@ -5747,7 +5702,7 @@ export class BaseQuery {
         if (!dimensionSql) return null;
 
         const dimensionSqlasString = typeof dimensionSql === 'string' ? dimensionSql : dimensionSql.toString();
-        const mainQuerySql = `${getMainQueryDimensionSql(dimensionSqlasString, metadata)}`;
+        const mainQuerySql = `${getMainQueryDimensionSql(dimensionSqlasString)}`;
 
         if (!mainQuerySql) return null;
 
