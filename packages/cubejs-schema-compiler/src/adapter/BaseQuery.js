@@ -5611,6 +5611,26 @@ export class BaseQuery {
     // ============================================================================
 
     /**
+     * Get column alias for dimension in subQuery
+     * Uses unescapedAliasName() method from dimension object
+     */
+    const getSubQueryColumnName = (metadata) => {
+
+      const original = metadata?.original;
+      if (!original) return null;
+
+      if (original) {
+        if (original.granularity) {
+          return original.unescapedAliasName();
+        }
+      }
+
+      if (original?.unescapedAliasName) return original.unescapedAliasName();
+
+      return null;
+    };
+
+    /**
      * Get SQL for dimension in main query
      * 
      * For expression dimensions: Returns SQL expression (e.g., "orders.total / orders.count")
@@ -5673,7 +5693,11 @@ export class BaseQuery {
      */
     const correlatedWhereClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
       .map(({ metadata, dimension, operator }) => {
-        const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimension)}`;
+
+        const dimensionAlias = getSubQueryColumnName(metadata);
+        if (!dimensionAlias) return null;
+
+        const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimensionAlias)}`;
 
         const dimensionSql = getCorrelationDimensionSql(metadata);
         if (!dimensionSql) return null;
