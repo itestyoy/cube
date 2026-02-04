@@ -5288,7 +5288,9 @@ export class BaseQuery {
                 boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.original.boundaryDateRange
             });
 
-            subOriginalTimeDimensionsMetadata.push({metadata: originalMetadata, dimension: leftDimension, operator: operator});
+            if(originalMetadata.original?.granularity) {
+                subOriginalTimeDimensionsMetadata.push({metadata: originalMetadata, dimension: leftDimension, operator: operator});
+            }
           } else {
             return;
           }
