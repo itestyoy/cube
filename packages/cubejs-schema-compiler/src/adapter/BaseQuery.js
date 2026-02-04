@@ -5650,7 +5650,7 @@ export class BaseQuery {
           const dimensionSql = metadata?.original?.dimensionSql?.() || null;
           if (!dimensionSql) return null;
 
-          return `${JSON.stringify(mainQueryRenderedReference)} ${dimensionSql}`
+          return `${JSON.stringify(mainQueryRenderedReference)}`
 
           const dimensionSqlasString = typeof dimensionSql === 'string' ? dimensionSql : dimensionSql.toString();
           const mainQuerySql = `${getMainQueryDimensionSql(dimensionSqlasString)}`;
