@@ -5452,9 +5452,9 @@ export class BaseQuery {
               ...filter,
               dimension: filter.dimension ? {
                 expression: exprMetadata.original.expression,
-                cubeName: leftCubeName,
-                name: leftMember,
-                expressionName: leftMember,
+                cubeName: exprMetadata.original.expressionCubeName,
+                name: exprMetadata.original.expressionName,
+                expressionName: exprMetadata.original.expressionName,
                 definition: exprMetadata.original.expression  // For BaseDimension, expression is the definition
               } : undefined,
               member: filter.member ? leftMember : undefined,
@@ -5612,22 +5612,25 @@ export class BaseQuery {
 
     /**
      * Get column alias for dimension in subQuery
-     * Uses unescapedAliasName() method from dimension object
+     * Mirrors BaseDimension/BaseTimeDimension unescapedAliasName logic
      */
-    const getSubQueryColumnName = (metadata) => {
-
+    const getSubQueryColumnName = (metadata, dimension) => {
       const original = metadata?.original;
       if (!original) return null;
 
-      if (original) {
-        if (original.granularity) {
-          return original.unescapedAliasName();
-        }
+      // Expression dimension
+      if (original.expressionName) {
+        return subQuery.aliasName(original.expressionName);
       }
 
-      if (original?.unescapedAliasName) return original.unescapedAliasName();
+      // Time dimension with granularity
+      if (original.granularity) {
+        const path = `${dimension}.${original.granularity}`;
+        return `${subQuery.aliasName(path)}`;
+      }
 
-      return null;
+      // Regular dimension
+      return subQuery.aliasName(dimension);
     };
 
     /**
@@ -5694,7 +5697,7 @@ export class BaseQuery {
     const correlatedWhereClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
       .map(({ metadata, dimension, operator }) => {
 
-        const dimensionAlias = getSubQueryColumnName(metadata);
+        const dimensionAlias = getSubQueryColumnName(metadata, dimension);
         if (!dimensionAlias) return null;
 
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimensionAlias)}`;
