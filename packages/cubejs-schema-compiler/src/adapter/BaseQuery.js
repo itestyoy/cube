@@ -5621,16 +5621,15 @@ export class BaseQuery {
      * This is the key difference: Expression dimensions in WHERE clause use their SQL expression,
      * not just a column reference
      */
-    const getMainQueryDimensionSql = (mainQueryDimension) => {
-      if (mainQueryAlias && mainQueryRenderedReference && mainQueryDimension?.dimensionSql) {
+    const getMainQueryDimensionSql = (dimensionSql) => {
+      if (mainQueryAlias && mainQueryRenderedReference) {
         try {
           const rewrittenSql = this.evaluateSymbolSqlWithContext(
-            () => mainQueryDimension.dimensionSql(),
+            () => dimensionSql,
             { renderedReference: mainQueryRenderedReference, rollupQuery: true }
           );
           if (rewrittenSql != null) {
-            const asString = typeof rewrittenSql === 'string' ? rewrittenSql : rewrittenSql.toString();
-            if (typeof asString === 'string') return asString;
+            return rewrittenSql;
           }
         } catch {
           // If renderedReference causes resolution issues (e.g. expressionName-only keys),
@@ -5638,15 +5637,7 @@ export class BaseQuery {
         }
       }
       
-      try {
-        const rewrittenSql = mainQueryDimension?.dimensionSql?.() || null;
-        const asString = typeof rewrittenSql === 'string' ? rewrittenSql : rewrittenSql.toString();
-        if (typeof asString === 'string') return asString;
-      } catch {
-        return null;
-      }
-
-      return null;
+      return dimensionSql;
     };
 
     /**
@@ -5657,20 +5648,21 @@ export class BaseQuery {
      */
     const correlatedWhereClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
       .map(({ metadata, dimension, operator }) => {
-
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimension)}`;
 
-        let mainQuerySql;
+        const dimensionSql = metadata?.original?.dimensionSql?.() || null;
+        if (!dimensionSql) return null;
 
         try {
-          const mainQuerySql = `${getMainQueryDimensionSql(metadata.original)}`;
+          const dimensionSqlasString = typeof dimensionSql === 'string' ? dimensionSql : dimensionSql.toString();
+          const mainQuerySql = `${getMainQueryDimensionSql(dimensionSqlasString)}`;
+
+          if (!mainQuerySql) return null;
+
+          return `${subQueryColumn} ${operator} ${mainQuerySql}`;
         } catch {
           return null;
         }
-
-        if (!mainQuerySql) return null;
-
-        return `${subQueryColumn} ${operator} ${mainQuerySql}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
