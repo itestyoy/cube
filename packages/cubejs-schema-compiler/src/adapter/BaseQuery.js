@@ -5618,19 +5618,23 @@ export class BaseQuery {
       const original = metadata?.original;
       if (!original) return null;
 
+      const isPreAggregationName =
+        !!subQuery.options.preAggregationQuery ||
+        !!subQuery.safeEvaluateSymbolContext()?.rollupQuery;
+
       // Expression dimension
       if (original.expressionName) {
-        return subQuery.aliasName(original.expressionName);
+        return subQuery.aliasName(original.expressionName, isPreAggregationName);
       }
 
       // Time dimension with granularity
       if (original.granularity) {
         const path = `${dimension}.${original.granularity}`;
-        return `${subQuery.aliasName(path)}`;
+        return `${subQuery.aliasName(path, isPreAggregationName)}`;
       }
 
       // Regular dimension
-      return subQuery.aliasName(dimension);
+      return subQuery.aliasName(dimension, isPreAggregationName);
     };
 
     /**
