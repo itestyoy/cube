@@ -5588,22 +5588,18 @@ export class BaseQuery {
           );
         });
 
-        // Drop keys that aren’t real cube members (primarily expressionName-only entries),
-        // otherwise evaluateSymbolSql will substitute an expression with a single alias.
-        const filteredRenderedReference = Object.fromEntries(
-          Object.entries(renderedReference).filter(([key]) => {
-            try {
-              const member = this.cubeEvaluator.byPathAnyType(key);
-              // Skip expression members so we don't substitute them with aliases
-              return !member?.expression;
-            } catch {
-              return false;
-            }
-          })
-        );
-
         mainQueryRenderedReference = Object.fromEntries(
-          Object.entries(filteredRenderedReference).map(([key, value]) => [key, `${mainQueryAlias}.${value}`])
+          Object.entries(renderedReference)
+            .map(([key, value]) => [key, `${mainQueryAlias}.${value}`])
+            .filter(([key, value]) => {
+              try {
+                const defValue = this.cubeEvaluator.byPathAnyType(value);
+                const defKey = this.cubeEvaluator.byPathAnyType(key);
+                return true
+              } catch {
+                return false
+              }
+            })
         );
       }
     }
