@@ -5637,30 +5637,51 @@ export class BaseQuery {
     };
 
     /**
+     * Resolve SQL for a dimension/timeDimension safely, including expression members.
+     *
+     * For expression dimensions we can't call dimensionSql() because it tries to
+     * resolve the synthetic expression name via pathFromArray (and fails). Instead
+     * we evaluate the expression body directly in the source cube context.
+     */
+    const getCorrelationDimensionSql = (metadata) => {
+      const original = metadata?.original;
+      if (!original) return null;
+
+      // Expression dimension (SQL pushdown / member expression)
+      if (original.expression) {
+        try {
+          return this.evaluateSql(original.expressionCubeName, original.expression);
+        } catch (e) {
+          return null;
+        }
+      }
+
+      // Regular dimension / time dimension
+      try {
+        return original.dimensionSql?.();
+      } catch (e) {
+        return null;
+      }
+    };
+
+    /**
      * Build WHERE clause for correlation
-     * 
+     *
      * Format: subquery.column_alias = main_query.dimension_sql
-     * 
      */
     const correlatedWhereClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
       .map(({ metadata, dimension, operator }) => {
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimension)}`;
 
-        try {
-          const dimensionSql = metadata?.original?.dimensionSql?.() || null;
-          if (!dimensionSql) return null;
+        const dimensionSql = getCorrelationDimensionSql(metadata);
+        if (!dimensionSql) return null;
 
-          return `${JSON.stringify(mainQueryRenderedReference)}`
+        const dimensionSqlasString = typeof dimensionSql === 'string' ? dimensionSql : dimensionSql.toString();
+        const mainQuerySql = `${getMainQueryDimensionSql(dimensionSqlasString)}`;
 
-          const dimensionSqlasString = typeof dimensionSql === 'string' ? dimensionSql : dimensionSql.toString();
-          const mainQuerySql = `${getMainQueryDimensionSql(dimensionSqlasString)}`;
+        if (!mainQuerySql) return null;
 
-          if (!mainQuerySql) return null;
-
-          return `${subQueryColumn} ${operator} ${mainQuerySql}`;
-        } catch {
-          return null;
-        }
+        return `${subQueryColumn} ${operator} ${mainQuerySql}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
