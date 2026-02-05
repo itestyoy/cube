@@ -5638,11 +5638,11 @@ export class BaseQuery {
      * This is the key difference: Expression dimensions in WHERE clause use their SQL expression,
      * not just a column reference
      */
-    const getMainQueryDimensionSql = (dimensionSql) => {
+    const getMainQueryDimensionSql = (original) => {
       if (mainQueryAlias && mainQueryRenderedReference) {
         try {
           const rewrittenSql = this.evaluateSymbolSqlWithContext(
-            dimensionSql,
+            () => original.dimensionSql(),
             { renderedReference: mainQueryRenderedReference, rollupQuery: true }
           );
           if (rewrittenSql != null) {
@@ -5654,7 +5654,7 @@ export class BaseQuery {
         }
       }
       
-      return dimensionSql();
+      return original.dimensionSql?.();
     };
 
     /**
@@ -5685,10 +5685,7 @@ export class BaseQuery {
           }
         } else {
             if (original.dimensionSql) {
-              const dimensionSql = original.dimensionSql
-              if (!dimensionSql) return null;
-
-              mainQuerySql = getMainQueryDimensionSql(dimensionSql);
+              mainQuerySql = getMainQueryDimensionSql(original);
             } else {
               return null;
             }
