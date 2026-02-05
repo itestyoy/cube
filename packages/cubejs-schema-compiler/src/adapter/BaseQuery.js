@@ -5642,7 +5642,7 @@ export class BaseQuery {
       if (mainQueryAlias && mainQueryRenderedReference) {
         try {
           const rewrittenSql = this.evaluateSymbolSqlWithContext(
-            () => dimensionSql,
+            () => dimensionSql(),
             { renderedReference: mainQueryRenderedReference, rollupQuery: true }
           );
           if (rewrittenSql != null) {
@@ -5654,35 +5654,7 @@ export class BaseQuery {
         }
       }
       
-      return dimensionSql;
-    };
-
-    /**
-     * Resolve SQL for a dimension/timeDimension safely, including expression members.
-     *
-     * For expression dimensions we can't call dimensionSql() because it tries to
-     * resolve the synthetic expression name via pathFromArray (and fails). Instead
-     * we evaluate the expression body directly in the source cube context.
-     */
-    const getCorrelationDimensionSql = (metadata) => {
-      const original = metadata?.original;
-      if (!original) return null;
-
-      // Expression dimension (SQL pushdown / member expression)
-      if (original.expression) {
-        try {
-          return this.evaluateSql(original.expressionCubeName, original.expression);
-        } catch (e) {
-          return null;
-        }
-      }
-
-      // Regular dimension / time dimension
-      try {
-        return original.dimensionSql?.();
-      } catch (e) {
-        return null;
-      }
+      return dimensionSql();
     };
 
     /**
@@ -5698,14 +5670,33 @@ export class BaseQuery {
 
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimensionAlias)}`;
 
-        const dimensionSql = getCorrelationDimensionSql(metadata);
+        const original = metadata?.original;
+        if (!original) return null;
+
+        let dimensionSql;
+
+        // Expression dimension (SQL pushdown / member expression)
+        if (original.expression) {
+          try {
+            dimensionSql = () => this.evaluateSql(original.expressionCubeName, original.expression);
+          } catch (e) {
+            return null;
+          }
+        } else {
+            if (original.dimensionSql) {
+              dimensionSql = original.dimensionSql
+            } else {
+              return null;
+            }
+        }
+
         if (!dimensionSql) return null;
 
         const mainQuerySql = getMainQueryDimensionSql(dimensionSql);
 
         if (!mainQuerySql) return null;
 
-        return `${subQueryColumn} ${operator} ${mainQuerySql} ${JSON.stringify(mainQueryRenderedReference)}`;
+        return `${subQueryColumn} ${operator} ${mainQuerySql}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
