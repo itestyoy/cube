@@ -5549,7 +5549,7 @@ export class BaseQuery {
     const subQuery = this.newSubQuery(subQueryOptions);
 
     this.registerSubQueryPreAggregations(subQuery);
-    const subQuerySql = `/*${JSON.stringify(subQueryOptions, null, 2)}*/\n` + subQuery.buildParamAnnotatedSql();
+    const subQuerySql = subQuery.buildParamAnnotatedSql();
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
@@ -5701,12 +5701,11 @@ export class BaseQuery {
         const dimensionSql = getCorrelationDimensionSql(metadata);
         if (!dimensionSql) return null;
 
-        const dimensionSqlasString = typeof dimensionSql === 'string' ? dimensionSql : dimensionSql.toString();
-        const mainQuerySql = `${getMainQueryDimensionSql(dimensionSqlasString)}`;
+        const mainQuerySql = getMainQueryDimensionSql(dimensionSql);
 
         if (!mainQuerySql) return null;
 
-        return `${subQueryColumn} ${operator} ${mainQuerySql}`;
+        return `${subQueryColumn} ${operator} ${mainQuerySql} ${JSON.stringify(mainQueryRenderedReference)}`;
       })
       .filter(Boolean)
       .join(' AND ') || 'true';
