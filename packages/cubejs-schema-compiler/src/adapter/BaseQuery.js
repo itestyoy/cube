@@ -5642,7 +5642,7 @@ export class BaseQuery {
       if (mainQueryAlias && mainQueryRenderedReference) {
         try {
           const rewrittenSql = this.evaluateSymbolSqlWithContext(
-            () => dimensionSql(),
+            dimensionSql,
             { renderedReference: mainQueryRenderedReference, rollupQuery: true }
           );
           if (rewrittenSql != null) {
@@ -5673,26 +5673,26 @@ export class BaseQuery {
         const original = metadata?.original;
         if (!original) return null;
 
-        let dimensionSql;
+        let mainQuerySql;
 
         // Expression dimension (SQL pushdown / member expression)
         if (original.expression) {
           try {
-            dimensionSql = () => this.evaluateSql(original.expressionCubeName, original.expression);
+            mainQuerySql = this.evaluateSql(original.expressionCubeName, original.expression);
+            
           } catch (e) {
             return null;
           }
         } else {
             if (original.dimensionSql) {
-              dimensionSql = original.dimensionSql
+              const dimensionSql = original.dimensionSql
+              if (!dimensionSql) return null;
+
+              mainQuerySql = getMainQueryDimensionSql(dimensionSql);
             } else {
               return null;
             }
         }
-
-        if (!dimensionSql) return null;
-
-        const mainQuerySql = getMainQueryDimensionSql(dimensionSql);
 
         if (!mainQuerySql) return null;
 
