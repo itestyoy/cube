@@ -59,6 +59,473 @@ const SecondsDurations = {
   second: 1
 };
 
+const SQL_WORD_CHAR = /[A-Za-z0-9_$]/;
+const SQL_TEMPLATE_PLACEHOLDER = /\$\{\s*([A-Za-z_][A-Za-z0-9_$]*)\.[^{}]*\}/g;
+const SQL_TEMPLATE_REFERENCE = /\$\{\s*([^{}]+?)\s*\}/g;
+
+const isSqlWordBoundary = (char) => !char || !SQL_WORD_CHAR.test(char);
+
+function extractCubeParamsFromSql(sqlExpression) {
+  if (!sqlExpression || typeof sqlExpression !== 'string') {
+    return [];
+  }
+
+  const foundCubeParams = [];
+  let match = SQL_TEMPLATE_PLACEHOLDER.exec(sqlExpression);
+
+  while (match) {
+    const cubeName = match[1];
+    if (cubeName && foundCubeParams.indexOf(cubeName) === -1) {
+      foundCubeParams.push(cubeName);
+    }
+    match = SQL_TEMPLATE_PLACEHOLDER.exec(sqlExpression);
+  }
+
+  SQL_TEMPLATE_PLACEHOLDER.lastIndex = 0;
+  return foundCubeParams;
+}
+
+function extractSqlTemplateReferences(sqlExpression) {
+  if (!sqlExpression || typeof sqlExpression !== 'string') {
+    return [];
+  }
+
+  const references = [];
+  let match = SQL_TEMPLATE_REFERENCE.exec(sqlExpression);
+
+  while (match) {
+    const reference = (match[1] || '').trim();
+    if (reference && references.indexOf(reference) === -1) {
+      references.push(reference);
+    }
+    match = SQL_TEMPLATE_REFERENCE.exec(sqlExpression);
+  }
+
+  SQL_TEMPLATE_REFERENCE.lastIndex = 0;
+  return references;
+}
+
+function replaceSqlTemplateReferences(sqlExpression, replaceReference) {
+  if (!sqlExpression || typeof sqlExpression !== 'string') {
+    return sqlExpression;
+  }
+
+  if (typeof replaceReference !== 'function') {
+    return sqlExpression;
+  }
+
+  SQL_TEMPLATE_REFERENCE.lastIndex = 0;
+  return sqlExpression.replace(SQL_TEMPLATE_REFERENCE, (_, reference) => {
+    const normalizedReference = (reference || '').trim();
+    const replacement = replaceReference(normalizedReference);
+    return `\${${replacement || normalizedReference}}`;
+  });
+}
+
+function serializeSqlLogicalExpressionNode(node) {
+  if (!node || typeof node !== 'object') {
+    return '';
+  }
+
+  if (isSqlLogicalGroupNode(node)) {
+    const values = node.values
+      .map((childNode) => serializeSqlLogicalExpressionNode(childNode))
+      .filter(Boolean);
+
+    if (!values.length) {
+      return '';
+    }
+
+    if (values.length === 1) {
+      return values[0];
+    }
+
+    return `(${values.join(` ${node.operator.toUpperCase()} `)})`;
+  }
+
+  const definition = typeof node.definition === 'string'
+    ? node.definition.trim()
+    : (typeof node.sql === 'string' ? node.sql.trim() : '');
+
+  if (!definition) {
+    return '';
+  }
+
+  return `(${stripOuterParentheses(definition)})`;
+}
+
+function toSqlFunctionExpression(definition, cubeParams = []) {
+  const normalizedCubeParams = R.uniq(
+    (Array.isArray(cubeParams) ? cubeParams : [])
+      .filter((cubeParam) => typeof cubeParam === 'string')
+      .map((cubeParam) => cubeParam.trim())
+      .filter(Boolean)
+  );
+
+  return [
+    ...normalizedCubeParams,
+    `return \`${definition}\``
+  ];
+}
+
+function walkSqlWithQuoteAndDepth(expression, onTopLevelToken) {
+  let depth = 0;
+  let inSingleQuote = false;
+  let templatePlaceholderDepth = 0;
+  let hasNegativeDepth = false;
+
+  for (let i = 0; i < expression.length; i++) {
+    const char = expression[i];
+    const nextChar = expression[i + 1];
+
+    if (templatePlaceholderDepth > 0) {
+      if (char === '{') {
+        templatePlaceholderDepth += 1;
+      } else if (char === '}') {
+        templatePlaceholderDepth -= 1;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (char === '\'' && nextChar === '\'') {
+        i += 1;
+        continue;
+      }
+      if (char === '\'') {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    // Cube expressions are JS template strings with SQL placeholders like ${cube.member}.
+    // Treat placeholders as atomic chunks and ignore AND/OR inside them.
+    if (char === '$' && nextChar === '{') {
+      templatePlaceholderDepth = 1;
+      i += 1;
+      continue;
+    }
+
+    if (char === '\'') {
+      inSingleQuote = true;
+      continue;
+    }
+
+    if (char === '(') {
+      depth += 1;
+      continue;
+    }
+
+    if (char === ')') {
+      depth -= 1;
+      if (depth < 0) {
+        hasNegativeDepth = true;
+      }
+      continue;
+    }
+
+    if (depth === 0 && onTopLevelToken) {
+      onTopLevelToken(i);
+    }
+  }
+
+  return {
+    depth,
+    hasNegativeDepth,
+    hasUnclosedQuote: inSingleQuote,
+    hasUnclosedTemplatePlaceholder: templatePlaceholderDepth !== 0
+  };
+}
+
+function canTrimOutermostParentheses(expression) {
+  if (!expression.startsWith('(') || !expression.endsWith(')')) {
+    return false;
+  }
+
+  let depth = 0;
+  let inSingleQuote = false;
+  let templatePlaceholderDepth = 0;
+
+  for (let i = 0; i < expression.length; i++) {
+    const char = expression[i];
+    const nextChar = expression[i + 1];
+
+    if (templatePlaceholderDepth > 0) {
+      if (char === '{') {
+        templatePlaceholderDepth += 1;
+      } else if (char === '}') {
+        templatePlaceholderDepth -= 1;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (char === '\'' && nextChar === '\'') {
+        i += 1;
+        continue;
+      }
+      if (char === '\'') {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    if (char === '$' && nextChar === '{') {
+      templatePlaceholderDepth = 1;
+      i += 1;
+      continue;
+    }
+
+    if (char === '\'') {
+      inSingleQuote = true;
+      continue;
+    }
+
+    if (char === '(') {
+      depth += 1;
+      continue;
+    }
+
+    if (char === ')') {
+      depth -= 1;
+      if (depth < 0) {
+        return false;
+      }
+      if (depth === 0 && i < expression.length - 1) {
+        return false;
+      }
+    }
+  }
+
+  return !inSingleQuote && !templatePlaceholderDepth && depth === 0;
+}
+
+function stripOuterParentheses(expression) {
+  let normalized = expression.trim();
+  while (canTrimOutermostParentheses(normalized)) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  return normalized;
+}
+
+function splitByTopLevelLogicalOperator(expression, operator) {
+  const upperOperator = operator.toUpperCase();
+  const parts = [];
+  let partStart = 0;
+
+  walkSqlWithQuoteAndDepth(expression, (index) => {
+    if (
+      expression.slice(index, index + upperOperator.length).toUpperCase() === upperOperator &&
+      isSqlWordBoundary(expression[index - 1]) &&
+      isSqlWordBoundary(expression[index + upperOperator.length])
+    ) {
+      parts.push(expression.slice(partStart, index).trim());
+      partStart = index + upperOperator.length;
+    }
+  });
+
+  if (parts.length === 0) {
+    return null;
+  }
+
+  const tail = expression.slice(partStart).trim();
+  if (tail) {
+    parts.push(tail);
+  }
+
+  return parts.length > 1 ? parts : null;
+}
+
+function parseSqlLogicalExpressionNode(expression, inheritedCubeParams = []) {
+  const normalized = stripOuterParentheses(expression);
+
+  const orParts = splitByTopLevelLogicalOperator(normalized, 'OR');
+  if (orParts) {
+    return {
+      operator: 'or',
+      values: orParts.map((part) => parseSqlLogicalExpressionNode(part, inheritedCubeParams))
+    };
+  }
+
+  const andParts = splitByTopLevelLogicalOperator(normalized, 'AND');
+  if (andParts) {
+    return {
+      operator: 'and',
+      values: andParts.map((part) => parseSqlLogicalExpressionNode(part, inheritedCubeParams))
+    };
+  }
+
+  const conditionCubeParams = extractCubeParamsFromSql(normalized);
+  const expressionCubeParams = conditionCubeParams.length ? conditionCubeParams : inheritedCubeParams;
+
+  return {
+    type: 'condition',
+    definition: normalized,
+    expression: toSqlFunctionExpression(normalized, expressionCubeParams)
+  };
+}
+
+function normalizeSqlLogicalExpressionInput(expressionOrDefinition) {
+  if (typeof expressionOrDefinition === 'string') {
+    const trimmed = expressionOrDefinition.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const withoutDefinitionPrefix = trimmed.startsWith('definition:')
+      ? trimmed.slice('definition:'.length).trim()
+      : trimmed;
+
+    const isWrappedBySingleQuote =
+      withoutDefinitionPrefix.startsWith('\'') && withoutDefinitionPrefix.endsWith('\'');
+    const isWrappedByDoubleQuote =
+      withoutDefinitionPrefix.startsWith('"') && withoutDefinitionPrefix.endsWith('"');
+    const maybeUnwrappedJson = (isWrappedBySingleQuote || isWrappedByDoubleQuote)
+      ? withoutDefinitionPrefix.slice(1, -1).trim()
+      : withoutDefinitionPrefix;
+    const jsonInput = (
+      (maybeUnwrappedJson.startsWith('{') && maybeUnwrappedJson.endsWith('}')) ||
+      (maybeUnwrappedJson.startsWith('[') && maybeUnwrappedJson.endsWith(']'))
+    ) ? maybeUnwrappedJson : withoutDefinitionPrefix;
+
+    const parseCandidates = [jsonInput];
+    if (jsonInput.includes('\\\'')) {
+      parseCandidates.push(jsonInput.replace(/\\'/g, '\''));
+    }
+
+    for (const candidate of parseCandidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed?.expr?.sql && typeof parsed.expr.sql === 'string') {
+          const sqlExpression = parsed.expr.sql.trim();
+          const cubeParams = Array.isArray(parsed.expr.cubeParams)
+            ? parsed.expr.cubeParams
+            : extractCubeParamsFromSql(sqlExpression);
+          return {
+            sqlExpression,
+            cubeParams
+          };
+        }
+        if (parsed?.sql && typeof parsed.sql === 'string') {
+          const sqlExpression = parsed.sql.trim();
+          const cubeParams = Array.isArray(parsed.cubeParams)
+            ? parsed.cubeParams
+            : extractCubeParamsFromSql(sqlExpression);
+          return {
+            sqlExpression,
+            cubeParams
+          };
+        }
+      } catch (e) {
+        // Ignore parse errors and try fallback candidates.
+      }
+    }
+
+    const sqlExpression = withoutDefinitionPrefix.trim();
+    return {
+      sqlExpression,
+      cubeParams: extractCubeParamsFromSql(sqlExpression)
+    };
+  }
+
+  if (expressionOrDefinition && typeof expressionOrDefinition === 'object') {
+    if (typeof expressionOrDefinition.expr?.sql === 'string') {
+      const sqlExpression = expressionOrDefinition.expr.sql.trim();
+      const cubeParams = Array.isArray(expressionOrDefinition.expr.cubeParams)
+        ? expressionOrDefinition.expr.cubeParams
+        : extractCubeParamsFromSql(sqlExpression);
+      return {
+        sqlExpression,
+        cubeParams
+      };
+    }
+    if (typeof expressionOrDefinition.sql === 'string') {
+      const sqlExpression = expressionOrDefinition.sql.trim();
+      const cubeParams = Array.isArray(expressionOrDefinition.cubeParams)
+        ? expressionOrDefinition.cubeParams
+        : extractCubeParamsFromSql(sqlExpression);
+      return {
+        sqlExpression,
+        cubeParams
+      };
+    }
+  }
+
+  return null;
+}
+
+function isSqlLogicalGroupNode(node) {
+  return (
+    node &&
+    typeof node === 'object' &&
+    (node.operator === 'and' || node.operator === 'or') &&
+    Array.isArray(node.values)
+  );
+}
+
+function isSqlLogicalConditionNode(node) {
+  return (
+    node &&
+    typeof node === 'object' &&
+    (node.type === 'condition' || typeof node.definition === 'string' || typeof node.sql === 'string')
+  );
+}
+
+function filterSqlLogicalExpressionNode(node, isConditionAllowed) {
+  if (!node || typeof node !== 'object') {
+    return null;
+  }
+
+  if (isSqlLogicalGroupNode(node)) {
+    const filteredValues = node.values
+      .map((childNode) => filterSqlLogicalExpressionNode(childNode, isConditionAllowed))
+      .filter(Boolean);
+
+    if (!filteredValues.length) {
+      return null;
+    }
+
+    if (filteredValues.length === 1) {
+      return filteredValues[0];
+    }
+
+    return {
+      ...node,
+      values: filteredValues
+    };
+  }
+
+  if (!isSqlLogicalConditionNode(node)) {
+    return null;
+  }
+
+  const normalizedDefinition = typeof node.definition === 'string'
+    ? node.definition.trim()
+    : (typeof node.sql === 'string' ? node.sql.trim() : '');
+  if (!normalizedDefinition) {
+    return null;
+  }
+
+  const { sql: _deprecatedSql, ...nodeWithoutDeprecatedSql } = node;
+  const expressionCubeParams = extractCubeParamsFromSql(normalizedDefinition);
+
+  const normalizedConditionNode = {
+    ...nodeWithoutDeprecatedSql,
+    type: 'condition',
+    definition: normalizedDefinition,
+    expression: Array.isArray(node.expression)
+      ? node.expression
+      : toSqlFunctionExpression(normalizedDefinition, expressionCubeParams)
+  };
+
+  const backwardCompatibleNode = {
+    ...normalizedConditionNode,
+    sql: normalizedConditionNode.definition
+  };
+
+  return isConditionAllowed(backwardCompatibleNode) ? normalizedConditionNode : null;
+}
+
 /**
  * Set of the schema compilers.
  * @typedef {Object} Compilers
@@ -5454,6 +5921,69 @@ export class BaseQuery {
       ...config.includeFilters
     ];
 
+    const transformSegmentForSubQuery = (segment) => {
+      if (!segment) {
+        return null;
+      }
+
+      // Keep regular path segments untouched (segment SQL function cannot be safely remapped here).
+      if (typeof segment === 'string') {
+        return segment;
+      }
+
+      const segmentDefinitionSource = segment.definition || segment;
+      let segmentAst;
+      try {
+        segmentAst = BaseQuery.parseSqlLogicalExpressionTree(segmentDefinitionSource);
+      } catch {
+        // If a segment is not represented as SQL logical expression, preserve original shape.
+        return segment;
+      }
+
+      const filteredAst = BaseQuery.filterSqlLogicalExpressionTreeByMemberMapping(segmentAst, {
+        normalizeMemberPath,
+        isExcludedMember: (member) => config.excludeFilters.has(member),
+        mapMember: (member) => dimensionMapping.get(member),
+        isMappedMemberAllowed: (member) => allowedSubQueryDimensions.has(member),
+        hasAllowedDimensions
+      });
+
+      const normalizedAst = BaseQuery.filterSqlLogicalExpressionTree(filteredAst);
+      if (!normalizedAst) {
+        return null;
+      }
+
+      const newSegmentSqlDefinition = BaseQuery.serializeSqlLogicalExpressionTree(normalizedAst);
+      const cubeParams = extractCubeParamsFromSql(newSegmentSqlDefinition);
+      const expressionArray = toSqlFunctionExpression(newSegmentSqlDefinition, cubeParams);
+      const newSegmentExpression = Function.constructor.apply(null, expressionArray);
+      const segmentAlias = segment.expressionName || segment.name || segment.alias || 'segment';
+      const segmentCubeName = segment.cubeName || cubeName;
+      const groupingSet = segment.groupingSet == null ? null : segment.groupingSet;
+
+      return {
+        ...segment,
+        cubeName: segmentCubeName,
+        name: segment.name || segmentAlias,
+        expressionName: segment.expressionName || segmentAlias,
+        expression: newSegmentExpression,
+        definition: JSON.stringify({
+          cubeName: segmentCubeName,
+          alias: segmentAlias,
+          expr: {
+            type: 'SqlFunction',
+            cubeParams,
+            sql: newSegmentSqlDefinition
+          },
+          groupingSet
+        })
+      };
+    };
+
+    subQueryOptions.segments = (this.options.segments || [])
+      .map(transformSegmentForSubQuery)
+      .filter(Boolean);
+
     // ============================================================================
     // STEP 11: Set measures for subQuery
     // ============================================================================
@@ -5511,7 +6041,7 @@ export class BaseQuery {
     const subQuery = this.newSubQuery(subQueryOptions);
 
     this.registerSubQueryPreAggregations(subQuery);
-    const subQuerySql = subQuery.buildParamAnnotatedSql();
+    const subQuerySql = `\n${JSON.stringify(subQueryOptions, null, 2)}\n` + subQuery.buildParamAnnotatedSql();
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
@@ -6609,6 +7139,181 @@ export class BaseQuery {
     } else {
       return null;
     }
+  }
+
+  /**
+   * Converts SQL boolean expression into nested JSON tree with AND/OR groups.
+   * Input can be:
+   * - raw SQL expression string
+   * - segment definition object ({ expr: { sql } } or { sql })
+   * - JSON string with the same structure
+   *
+   * Returns:
+   * - group node: { operator: 'and'|'or', values: [...] }
+   * - leaf node: {
+   *     type: 'condition',
+   *     definition: '<sql fragment>',
+   *     expression: [...cubeParams, 'return `<sql fragment>`']
+   *   }
+   */
+  static parseSqlLogicalExpressionTree(expressionOrDefinition) {
+    const normalizedInput = normalizeSqlLogicalExpressionInput(expressionOrDefinition);
+    const sqlExpression = normalizedInput?.sqlExpression;
+    const cubeParams = normalizedInput?.cubeParams || [];
+
+    if (!sqlExpression) {
+      throw new UserError('SQL expression is required to build logical expression tree');
+    }
+
+    const syntaxState = walkSqlWithQuoteAndDepth(sqlExpression);
+    if (
+      syntaxState.hasUnclosedQuote ||
+      syntaxState.hasUnclosedTemplatePlaceholder ||
+      syntaxState.hasNegativeDepth ||
+      syntaxState.depth !== 0
+    ) {
+      throw new UserError(`Malformed SQL expression: ${sqlExpression}`);
+    }
+
+    return parseSqlLogicalExpressionNode(sqlExpression, cubeParams);
+  }
+
+  /**
+   * Recursively filters SQL logical expression tree.
+   * - removes condition nodes rejected by predicate
+   * - removes empty groups
+   * - flattens groups with single child
+   *
+   * @param tree SQL logical expression tree produced by parseSqlLogicalExpressionTree
+   * @param isConditionAllowed predicate for condition nodes ({ type: 'condition', definition, expression })
+   * @returns filtered tree or null when all nodes are removed
+   */
+  static filterSqlLogicalExpressionTree(tree, isConditionAllowed = () => true) {
+    if (!tree || typeof tree !== 'object') {
+      return null;
+    }
+
+    const conditionPredicate = typeof isConditionAllowed === 'function'
+      ? isConditionAllowed
+      : (() => true);
+
+    return filterSqlLogicalExpressionNode(tree, conditionPredicate);
+  }
+
+  /**
+   * Applies `isFilterAllowed`-like member filtering logic to SQL logical AST:
+   * - recursively filters `and/or` groups
+   * - removes conditions with excluded or unmapped members
+   * - remaps condition member references according to provided mapping
+   *
+   * @param tree SQL logical expression tree produced by parseSqlLogicalExpressionTree
+   * @param options
+   * @param options.normalizeMemberPath member normalizer (e.g. removes view alias/join hints)
+   * @param options.isExcludedMember predicate for excluded members
+   * @param options.mapMember mapping from right member to left member
+   * @param options.isMappedMemberAllowed predicate for mapped member in subquery context
+   * @param options.hasAllowedDimensions same as in correlatedQuery flow
+   * @returns filtered/remapped tree or null
+   */
+  static filterSqlLogicalExpressionTreeByMemberMapping(tree, options = {}) {
+    if (!tree || typeof tree !== 'object') {
+      return null;
+    }
+
+    const normalizeMemberPath = typeof options.normalizeMemberPath === 'function'
+      ? options.normalizeMemberPath
+      : ((member) => member);
+    const isExcludedMember = typeof options.isExcludedMember === 'function'
+      ? options.isExcludedMember
+      : (() => false);
+    const mapMember = typeof options.mapMember === 'function'
+      ? options.mapMember
+      : ((member) => member);
+    const isMappedMemberAllowed = typeof options.isMappedMemberAllowed === 'function'
+      ? options.isMappedMemberAllowed
+      : (() => true);
+    const hasAllowedDimensions = !!options.hasAllowedDimensions;
+
+    const isAstNodeAllowed = (node) => {
+      if (!node || typeof node !== 'object') {
+        return null;
+      }
+
+      if (isSqlLogicalGroupNode(node)) {
+        const allowedValues = node.values
+          .map((childNode) => isAstNodeAllowed(childNode))
+          .filter(Boolean);
+
+        return allowedValues.length
+          ? { ...node, values: allowedValues }
+          : null;
+      }
+
+      const definition = typeof node.definition === 'string'
+        ? node.definition.trim()
+        : (typeof node.sql === 'string' ? node.sql.trim() : '');
+
+      if (!definition) {
+        return null;
+      }
+
+      const references = extractSqlTemplateReferences(definition);
+      if (!references.length) {
+        return null;
+      }
+
+      const remappedMembers = new Map();
+      for (const reference of references) {
+        const normalizedMember = normalizeMemberPath(reference);
+        if (!normalizedMember) {
+          return null;
+        }
+
+        if (isExcludedMember(normalizedMember)) {
+          return null;
+        }
+
+        const mappedMember = mapMember(normalizedMember);
+        if (!hasAllowedDimensions || !mappedMember || !isMappedMemberAllowed(mappedMember)) {
+          return null;
+        }
+
+        remappedMembers.set(normalizedMember, mappedMember);
+      }
+
+      const remappedDefinition = replaceSqlTemplateReferences(
+        definition,
+        (reference) => remappedMembers.get(normalizeMemberPath(reference)) || reference
+      ).trim();
+
+      return {
+        ...node,
+        type: 'condition',
+        definition: remappedDefinition,
+        expression: toSqlFunctionExpression(remappedDefinition, extractCubeParamsFromSql(remappedDefinition))
+      };
+    };
+
+    return isAstNodeAllowed(tree);
+  }
+
+  /**
+   * Serializes SQL logical expression tree back to SQL expression string.
+   *
+   * @param tree SQL logical expression tree
+   * @returns serialized SQL expression
+   */
+  static serializeSqlLogicalExpressionTree(tree) {
+    if (!tree || typeof tree !== 'object') {
+      throw new UserError('SQL logical expression tree is required for serialization');
+    }
+
+    const sqlExpression = serializeSqlLogicalExpressionNode(tree).trim();
+    if (!sqlExpression) {
+      throw new UserError('SQL logical expression tree cannot be serialized to empty SQL');
+    }
+
+    return sqlExpression;
   }
 
   static findAndSubTreeForFilterGroup(filter, groupMembers, newGroupFilter, aliases) {
