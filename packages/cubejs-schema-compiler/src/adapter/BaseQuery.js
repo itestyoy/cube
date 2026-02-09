@@ -5931,7 +5931,7 @@ export class BaseQuery {
         return segment;
       }
 
-      const segmentDefinitionSource = segment.definition || segment;
+      const segmentDefinitionSource = segment.definition;
       let segmentAst;
       try {
         segmentAst = BaseQuery.parseSqlLogicalExpressionTree(segmentDefinitionSource);
@@ -5941,11 +5941,11 @@ export class BaseQuery {
       }
 
       const filteredAst = BaseQuery.filterSqlLogicalExpressionTreeByMemberMapping(segmentAst, {
-        normalizeDimensionPath,
+        normalizeDimensionPath: normalizeDimensionPath,
         isExcludedMember: (member) => config.excludeFilters.has(member),
         mapMember: (member) => dimensionMapping.get(member),
         isMappedMemberAllowed: (member) => allowedSubQueryDimensions.has(member),
-        hasAllowedDimensions
+        hasAllowedDimensions: hasAllowedDimensions
       });
 
       const normalizedAst = BaseQuery.filterSqlLogicalExpressionTree(filteredAst);
@@ -7208,7 +7208,7 @@ export class BaseQuery {
    *
    * @param tree SQL logical expression tree produced by parseSqlLogicalExpressionTree
    * @param options
-   * @param options.normalizeMemberPath member normalizer (e.g. removes view alias/join hints)
+   * @param options.normalizeDimensionPath member normalizer (e.g. removes view alias/join hints)
    * @param options.isExcludedMember predicate for excluded members
    * @param options.mapMember mapping from right member to left member
    * @param options.isMappedMemberAllowed predicate for mapped member in subquery context
@@ -7220,8 +7220,8 @@ export class BaseQuery {
       return null;
     }
 
-    const normalizeMemberPath = typeof options.normalizeMemberPath === 'function'
-      ? options.normalizeMemberPath
+    const normalizeDimensionPath = typeof options.normalizeDimensionPath === 'function'
+      ? options.normalizeDimensionPath
       : ((member) => member);
     const isExcludedMember = typeof options.isExcludedMember === 'function'
       ? options.isExcludedMember
@@ -7264,7 +7264,7 @@ export class BaseQuery {
 
       const remappedMembers = new Map();
       for (const reference of references) {
-        const normalizedMember = normalizeMemberPath(reference);
+        const normalizedMember = normalizeDimensionPath(reference);
         if (!normalizedMember) {
           return null;
         }
@@ -7283,7 +7283,7 @@ export class BaseQuery {
 
       const remappedDefinition = replaceSqlTemplateReferences(
         definition,
-        (reference) => remappedMembers.get(normalizeMemberPath(reference)) || reference
+        (reference) => remappedMembers.get(normalizeDimensionPath(reference)) || reference
       ).trim();
 
       return {
