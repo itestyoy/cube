@@ -5414,23 +5414,11 @@ export class BaseQuery {
         const dependencies = getExpressionDependencies(filterMember.expression, expressionCubeName);
 
         // Validate dependencies
-        const presentDeps = dependencies.filter(
-          dep => allowedSubQueryDimensions.has(dep) && !config.excludeFilters.has(dep)
-        );
-        const missingDeps = dependencies.filter(
-          dep => !allowedSubQueryDimensions.has(dep) && !config.excludeFilters.has(dep)
+        const excludeDeps = dependencies.filter(
+          dep => config.excludeFilters.has(dep) || !allowedSubQueryDimensions.has(dep)
         );
 
-        if (presentDeps.length > 0 && missingDeps.length > 0) {
-          throw new UserError(
-            `Filter on expression '${JSON.stringify(filter)}' requires all dependencies. ` +
-            `Missing: [${missingDeps.join(', ')}].`
-          );
-        }
-
-        if (presentDeps.length === 0) return null;
-        
-        return filter;
+        return excludeDeps.length > 0 ? null : filter;
       }
 
       const normalizedFilterMember = normalizeDimensionPath(filterMember);
