@@ -5609,7 +5609,7 @@ export class BaseQuery {
         };
 
       }).filter(Boolean)
-      .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, operator }) => {
+      .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, operator, isOnlyFilter }) => {
         if (!expressionMetadata) return;
         
         const rightCubeName = expressionMetadata.original.expressionCubeName;
@@ -5629,9 +5629,25 @@ export class BaseQuery {
         const missingDependencies = expressionMetadata.allDependencies.filter(dep =>
           !allowedRightDimensionsSet.has(dep)
         );
-        
-        if (missingDependencies.length > 0) {
 
+        let newpOerator;
+
+        expressionMetadata.allDependencies.forEach((dep) => {
+          const depItem = validatedAllowedDimensions.find(d => d.leftDimension == dep);
+
+          if(newpOerator) {
+            if(depItem.operator != newpOerator) {
+              throw new UserError(
+                `Expression dimension '${rightDimension}' must have consistent operator`
+              );
+            }
+            newpOerator = depItem.operator;
+          } else {
+            newpOerator = depItem.operator;
+          }
+        });
+
+        if (missingDependencies.length > 0) {
           return;
 
           /*throw new UserError(
@@ -5647,7 +5663,8 @@ export class BaseQuery {
             isExpressionDimension, 
             expressionMetadata, 
             originalRightDimension, 
-            operator 
+            operator: newpOerator ?? operator,
+            isOnlyFilter
           }
         );
 
@@ -5732,7 +5749,7 @@ export class BaseQuery {
       const addTimeDimension = (leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata = null) => {
         if (processed.timeDimensions.has(leftDimension)) return;
 
-        if (expressionMetadata && expressionMetadata?.original && !expressionMetadata?.original?.isExpression && isExpressionDimension) {
+        if (expressionMetadata && expressionMetadata?.original && isExpressionDimension) {
           // Explicit expression dimension
           subQueryTimeDimensions.push({
             dimension: createExpressionDimension(expressionMetadata),
@@ -5747,7 +5764,7 @@ export class BaseQuery {
           const rightTdItems = mainQueryContext.timeDimensions.map.get(rightDimension) || [];
           const originalMetadata = rightTdItems.find(item => !item.isExpression);
 
-          if(!isExpressionDimension && originalMetadata && !expressionMetadata?.original?.isExpression) {
+          if(!isExpressionDimension && originalMetadata) {
               subQueryTimeDimensions.push({
                 dimension: leftDimension,
                 granularity: originalMetadata.original.granularity,
@@ -5774,7 +5791,7 @@ export class BaseQuery {
       const addDimension = (leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata = null) => {
         if (processed.dimensions.has(leftDimension)) return;
 
-        if (expressionMetadata && expressionMetadata?.original && !expressionMetadata?.original?.isExpression && isExpressionDimension) {
+        if (expressionMetadata && expressionMetadata?.original && isExpressionDimension) {
           subQueryDimensions.push(createExpressionDimension(expressionMetadata));
           subOriginalDimensionsMetadata.push({metadata: expressionMetadata, dimension: expressionMetadata.original?.expressionName, operator: operator});
         } else {
