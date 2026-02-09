@@ -5941,7 +5941,7 @@ export class BaseQuery {
       }
 
       const filteredAst = BaseQuery.filterSqlLogicalExpressionTreeByMemberMapping(segmentAst, {
-        normalizeMemberPath,
+        normalizeDimensionPath,
         isExcludedMember: (member) => config.excludeFilters.has(member),
         mapMember: (member) => dimensionMapping.get(member),
         isMappedMemberAllowed: (member) => allowedSubQueryDimensions.has(member),
@@ -6041,7 +6041,7 @@ export class BaseQuery {
     const subQuery = this.newSubQuery(subQueryOptions);
 
     this.registerSubQueryPreAggregations(subQuery);
-    const subQuerySql = `\n${JSON.stringify(subQueryOptions, null, 2)}\n` + subQuery.buildParamAnnotatedSql();
+    const subQuerySql = `/*\n${JSON.stringify(subQueryOptions, null, 2)}\n*/` + subQuery.buildParamAnnotatedSql();
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
