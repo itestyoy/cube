@@ -3,6 +3,27 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.6.10](https://github.com/cube-js/cube/compare/v1.6.9...v1.6.10) (2026-02-09)
+
+### Bug Fixes
+
+- **docker:** Set UTF-8 locale environment variables to fix Python UnicodeEncodeError ([#10378](https://github.com/cube-js/cube/issues/10378)) ([104ff5f](https://github.com/cube-js/cube/commit/104ff5f732c80fe54945c959736db5493b4d2575))
+
+### Features
+
+- **cubesql:** Support forwards directions for FETCH statement ([#10377](https://github.com/cube-js/cube/issues/10377)) ([7cbafd5](https://github.com/cube-js/cube/commit/7cbafd541a88c1d244e67aa980c208ca7c0ea68a))
+- Unify pool to make named timeout errors ([#10375](https://github.com/cube-js/cube/issues/10375)) ([bac3cd0](https://github.com/cube-js/cube/commit/bac3cd0f2f3f572fac037686ffa16a2e687fbcdc))
+
+## [1.6.9](https://github.com/cube-js/cube/compare/v1.6.8...v1.6.9) (2026-02-06)
+
+### Bug Fixes
+
+- Negative residual in version generation leads to endless loop during pre-aggregation refresh ([#10367](https://github.com/cube-js/cube/issues/10367)) ([d53ae5f](https://github.com/cube-js/cube/commit/d53ae5f3a2299d86ab221970d5909c146a5badac))
+
+### Features
+
+- **cubestore-driver:** improve WebSocket connection error messages ([#10355](https://github.com/cube-js/cube/issues/10355)) ([76b7873](https://github.com/cube-js/cube/commit/76b78738955f4419ce35aeb9f6cd4b73305e79dc))
+
 ## [1.6.8](https://github.com/cube-js/cube/compare/v1.6.7...v1.6.8) (2026-02-04)
 
 ### Bug Fixes
