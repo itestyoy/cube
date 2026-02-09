@@ -5381,9 +5381,7 @@ export class BaseQuery {
      * 
      * Transformation rules:
      * 1. Expression dimension object: Create new object with target cube
-     * 2. Expression dimension string: Transform via dimensionMapping
-     * 3. Regular dimension: Transform via dimensionMapping
-     * 4. Measure: Allow if in calculateMeasures
+     * 2. Regular dimension: Transform via dimensionMapping
      * 
      * Validation:
      * - Check excludeFilters
@@ -5403,86 +5401,62 @@ export class BaseQuery {
         return allowedOrFilters.length ? { ...filter, or: allowedOrFilters } : null;
       }
 
-      const filterMember = filter.dimension || filter.member || filter.measure;
+      if (filter.measure) return null;
+
+      const filterMember = filter.dimension || filter.member;
       if (!filterMember) return null;
 
       const isExpressionObject = typeof filterMember === 'object' && filterMember.expression;
       
-      let normalizedFilterMember;
-      let filterExpressionMetadata = null;
-      
       if (isExpressionObject) {
-        normalizedFilterMember = normalizeDimensionPath(filterMember);
-        filterExpressionMetadata = findExpressionDimensionByName(normalizedFilterMember);
-        if (!filterExpressionMetadata) return null;
-      } else {
-        normalizedFilterMember = normalizeDimensionPath(filterMember);
-      }
-      
-      if (config.excludeFilters.has(normalizedFilterMember)) return null;
 
-      const exprMetadata = filterExpressionMetadata || findExpressionDimensionByName(normalizedFilterMember);
-      
-      if (exprMetadata) {
+        const expressionCubeName = filterMember.expressionCubeName || filterMember.cubeName;
+        const dependencies = getExpressionDependencies(filterMember.expression, expressionCubeName);
+
         // Validate dependencies
-        const presentDeps = exprMetadata.allDependencies.filter(
-          dep => allowedRightDimensionsSet.has(dep)
+        const presentDeps = dependencies.filter(
+          dep => allowedSubQueryDimensions.has(dep) && !config.excludeFilters.has(dep)
         );
-        const missingDeps = exprMetadata.allDependencies.filter(
-          dep => !allowedRightDimensionsSet.has(dep)
+        const missingDeps = dependencies.filter(
+          dep => !allowedSubQueryDimensions.has(dep) && !config.excludeFilters.has(dep)
         );
 
         if (presentDeps.length > 0 && missingDeps.length > 0) {
           throw new UserError(
-            `Filter on expression '${normalizedFilterMember}' requires all dependencies. ` +
+            `Filter on expression '${JSON.stringify(filter)}' requires all dependencies. ` +
             `Missing: [${missingDeps.join(', ')}].`
           );
         }
 
         if (presentDeps.length === 0) return null;
         
-        // Transform expression dimension
-        const leftMember = dimensionMapping.get(normalizedFilterMember);
-        
-        if (hasAllowedDimensions && leftMember && allowedSubQueryDimensions.has(leftMember)) {
-          if (isExpressionObject) {
-            const leftCubeName = getCubeName(leftMember);
-            
-            return {
-              ...filter,
-              dimension: filter.dimension ? {
-                expression: exprMetadata.original.expression,
-                cubeName: exprMetadata.original.expressionCubeName,
-                name: exprMetadata.original.expressionName,
-                expressionName: exprMetadata.original.expressionName,
-                definition: exprMetadata.original.expression  // For BaseDimension, expression is the definition
-              } : undefined,
-              member: filter.member ? leftMember : undefined,
-            };
-          } else {
-            return {
-              ...filter,
-              dimension: filter.dimension ? leftMember : undefined,
-              member: filter.member ? leftMember : undefined,
-            };
-          }
-        }
-        
-        return null;
+        return filter;
       }
+
+      const normalizedFilterMember = normalizeDimensionPath(filterMember);
+
+      if (config.excludeFilters.has(normalizedFilterMember)) return null;
 
       // Regular dimension or measure
       const leftMember = dimensionMapping.get(normalizedFilterMember);
 
       if (hasAllowedDimensions && leftMember && allowedSubQueryDimensions.has(leftMember)) {
-        return {
-          ...filter,
-          dimension: filter.dimension ? leftMember : undefined,
-          member: filter.member ? leftMember : undefined,
-        };
-      }
 
-      if (allowedMeasures?.has(normalizedFilterMember)) return filter;
+        if (filter.dimension) {
+          return {
+            ...filter,
+            dimension: leftMember
+          };
+        }
+
+        if (filter.member) {
+          return {
+            ...filter,
+            member: leftMember
+          };
+        }
+
+      }
 
       return null;
     };
