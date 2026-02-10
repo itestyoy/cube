@@ -5798,7 +5798,7 @@ export class BaseQuery {
 
       // Process all validated allowed dimensions
       validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata, isPresented, operator, type}) => {
-        if (!isPresented) {
+        if (isPresented) {
           const isTimeDimension = type === 'time';
           
           if (isTimeDimension) {
