@@ -5439,47 +5439,6 @@ export class BaseQuery {
       )
     };
 
-    /**
-     * Validate expression dimensions in excludeFilters/filtersRequiresDimension
-     * 
-     * Rule: If ANY dependency of expression is in config, ALL dependencies must be in config
-     * This prevents ambiguity about whether to exclude/require the expression or its dependencies
-     * 
-     * @param {Set} configSet - Set of dimension paths from config
-     * @param {string} configName - Name of config option (for error messages)
-     */
-    const validateExpressionInConfig = (configSet, configName) => {
-      const validatedExpressions = new Set();
-
-      for (const depPath of configSet) {
-        // Find all expressions using this dependency
-        const expressionsUsingDep = [
-          ...(mainQueryContext.dimensions.map.get(depPath) || []),
-          ...(mainQueryContext.timeDimensions.map.get(depPath) || [])
-        ].filter(item => item.isExpression);
-
-        for (const item of expressionsUsingDep) {
-          if (validatedExpressions.has(item.expressionName)) continue;
-          validatedExpressions.add(item.expressionName);
-          
-          const depsInConfig = item.allDependencies.filter(dep => configSet.has(dep));
-          
-          if (depsInConfig.length > 0 && depsInConfig.length < item.allDependencies.length) {
-            const missingDeps = item.allDependencies.filter(d => !configSet.has(d));
-            throw new UserError(
-              `Expression dimension '${item.expressionName}' in correlatedQuery.${configName} of '${cubeName}.${memberName}' ` +
-              `depends on [${item.allDependencies.join(', ')}], but only some dependencies are in ${configName}. ` +
-              `Present: [${depsInConfig.join(', ')}]. Missing: [${missingDeps.join(', ')}]. ` +
-              `Either include all dependencies or none.`
-            );
-          }
-        }
-      }
-    };
-
-    validateExpressionInConfig(config.excludeFilters, 'excludeFilters');
-    validateExpressionInConfig(config.filtersRequireDimension, 'filtersRequiresDimension');
-
     // ============================================================================
     // STEP 5: Validate and normalize allowedDimensions
     // ============================================================================
@@ -5610,14 +5569,16 @@ export class BaseQuery {
         }
         
         // Validate: all dependencies present
-        const missingDependencies = expressionMetadata.allDependencies.filter(dep =>
-          !allowedRightDimensionsSet.has(dep)
+        const missingDependencies = expressionMetadata.allDependencies.filter(
+          dep => !allowedRightDimensionsSet.has(dep)
         );
 
         let operator;
 
         expressionMetadata.allDependencies.forEach((dep) => {
-          const depItem = validatedAllowedDimensions.find(d => d.leftDimension == dep);
+          const depItem = validatedAllowedDimensions
+            .filter(item => !item.isExpressionDimension)
+            .find(d => d.rightDimension == dep);
 
           if(depItem) {
             if(operator) {
@@ -5632,7 +5593,6 @@ export class BaseQuery {
               operator = depItem.operator;
             }
           }
-
         });
 
         if (!operator) {
@@ -5743,15 +5703,9 @@ export class BaseQuery {
         if (processed.timeDimensions.has(leftDimension)) return;
 
         if (expressionMetadata && expressionMetadata?.original && isExpressionDimension) {
-          // Explicit expression dimension
-          subQueryTimeDimensions.push({
-            dimension: createExpressionDimension(expressionMetadata),
-            granularity: expressionMetadata.original.granularity,
-            dateRange: config.excludeFilters.has(rightDimension) ? null : expressionMetadata.original.dateRange,
-            boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : expressionMetadata.original.boundaryDateRange
-          });
-
-          subOriginalTimeDimensionsMetadata.push({metadata: expressionMetadata, dimension: expressionMetadata.original?.expressionName, operator: operator});
+            throw new UserError(
+              `Expression as time dimension is not supported.`
+            );
         } else {
           // Regular dimension or implicit expression dependency
           const rightTdItems = mainQueryContext.timeDimensions.map.get(rightDimension) || [];
@@ -5864,16 +5818,9 @@ export class BaseQuery {
       const isExpressionObject = typeof filterMember === 'object' && filterMember.expression;
       
       if (isExpressionObject) {
-
-        const expressionCubeName = filterMember.expressionCubeName || filterMember.cubeName;
-        const dependencies = getExpressionDependencies(filterMember.expression, expressionCubeName);
-
-        // Validate dependencies
-        const excludeDeps = dependencies.filter(
-          dep => config.excludeFilters.has(dep) || !allowedSubQueryDimensions.has(dep)
+        throw new UserError(
+          `Expression as filter is not supported.`
         );
-
-        return excludeDeps.length > 0 ? null : filter;
       }
 
       const normalizedFilterMember = normalizeDimensionPath(filterMember);
