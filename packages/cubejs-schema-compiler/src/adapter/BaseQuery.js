@@ -5612,8 +5612,8 @@ export class BaseQuery {
       .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, operator, isOnlyFilter }) => {
         if (!expressionMetadata) return;
         
-        const rightCubeName = expressionMetadata.original.expressionCubeName;
-        const leftCubeName = expressionMetadata.original.expressionCubeName;
+        const rightCubeName = expressionMetadata.original.expressionCubeName || expressionMetadata.original.cubeName;
+        const leftCubeName = expressionMetadata.original.expressionCubeName || expressionMetadata.original.cubeName;
         
         if (!rightCubeName || !leftCubeName) {
 
@@ -5815,33 +5815,12 @@ export class BaseQuery {
 
       // Process all validated allowed dimensions
       validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata, isOnlyFilter, operator}) => {
-        if (isExpressionDimension && expressionMetadata && expressionMetadata.original && !isOnlyFilter) {
-          // Explicit expression dimension in allowedDimensions
+        if (!isOnlyFilter) {
           const isTimeDimension = expressionMetadata.type === 'timeDimension';
           
           if (isTimeDimension) {
             addTimeDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
           } else {
-            addDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
-          }
-        } else {
-          // Regular dimension or implicit expression dependency
-          const leftIsTimeDimension = getDimensionType(leftDimension) === 'time';
-          const rightIsTimeDimension = getDimensionType(rightDimension) === 'time';
-          
-          const existsInMainQueryDimensions = mainQueryContext.dimensions.set.has(rightDimension);
-          const existsInMainQueryTimeDimensions = mainQueryContext.timeDimensions.set.has(rightDimension);
-          const existsOnlyInFilters = mainQueryContext.filterMembers.has(rightDimension) && 
-                                      !existsInMainQueryDimensions && 
-                                      !existsInMainQueryTimeDimensions;
-          
-          if (existsInMainQueryDimensions && !isOnlyFilter) {
-            addDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
-          }
-
-          if (existsInMainQueryTimeDimensions && !isOnlyFilter) {
-            addTimeDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
-          } else if (existsOnlyInFilters && !(leftIsTimeDimension && rightIsTimeDimension) && !isOnlyFilter) {
             addDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
           }
         }
@@ -6060,7 +6039,7 @@ export class BaseQuery {
     const subQuery = this.newSubQuery(subQueryOptions);
 
     this.registerSubQueryPreAggregations(subQuery);
-    const subQuerySql = `/*\n${JSON.stringify(subQueryOptions, null, 2)}\n*/` + subQuery.buildParamAnnotatedSql();
+    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, validatedAllowedDimensions.map(({ leftDimension, rightDimension, operator, isExpressionDimension, isOnlyFilter }) => { leftDimension, rightDimension, operator, isExpressionDimension, isOnlyFilter })], null, 2)}\n*/` + subQuery.buildParamAnnotatedSql();
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
