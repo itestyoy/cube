@@ -5305,7 +5305,7 @@ export class BaseQuery {
      * Searches both dimensions and timeDimensions maps
      * 
      * @param {string} expressionName - Name of expression dimension to find
-     * @returns {Object|null} Metadata object with type field ('dimension' or 'timeDimension') or null
+     * @returns {Object|null} Metadata object with type field ('dimension' or 'time') or null
      * 
      * @example
      * findExpressionDimensionByName('Orders.avgPrice')
@@ -5327,7 +5327,7 @@ export class BaseQuery {
         const expressionItem = itemsArray.find(item => 
           item.isExpression && item.expressionName === normalizedName
         );
-        if (expressionItem) return { ...expressionItem, type: 'timeDimension' };
+        if (expressionItem) return { ...expressionItem, type: 'time' };
       }
       
       return null;
@@ -5353,7 +5353,7 @@ export class BaseQuery {
     // ============================================================================
 
     const mainQueryDimensionsMetadata = collectDimensionsMetadata(this.dimensions, 'dimension');
-    const mainQueryTimeDimensionsMetadata = collectDimensionsMetadata(this.timeDimensions, 'timeDimensions');
+    const mainQueryTimeDimensionsMetadata = collectDimensionsMetadata(this.timeDimensions, 'time');
 
     /**
      * Main query context structure:
@@ -5506,6 +5506,8 @@ export class BaseQuery {
           mainQueryContext.dimensions.set.has(normalizedRightDimension) || 
           mainQueryContext.timeDimensions.set.has(normalizedRightDimension);
      
+        const dimensionType = getDimensionType(leftDimension);
+
         const existsInMainQueryFilters = 
           mainQueryContext.filterMembers.has(normalizedRightDimension);
 
@@ -5516,6 +5518,7 @@ export class BaseQuery {
           rightDimension: normalizedRightDimension,
           originalRightDimension: rightDimension,
           operator,
+          type: dimensionType,
           isExpressionDimension: false,
           expressionMetadata: null,
           isOnlyFilter: !existsInMainQuery && existsInMainQueryFilters
@@ -5530,7 +5533,8 @@ export class BaseQuery {
         
         const rightIsTimeDimension = rightDimensionType === 'time' || 
                                     mainQueryContext.timeDimensions.set.has(rightDimension) ||
-                                    (!!expressionMetadata && expressionMetadata?.type === 'timeDimension');
+                                    (!!expressionMetadata && expressionMetadata?.type === 'time');
+
         const leftIsTimeDimension = leftDimensionType === 'time';
 
         if (rightIsTimeDimension && leftDimensionType && !leftIsTimeDimension) {
@@ -5603,13 +5607,14 @@ export class BaseQuery {
           rightDimension: exprName,
           originalRightDimension: exprName,
           operator: '=',
+          type: exprItem.type,
           isExpressionDimension: true,
           expressionMetadata: exprItem,
           isOnlyFilter: false
         };
 
       }).filter(Boolean)
-      .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, operator, isOnlyFilter }) => {
+      .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, operator, isOnlyFilter, type }) => {
         if (!expressionMetadata) return;
         
         const rightCubeName = expressionMetadata.original.expressionCubeName || expressionMetadata.original.cubeName;
@@ -5666,6 +5671,7 @@ export class BaseQuery {
             expressionMetadata, 
             originalRightDimension, 
             operator: newpOerator ?? operator,
+            type,
             isOnlyFilter
           }
         );
@@ -5814,9 +5820,9 @@ export class BaseQuery {
       };
 
       // Process all validated allowed dimensions
-      validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata, isOnlyFilter, operator}) => {
+      validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata, isOnlyFilter, operator, type}) => {
         if (!isOnlyFilter) {
-          const isTimeDimension = expressionMetadata.type === 'timeDimension';
+          const isTimeDimension = type === 'time';
           
           if (isTimeDimension) {
             addTimeDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
@@ -7457,7 +7463,7 @@ export class BaseQuery {
           // Check if it's a time dimension
           const dimension = this.cubeEvaluator.dimensionByPath(memberPath);
           if (dimension.type === 'time') {
-            return 'timeDimension';
+            return 'time';
           }
           return 'dimension';
         }
