@@ -5508,11 +5508,6 @@ export class BaseQuery {
      
         const dimensionType = getDimensionType(leftDimension);
 
-        const existsInMainQueryFilters = 
-          mainQueryContext.filterMembers.has(normalizedRightDimension);
-
-        if (!existsInMainQuery && !existsInMainQueryFilters) return null;
-
         return {
           leftDimension,
           rightDimension: normalizedRightDimension,
@@ -5521,7 +5516,7 @@ export class BaseQuery {
           type: dimensionType,
           isExpressionDimension: false,
           expressionMetadata: null,
-          isOnlyFilter: !existsInMainQuery && existsInMainQueryFilters
+          isPresented: existsInMainQuery
         };
       })
       .filter(Boolean)
@@ -5529,22 +5524,9 @@ export class BaseQuery {
 
         // Validate type compatibility
         const leftDimensionType = getDimensionType(leftDimension);
-        const rightDimensionType = getDimensionType(originalRightDimension);
-        
-        const rightIsTimeDimension = rightDimensionType === 'time' || 
-                                    mainQueryContext.timeDimensions.set.has(rightDimension) ||
-                                    (!!expressionMetadata && expressionMetadata?.type === 'time');
+        const rightDimensionType = getDimensionType(rightDimension);
 
-        const leftIsTimeDimension = leftDimensionType === 'time';
-
-        if (rightIsTimeDimension && leftDimensionType && !leftIsTimeDimension) {
-          throw new UserError(
-            `Correlated dimension '${leftDimension}' must be a time dimension ` +
-            `because '${originalRightDimension}' in the main query is time.`
-          );
-        }
-
-        if (leftDimensionType && rightDimensionType && leftDimensionType !== rightDimensionType) {
+        if (leftDimensionType !== rightDimensionType) {
           throw new UserError(
             `Correlated dimensions '${leftDimension}' and '${originalRightDimension}' ` +
             `must have the same type but are '${leftDimensionType}' and '${rightDimensionType}'.`
@@ -5591,7 +5573,7 @@ export class BaseQuery {
     const expressionsWithAllDeps = [
         ...(mainQueryDimensionsMetadata || []),
         ...(mainQueryTimeDimensionsMetadata || [])
-      ].filter(item => item.isExpression && item?.original?.expression);
+      ].filter(item => item.isExpression);
 
     if (hasAllowedDimensions && expressionsWithAllDeps.length) {
       expressionsWithAllDeps.map((exprItem) => {
@@ -5610,24 +5592,21 @@ export class BaseQuery {
           type: exprItem.type,
           isExpressionDimension: true,
           expressionMetadata: exprItem,
-          isOnlyFilter: false
+          isPresented: true
         };
 
       }).filter(Boolean)
-      .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, operator, isOnlyFilter, type }) => {
+      .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, operator, isPresented, type }) => {
         if (!expressionMetadata) return;
         
         const rightCubeName = expressionMetadata.original.expressionCubeName || expressionMetadata.original.cubeName;
         const leftCubeName = expressionMetadata.original.expressionCubeName || expressionMetadata.original.cubeName;
         
         if (!rightCubeName || !leftCubeName) {
-
-          return;
-
-          /*throw new UserError(
+          throw new UserError(
             `Expression dimension '${rightDimension}' must have cube names in both ` +
             `left and right dimensions (format: CubeName.dimensionName).`
-          );*/
+          );
         }
         
         // Validate: all dependencies present
@@ -5644,7 +5623,7 @@ export class BaseQuery {
             if(newpOerator) {
               if(depItem.operator != newpOerator) {
                 throw new UserError(
-                  `Expression dimension '${rightDimension}' must have consistent operator`
+                  `Expression dimension '${rightDimension}' must have consistent operators`
                 );
               }
               newpOerator = depItem.operator;
@@ -5655,12 +5634,10 @@ export class BaseQuery {
         });
 
         if (missingDependencies.length > 0) {
-          return;
-
-          /*throw new UserError(
+          throw new UserError(
             `Expression dimension '${rightDimension}' requires all its dependencies in allowedDimensions. ` +
             `Missing: [${missingDependencies.join(', ')}].`
-          );*/
+          );
         }
         
         validatedAllowedDimensions.push(
@@ -5672,7 +5649,7 @@ export class BaseQuery {
             originalRightDimension, 
             operator: newpOerator ?? operator,
             type,
-            isOnlyFilter
+            isPresented
           }
         );
 
@@ -5820,8 +5797,8 @@ export class BaseQuery {
       };
 
       // Process all validated allowed dimensions
-      validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata, isOnlyFilter, operator, type}) => {
-        if (!isOnlyFilter) {
+      validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata, isPresented, operator, type}) => {
+        if (!isPresented) {
           const isTimeDimension = type === 'time';
           
           if (isTimeDimension) {
@@ -5840,7 +5817,6 @@ export class BaseQuery {
     // STEP 10: Transform filters for subQuery
     // ============================================================================
     
-    const allowedMeasures = hasCalculateMeasures ? new Set(calculateMeasures) : null;
     const dimensionMapping = new Map(
       validatedAllowedDimensions.map(({ leftDimension, rightDimension }) => 
         [rightDimension, leftDimension]
@@ -6045,7 +6021,7 @@ export class BaseQuery {
     const subQuery = this.newSubQuery(subQueryOptions);
 
     this.registerSubQueryPreAggregations(subQuery);
-    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, validatedAllowedDimensions.map(({ leftDimension, rightDimension, operator, isExpressionDimension, isOnlyFilter }) => { leftDimension, rightDimension, operator, isExpressionDimension, isOnlyFilter })], null, 2)}\n*/` + subQuery.buildParamAnnotatedSql();
+    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, dimensionMapping], null, 2)}\n*/` + subQuery.buildParamAnnotatedSql();
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
