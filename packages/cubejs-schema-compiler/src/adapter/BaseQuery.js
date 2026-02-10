@@ -5596,7 +5596,7 @@ export class BaseQuery {
         };
 
       }).filter(Boolean)
-      .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, operator, isPresented, type }) => {
+      .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, isPresented, type }) => {
         if (!expressionMetadata) return;
         
         const rightCubeName = expressionMetadata.original.expressionCubeName || expressionMetadata.original.cubeName;
@@ -5604,7 +5604,7 @@ export class BaseQuery {
         
         if (!rightCubeName || !leftCubeName) {
           throw new UserError(
-            `Expression dimension '${rightDimension}' must have cube names in both ` +
+            `Expression dimension '${leftDimension}' must have cube names in both ` +
             `left and right dimensions (format: CubeName.dimensionName).`
           );
         }
@@ -5614,28 +5614,36 @@ export class BaseQuery {
           !allowedRightDimensionsSet.has(dep)
         );
 
-        let newpOerator;
+        let operator;
 
         expressionMetadata.allDependencies.forEach((dep) => {
           const depItem = validatedAllowedDimensions.find(d => d.leftDimension == dep);
 
           if(depItem) {
-            if(newpOerator) {
-              if(depItem.operator != newpOerator) {
+            if(operator) {
+              if(operator && depItem.operator != operator) {
                 throw new UserError(
-                  `Expression dimension '${rightDimension}' must have consistent operators`
+                  `Expression dimension '${leftDimension}' must have consistent operators.`
                 );
+              } else {
+                operator = depItem.operator;
               }
-              newpOerator = depItem.operator;
             } else {
-              newpOerator = depItem.operator;
+              operator = depItem.operator;
             }
           }
+
         });
+
+        if (!operator) {
+          throw new UserError(
+            `Expression dimension '${leftDimension}' requires opertator.`
+          );
+        }
 
         if (missingDependencies.length > 0) {
           throw new UserError(
-            `Expression dimension '${rightDimension}' requires all its dependencies in allowedDimensions. ` +
+            `Expression dimension '${leftDimension}' requires all its dependencies in allowedDimensions. ` +
             `Missing: [${missingDependencies.join(', ')}].`
           );
         }
@@ -5647,7 +5655,7 @@ export class BaseQuery {
             isExpressionDimension, 
             expressionMetadata, 
             originalRightDimension, 
-            operator: newpOerator ?? operator,
+            operator: operator,
             type,
             isPresented
           }
