@@ -5635,15 +5635,17 @@ export class BaseQuery {
         expressionMetadata.allDependencies.forEach((dep) => {
           const depItem = validatedAllowedDimensions.find(d => d.leftDimension == dep);
 
-          if(newpOerator) {
-            if(depItem.operator != newpOerator) {
-              throw new UserError(
-                `Expression dimension '${rightDimension}' must have consistent operator`
-              );
+          if(depItem) {
+            if(newpOerator) {
+              if(depItem.operator != newpOerator) {
+                throw new UserError(
+                  `Expression dimension '${rightDimension}' must have consistent operator`
+                );
+              }
+              newpOerator = depItem.operator;
+            } else {
+              newpOerator = depItem.operator;
             }
-            newpOerator = depItem.operator;
-          } else {
-            newpOerator = depItem.operator;
           }
         });
 
