@@ -5637,7 +5637,7 @@ export class BaseQuery {
 
         if (!operator) {
           throw new UserError(
-            `Expression dimension '${leftDimension}' requires opertator.`
+            `Expression dimension '${leftDimension}' (${JSON.stringify(expressionMetadata.allDependencies)}) requires opertator.`
           );
         }
 
