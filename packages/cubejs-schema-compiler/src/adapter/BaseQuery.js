@@ -1239,8 +1239,15 @@ export class BaseQuery {
       return this.simpleQuery();
     }
     const hasMemberExpressions = this.allMembersConcat(false).some(m => m.isMemberExpression);
+    const canUsePreAggregationsWithMemberExpressions =
+      !hasMemberExpressions || getEnv('memberExpressionsPreAggregations');
 
-    if (this.options.cacheMode !== 'no-cache' && !this.options.preAggregationQuery && !this.customSubQueryJoins.length && !hasMemberExpressions) {
+    if (
+      this.options.cacheMode !== 'no-cache' &&
+      !this.options.preAggregationQuery &&
+      !this.customSubQueryJoins.length &&
+      canUsePreAggregationsWithMemberExpressions
+    ) {
       preAggForQuery =
         this.preAggregations.findPreAggregationForQuery();
       if (this.options.disableExternalPreAggregations && preAggForQuery?.preAggregation.external) {
@@ -5863,7 +5870,9 @@ export class BaseQuery {
 
       // Keep regular path segments untouched (segment SQL function cannot be safely remapped here).
       if (typeof segment === 'string') {
-        return segment;
+        throw new UserError(
+          `Using segments with correlated queries is not supported.`
+        );
       }
 
       const segmentDefinitionSource = segment.definition;

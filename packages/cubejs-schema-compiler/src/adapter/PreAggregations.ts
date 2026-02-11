@@ -1,4 +1,5 @@
 import R from 'ramda';
+import { getEnv } from '@cubejs-backend/shared';
 
 import { CubeSymbols, PreAggregationDefinition } from '../compiler/CubeSymbols';
 import { FinishedJoinTree, JoinEdge } from '../compiler/JoinGraph';
@@ -415,8 +416,33 @@ export class PreAggregations {
   public static transformQueryToCanUseForm(query: BaseQuery): TransformedQuery {
     const allBackAliasMembers = query.allBackAliasMembers();
     const resolveFullMemberPath = query.resolveFullMemberPathFn();
+    const memberExpressionsPreAggregations = query.options?.memberExpressionsPreAggregations ??
+      getEnv('memberExpressionsPreAggregations');
+    const collectExpressionAwarePaths = (members: BaseMember[], methodName: string): string[] => R.pipe(
+      R.map((member: BaseMember) => {
+        if (
+          memberExpressionsPreAggregations &&
+          member.isMemberExpression &&
+          !(member instanceof BaseSegment)
+        ) {
+          return query.collectFrom([member], query.collectMemberNamesFor.bind(query), methodName);
+        }
+
+        if (typeof (member as any).expressionPath === 'function') {
+          return [(member as any).expressionPath()];
+        }
+
+        return [];
+      }),
+      R.unnest,
+      R.uniq,
+      R.sortBy(R.identity)
+    )(members);
     const flattenDimensionMembers = this.flattenDimensionMembers(query);
-    const sortedDimensions = this.squashDimensions(flattenDimensionMembers).map(resolveFullMemberPath);
+    const sortedDimensions = collectExpressionAwarePaths(
+      flattenDimensionMembers,
+      'collectExpressionAwarePathsForPreAggregationMatching'
+    ).map(resolveFullMemberPath);
     const measures: (BaseMeasure | BaseFilter | BaseGroupFilter)[] = [...query.measures, ...query.measureFilters];
     const measurePaths = (R.uniq(
       this.flattenMembers(measures)
@@ -424,8 +450,14 @@ export class PreAggregations {
         .map(m => m.expressionPath())
     )).map(resolveFullMemberPath);
     const collectLeafMeasures = query.collectLeafMeasures.bind(query);
-    const dimensionsList = query.dimensions.map(dim => dim.expressionPath());
-    const segmentsList = query.segments.map(s => s.expressionPath());
+    const dimensionsList = collectExpressionAwarePaths(
+      query.dimensions,
+      'collectExpressionAwareDimensionListForPreAggregationMatching'
+    );
+    const segmentsList = collectExpressionAwarePaths(
+      query.segments,
+      'collectExpressionAwareSegmentListForPreAggregationMatching'
+    );
     const ownedDimensions = PreAggregations.ownedMembers(query, flattenDimensionMembers).map(resolveFullMemberPath);
     const ownedTimeDimensions = query.timeDimensions.map(td => {
       const owned = PreAggregations.ownedMembers(query, [td]);
