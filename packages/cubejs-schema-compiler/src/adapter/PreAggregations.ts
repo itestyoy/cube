@@ -420,9 +420,12 @@ export class PreAggregations {
       getEnv('memberExpressionsPreAggregations');
     const collectExpressionAwarePaths = (members: BaseMember[], methodName: string): string[] => R.pipe(
       R.map((member: BaseMember) => {
+        const isMemberExpression = 'isMemberExpression' in member &&
+          Boolean((member as { isMemberExpression?: boolean }).isMemberExpression);
+
         if (
           memberExpressionsPreAggregations &&
-          member.isMemberExpression &&
+          isMemberExpression &&
           !(member instanceof BaseSegment)
         ) {
           return query.collectFrom([member], query.collectMemberNamesFor.bind(query), methodName);
