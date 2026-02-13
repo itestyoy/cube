@@ -5576,9 +5576,9 @@ export class BaseQuery {
         let operator;
 
         expressionMetadata.allDependencies.forEach((dep) => {
-          const depItem = validatedAllowedDimensions
-            .filter(item => !item.isExpressionDimension)
-            .find(d => normalizeDimensionPath(d.rightDimension) == dep);
+          const depItem = allowedDimensions.find(
+            ({ leftDimension, rightDimension, operator }) => normalizeDimensionPath(d.leftDimension) == dep
+          );
 
           if(depItem) {
             if(operator) {
@@ -5597,7 +5597,7 @@ export class BaseQuery {
 
         if (!operator) {
           throw new UserError(
-            `Expression dimension '${leftDimension}':'${rightDimension}' (${JSON.stringify(expressionMetadata.allDependencies)}) requires opertator.`
+            `Expression dimension '${leftDimension}':'${rightDimension}' (${JSON.stringify(expressionMetadata.allDependencies)}):(${allowedDimensions}) requires opertator.`
           );
         }
 
