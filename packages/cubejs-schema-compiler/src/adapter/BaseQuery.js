@@ -1239,15 +1239,8 @@ export class BaseQuery {
       return this.simpleQuery();
     }
     const hasMemberExpressions = this.allMembersConcat(false).some(m => m.isMemberExpression);
-    const canUsePreAggregationsWithMemberExpressions =
-      !hasMemberExpressions || getEnv('memberExpressionsPreAggregations');
 
-    if (
-      this.options.cacheMode !== 'no-cache' &&
-      !this.options.preAggregationQuery &&
-      !this.customSubQueryJoins.length &&
-      canUsePreAggregationsWithMemberExpressions
-    ) {
+    if (this.options.cacheMode !== 'no-cache' && !this.options.preAggregationQuery && !this.customSubQueryJoins.length && !hasMemberExpressions) {
       preAggForQuery =
         this.preAggregations.findPreAggregationForQuery();
       if (this.options.disableExternalPreAggregations && preAggForQuery?.preAggregation.external) {
@@ -5284,7 +5277,7 @@ export class BaseQuery {
               type: type,
               original: dimObj,
               isExpression: false,
-              allDependencies: []
+              allDependencies: [resolveViewPath(dimObj.dimension)]
             });
           }
         }
@@ -5585,13 +5578,13 @@ export class BaseQuery {
         expressionMetadata.allDependencies.forEach((dep) => {
           const depItem = validatedAllowedDimensions
             .filter(item => !item.isExpressionDimension)
-            .find(d => d.rightDimension == dep);
+            .find(d => normalizeDimensionPath(d.rightDimension) == dep);
 
           if(depItem) {
             if(operator) {
-              if(operator && depItem.operator != operator) {
+              if(depItem.operator != operator) {
                 throw new UserError(
-                  `Expression dimension '${leftDimension}' must have consistent operators.`
+                  `Expression dimension '${leftDimension}':'${rightDimension}' must have consistent operators.`
                 );
               } else {
                 operator = depItem.operator;
@@ -5604,13 +5597,13 @@ export class BaseQuery {
 
         if (!operator) {
           throw new UserError(
-            `Expression dimension '${leftDimension}' (${JSON.stringify(expressionMetadata.allDependencies)}) requires opertator.`
+            `Expression dimension '${leftDimension}':'${rightDimension}' (${JSON.stringify(expressionMetadata.allDependencies)}) requires opertator.`
           );
         }
 
         if (missingDependencies.length > 0) {
           throw new UserError(
-            `Expression dimension '${leftDimension}' requires all its dependencies in allowedDimensions. ` +
+            `Expression dimension '${leftDimension}':'${rightDimension}' requires all its dependencies in allowedDimensions. ` +
             `Missing: [${missingDependencies.join(', ')}].`
           );
         }
@@ -5939,10 +5932,6 @@ export class BaseQuery {
     // ============================================================================
     
     if (config.filtersRequireDimension.size > 0) {
-      const selectedMainQueryDimensions = new Set([
-        ...mainQueryDimensionsMetadata.map(item => item.path),
-        ...mainQueryTimeDimensionsMetadata.map(item => item.path)
-      ]);
 
       const validateRequiredDimension = (rightDimension) => {
         if (!rightDimension) return;
@@ -5955,8 +5944,12 @@ export class BaseQuery {
           if (!leftDimension || !allowedSubQueryDimensions.has(leftDimension)) return;
         }
 
+        const selected = mainQueryDimensionsMetadata.find(
+          find => item?.allDependencies?.includes(normalizedRightDimension)
+        );
+
         if (config.filtersRequireDimension.has(normalizedRightDimension) &&
-            !selectedMainQueryDimensions.has(normalizedRightDimension)) {
+            !selected) {
           throw new UserError(
             `Filter on '${normalizedRightDimension}' requires dimension selection in main query.`
           );
@@ -5965,13 +5958,6 @@ export class BaseQuery {
 
       (this.options.filters || []).forEach(filter => {
         validateRequiredDimension(filter.dimension || filter.member || filter.measure);
-      });
-
-      mainQueryTimeDimensionsMetadata.forEach(({ path, original }) => {
-        const td = original.timeDimension || original;
-        if (td.dateRange || td.boundaryDateRange) {
-          validateRequiredDimension(path);
-        }
       });
     }
 
