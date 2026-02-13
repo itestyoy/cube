@@ -3790,10 +3790,9 @@ export class BaseQuery {
       const usedMembers = this.collectUsedMembersFromQuery();
       const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
       // Resolve to final alias member for proper matching
-      const resolvedPath = this.resolveToFinalAliasMember(memberPath);
 
-      // Check regular members (case-insensitive comparison)
-      const normalizedPath = resolvedPath.toLowerCase();
+      const { memberPath: normalizedPath } = this.resolveToFinalAliasMember(memberPath);
+
       if (Array.isArray(usedMembers) && usedMembers.some(m => m.toLowerCase() === normalizedPath)) {
         return true;
       }
@@ -3822,7 +3821,7 @@ export class BaseQuery {
 
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
     // Resolve to final alias member for proper matching (case-insensitive)
-    const resolvedPath = this.resolveToFinalAliasMember(memberPath).toLowerCase();
+    const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(memberPath);
 
     // Check filters for the member itself
     let result = this.extractMemberFiltersRecursive(this.options.filters, resolvedPath);
@@ -3848,7 +3847,7 @@ export class BaseQuery {
    */
   resolveToFinalAliasMember(memberPath) {
     if (!memberPath || typeof memberPath !== 'string') {
-      return memberPath;
+      return { memberPath: memberPath, cubeName: null };
     }
 
     const visited = new Set();
@@ -3871,7 +3870,7 @@ export class BaseQuery {
       current = def.aliasMember;
     }
 
-    return current || memberPath;
+    return { memberPath: (current || memberPath).toLowerCase(), cubeName: def.cube() };
   }
 
   /**
@@ -3885,8 +3884,7 @@ export class BaseQuery {
       return [];
     }
 
-    const resolvedPath = this.resolveToFinalAliasMember(memberPath);
-    const normalizedPath = resolvedPath.toLowerCase();
+    const { memberPath: normalizedPath } = this.resolveToFinalAliasMember(memberPath);
     const result = [];
 
     const checkMembers = (members) => {
@@ -3900,7 +3898,8 @@ export class BaseQuery {
             );
             const dependencies = pathReferencesUsed.map(pathArray => {
               const depPath = this.cubeEvaluator.pathFromArray(pathArray);
-              return this.resolveToFinalAliasMember(depPath).toLowerCase();
+              const { memberPath: normalizedPath } = this.resolveToFinalAliasMember(depPath);
+              return normalizedPath;
             });
 
             if (dependencies.includes(normalizedPath)) {
@@ -3972,8 +3971,8 @@ export class BaseQuery {
     const filterMember = filters.member || filters.dimension;
     if (filterMember) {
       // Resolve to final alias member for proper matching (case-insensitive)
-      const resolvedFilterMember = this.resolveToFinalAliasMember(filterMember).toLowerCase();
-      if (resolvedFilterMember === targetMemberPath) {
+      const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(filterMember);
+      if (resolvedPath === targetMemberPath) {
         // Return the filter without modifying it
         return { ...filters };
       }
@@ -3995,13 +3994,13 @@ export class BaseQuery {
 
     const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
     // Resolve to final alias member for proper matching (case-insensitive)
-    const resolvedPath = this.resolveToFinalAliasMember(memberPath).toLowerCase();
+    const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(memberPath);
 
     // Find the time dimension that matches the member path and has a granularity
     const timeDimension = this.timeDimensions.find(td => {
       // Check regular dimension path
       if (td.dimension) {
-        const resolvedTdPath = this.resolveToFinalAliasMember(td.dimension).toLowerCase();
+        const { memberPath: resolvedTdPath } = this.resolveToFinalAliasMember(td.dimension);
         if (resolvedTdPath === resolvedPath) {
           return true;
         }
@@ -4016,7 +4015,8 @@ export class BaseQuery {
           );
           const dependencies = pathReferencesUsed.map(pathArray => {
             const depPath = this.cubeEvaluator.pathFromArray(pathArray);
-            return this.resolveToFinalAliasMember(depPath).toLowerCase();
+            const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(depPath);
+            return resolvedPath;
           });
           if (dependencies.includes(resolvedPath)) {
             return true;
@@ -5087,13 +5087,6 @@ export class BaseQuery {
     // ============================================================================
     
     /**
-     * Resolve view member to underlying cube member (preserves granularity)
-     */
-    const resolveViewPath = (path) => typeof path === 'string'
-      ? this.resolveToFinalAliasMember(path)
-      : path;
-
-    /**
      * Normalize allowedDimensions array to unified format
      * Handles multiple input formats and converts to consistent structure
      * 
@@ -5172,9 +5165,9 @@ export class BaseQuery {
         // Normalize each dependency: remove join hints and lowercase
         return pathReferencesUsed.map(pathArray => {
           const pathString = this.cubeEvaluator.pathFromArray(pathArray);
-          const resolvedPath = resolveViewPath(pathString);
+          const { memberPath, cubeName } = this.resolveToFinalAliasMember(pathString);
           // const { path } = this.cubeEvaluator.constructor.joinHintFromPath(resolvedPath);
-          return resolvedPath.toLowerCase();
+          return memberPath;
         });
       } catch {
         return [];
@@ -5195,9 +5188,9 @@ export class BaseQuery {
      */
     const normalizeDimensionPath = (dim) => {
       if (typeof dim === 'string') {
-        const resolved = resolveViewPath(dim);
+        const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(dim);
         // const { path } = this.cubeEvaluator.constructor.joinHintFromPath(resolved);
-        return resolved.toLowerCase();
+        return resolvedPath;
       }
 
       if (dim?.expression) {
@@ -5269,15 +5262,16 @@ export class BaseQuery {
           // Regular dimension
           let path = dimObj.dimension;
           if (path) {
-            const { path: normalizedPath } = this.cubeEvaluator.constructor.joinHintFromPath(resolveViewPath(path));
-            path = normalizedPath.toLowerCase();
+            const { memberPath: resolvedPath, cubeName } = this.resolveToFinalAliasMember(path);
+            // const { path: normalizedPath } = this.cubeEvaluator.constructor.joinHintFromPath(resolvedPath);
+            // const { memberPath: resolvedDimensionPath } = this.resolveToFinalAliasMember(dimObj.dimension);
             
             result.push({
-              path,
+              path: resolvedPath,
               type: type,
               original: dimObj,
               isExpression: false,
-              allDependencies: [resolveViewPath(dimObj.dimension)]
+              allDependencies: [resolvedPath]
             });
           }
         }
@@ -7376,7 +7370,8 @@ export class BaseQuery {
       if (!memberPath || typeof memberPath !== 'string') {
         return null;
       }
-      return this.resolveToFinalAliasMember(memberPath);
+      const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(memberPath);
+      return resolvedPath;
     };
 
     // Helper to categorize a member path
@@ -7502,7 +7497,10 @@ export class BaseQuery {
             .map(path => this.cubeEvaluator.pathFromArray(path))
             .concat(depsFromArgs)
             // Map view members back to base cube members so rollup matching works with dynamicSql
-            .map(path => this.resolveToFinalAliasMember(path))
+            .map(path => { 
+              const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(path);
+              return resolvedPath;
+            })
         )
       ];
 
