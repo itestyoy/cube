@@ -5577,7 +5577,7 @@ export class BaseQuery {
 
         expressionMetadata.allDependencies.forEach((dep) => {
           const depItem = allowedDimensions.find(
-            ({ leftDimension, rightDimension, operator }) => normalizeDimensionPath(d.leftDimension) == dep
+            ({ leftDimension, rightDimension, operator }) => normalizeDimensionPath(leftDimension) == dep
           );
 
           if(depItem) {
