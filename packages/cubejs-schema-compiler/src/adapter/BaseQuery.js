@@ -5571,7 +5571,21 @@ export class BaseQuery {
         // Validate: all dependencies present
         const missingDependencies = expressionMetadata.allDependencies.filter(
           dep => !allowedRightDimensionsSet.has(dep)
-        );
+        ) || [];
+
+        // Validate: all dependencies present
+        const presentedDependencies = expressionMetadata.allDependencies.filter(
+          dep => allowedRightDimensionsSet.has(dep)
+        ) || [];
+
+        if (missingDependencies.length > 0 && presentedDependencies.length > 0) {
+          throw new UserError(
+            `Expression dimension '${leftDimension}':'${rightDimension}' requires all its dependencies in allowedDimensions. ` +
+            `Missing: [${missingDependencies.join(', ')}].`
+          );
+        }
+
+        if (presentedDependencies.length == 0) return;
 
         let operator;
 
@@ -5597,14 +5611,7 @@ export class BaseQuery {
 
         if (!operator) {
           throw new UserError(
-            `Expression dimension '${leftDimension}':'${rightDimension}' (${JSON.stringify(expressionMetadata.allDependencies)}):(${JSON.stringify(allowedDimensions)}) requires opertator.`
-          );
-        }
-
-        if (missingDependencies.length > 0) {
-          throw new UserError(
-            `Expression dimension '${leftDimension}':'${rightDimension}' requires all its dependencies in allowedDimensions. ` +
-            `Missing: [${missingDependencies.join(', ')}].`
+            `Expression dimension '${leftDimension}':'${rightDimension}' requires opertator.`
           );
         }
         
