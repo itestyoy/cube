@@ -3852,6 +3852,7 @@ export class BaseQuery {
 
     const visited = new Set();
     let current = memberPath;
+    let currentCube = null;
 
     while (current && !visited.has(current)) {
       visited.add(current);
@@ -3868,9 +3869,10 @@ export class BaseQuery {
       }
 
       current = def.aliasMember;
+      currentCube = def?.cube?.()
     }
 
-    return { memberPath: (current || memberPath).toLowerCase(), cubeName: def.cube() };
+    return { memberPath: (current || memberPath).toLowerCase(), cubeName: currentCube };
   }
 
   /**
