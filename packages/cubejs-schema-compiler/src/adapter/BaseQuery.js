@@ -5948,7 +5948,7 @@ export class BaseQuery {
         }
 
         const selected = mainQueryDimensionsMetadata.find(
-          find => item?.allDependencies?.includes(normalizedRightDimension)
+          item => item?.allDependencies?.includes(normalizedRightDimension)
         );
 
         if (config.filtersRequireDimension.has(normalizedRightDimension) &&
