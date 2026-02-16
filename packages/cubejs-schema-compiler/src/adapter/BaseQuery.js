@@ -6018,14 +6018,6 @@ export class BaseQuery {
         mainQueryRenderedReference = Object.fromEntries(
           Object.entries(renderedReference)
             .map(([key, value]) => [key, `${mainQueryAlias}.${value}`])
-            .filter(([key, value]) => {
-              try {
-                const item = this.cubeEvaluator.byPathAnyType(value);
-                return true;
-              } catch (_e) {
-                return false
-              }
-            })
         );
       }
     }
@@ -6109,7 +6101,7 @@ export class BaseQuery {
         let mainQuerySql;
 
         // Expression dimension (SQL pushdown / member expression)
-        if (original.isExpression) {
+        if (original.expression) {
           try {
             mainQuerySql = this.evaluateSql(original.expressionCubeName, original.expression);
             
