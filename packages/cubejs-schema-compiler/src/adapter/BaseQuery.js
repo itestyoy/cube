@@ -3855,10 +3855,7 @@ export class BaseQuery {
     try {
       const member = this.cubeEvaluator.byPathAnyType(memberPath);
 
-      if(
-        this.cubeEvaluator.cubeFromPath(memberPath).name !== 
-        this.cubeEvaluator.cubeFromPath(member.aliasMember).name
-      ) {
+      if(this.cubeEvaluator.cubeFromPath(memberPath).isView) {
         resolvedPath = member.aliasMember;
       } else {
         resolvedPath = memberPath;
