@@ -3850,29 +3850,46 @@ export class BaseQuery {
       return { memberPath: memberPath, cubeName: null };
     }
 
-    const visited = new Set();
-    let current = memberPath;
-    let currentCube = null;
+    let member;
+    let aliasMember;
+    let resolvedMemberPath = memberPath;
+    let resolvedMember = null;
 
-    while (current && !visited.has(current)) {
-      visited.add(current);
-
-      let def;
-      try {
-        def = this.cubeEvaluator.byPathAnyType(current);
-      } catch {
-        break;
-      }
-
-      if (!def?.aliasMember) {
-        break;
-      }
-
-      current = def.aliasMember;
-      currentCube = def?.cube?.()
+    try {
+      member = this.cubeEvaluator.byPathAnyType(memberPath);
+      resolvedMember = member;
+    } catch {
+      resolvedMemberPath = memberPath;
     }
 
-    return { memberPath: (current || memberPath).toLowerCase(), cubeName: currentCube };
+    if (!member?.aliasMember) {
+      resolvedMemberPath = memberPath;
+    } else {
+      try {
+        aliasMember = this.cubeEvaluator.byPathAnyType(member.aliasMember);
+      } catch {
+        resolvedMemberPath = memberPath;
+      }
+
+      if (!aliasMember?.cube) {
+        resolvedMemberPath = memberPath;
+      } else {
+          if (!member?.cube) {
+            resolvedMemberPath = memberPath;
+          } else {
+              const memberCube = member.cube?.();
+              const aliasMemberCube = aliasMember.cube?.();
+
+              if(aliasMemberCube !== memberCube) {
+                resolvedMemberPath = member.aliasMember;
+                resolvedMember = aliasMember;
+              } else {
+                resolvedMemberPath = memberPath;
+              }
+          }
+      }
+    }
+    return { memberPath: resolvedMemberPath.toLowerCase(), cubeName: resolvedMember?.cube?.() };
   }
 
   /**
