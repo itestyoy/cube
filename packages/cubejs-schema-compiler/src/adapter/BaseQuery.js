@@ -3827,14 +3827,14 @@ export class BaseQuery {
     let result = this.extractMemberFiltersRecursive(this.options.filters, resolvedPath);
 
     // Also check filters for expression members where this member is a dependency (SQL pushdown)
-    const expressionMembers = this.findExpressionMembersWithDependency(memberPath);
+    /*const expressionMembers = this.findExpressionMembersWithDependency(memberPath);
     for (const expr of expressionMembers) {
       // expressionName is already lowercase from findExpressionMembersWithDependency
       const exprFilters = this.extractMemberFiltersRecursive(this.options.filters, expr.expressionName.toLowerCase());
       if (exprFilters) {
         result = result ? { and: [result, exprFilters] } : exprFilters;
       }
-    }
+    }*/
 
     return result || null;
   }
