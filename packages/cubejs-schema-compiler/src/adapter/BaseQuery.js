@@ -3847,49 +3847,27 @@ export class BaseQuery {
    */
   resolveToFinalAliasMember(memberPath) {
     if (!memberPath || typeof memberPath !== 'string') {
-      return { memberPath: memberPath, cubeName: null };
+      return { memberPath: memberPath };
     }
 
-    let member;
-    let aliasMember;
-    let resolvedMemberPath = memberPath;
-    let resolvedMember = null;
+    let resolvedPath;
 
     try {
-      member = this.cubeEvaluator.byPathAnyType(memberPath);
-      resolvedMember = member;
-    } catch {
-      resolvedMemberPath = memberPath;
-    }
+      const member = this.cubeEvaluator.byPathAnyType(memberPath);
 
-    if (!member?.aliasMember) {
-      resolvedMemberPath = memberPath;
-    } else {
-      try {
-        aliasMember = this.cubeEvaluator.byPathAnyType(member.aliasMember);
-      } catch {
-        resolvedMemberPath = memberPath;
-      }
-
-      if (!aliasMember?.cube) {
-        resolvedMemberPath = memberPath;
+      if(
+        this.cubeEvaluator.cubeFromPath(memberPath).name !== 
+        this.cubeEvaluator.cubeFromPath(member.aliasMember).name
+      ) {
+        resolvedPath = member.aliasMember;
       } else {
-          if (!member?.cube) {
-            resolvedMemberPath = memberPath;
-          } else {
-              const memberCube = member.cube?.();
-              const aliasMemberCube = aliasMember.cube?.();
-
-              if(aliasMemberCube !== memberCube) {
-                resolvedMemberPath = member.aliasMember;
-                resolvedMember = aliasMember;
-              } else {
-                resolvedMemberPath = memberPath;
-              }
-          }
+        resolvedPath = memberPath;
       }
+    } catch {
+      resolvedPath = memberPath;
     }
-    return { memberPath: resolvedMemberPath.toLowerCase(), cubeName: resolvedMember?.cube?.() };
+
+    return { memberPath: resolvedPath.toLowerCase() };
   }
 
   /**
@@ -5184,7 +5162,7 @@ export class BaseQuery {
         // Normalize each dependency: remove join hints and lowercase
         return pathReferencesUsed.map(pathArray => {
           const pathString = this.cubeEvaluator.pathFromArray(pathArray);
-          const { memberPath, cubeName } = this.resolveToFinalAliasMember(pathString);
+          const { memberPath } = this.resolveToFinalAliasMember(pathString);
           // const { path } = this.cubeEvaluator.constructor.joinHintFromPath(resolvedPath);
           return memberPath;
         });
@@ -5281,7 +5259,7 @@ export class BaseQuery {
           // Regular dimension
           let path = dimObj.dimension;
           if (path) {
-            const { memberPath: resolvedPath, cubeName } = this.resolveToFinalAliasMember(path);
+            const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(path);
             // const { path: normalizedPath } = this.cubeEvaluator.constructor.joinHintFromPath(resolvedPath);
             // const { memberPath: resolvedDimensionPath } = this.resolveToFinalAliasMember(dimObj.dimension);
             
@@ -7772,31 +7750,6 @@ export class BaseQuery {
   backAliasMembers(members) {
     const query = this;
 
-    // Collect members referenced in dynamicSql functions with granularity info
-    const dynamicSqlMemberPairs = [];
-    members.forEach(member => {
-      try {
-        const definition = member.definition?.();
-        if (definition && definition.dynamicSql && typeof definition.dynamicSql === 'function') {
-          const memberPath = member.expressionPath();
-          const baseCube = this.cubeEvaluator.cubeNameFromPath(memberPath);
-          const dynamicMembers = this.getDynamicSqlDependencies(baseCube, definition.dynamicSql);
-          
-          // Get granularity directly from member (if timeDimension)
-          const granularity = member.granularity || null;
-          
-          dynamicMembers.forEach(depPath => {
-            const depMember = query.cubeEvaluator.byPathAnyType(depPath);
-            if (depMember.aliasMember) {
-              dynamicSqlMemberPairs.push([depMember.aliasMember, memberPath]);
-            }
-          });
-        }
-      } catch (e) {
-        // Best-effort: ignore failures
-      }
-    });
-
     const aliases = Object.fromEntries(members.flatMap(
       member => {
         const collectedMembers = query.evaluateSymbolSqlWithContext(
@@ -7814,7 +7767,7 @@ export class BaseQuery {
           })
           .map(d => [query.cubeEvaluator.byPathAnyType(d).aliasMember, memberPath]);
       }
-    ).concat(dynamicSqlMemberPairs));
+    ));
 
     // No join/graph  might be in place when collecting members from the query with some injected filters,
     // like FILTER_PARAMS or securityContext...
@@ -7849,7 +7802,6 @@ export class BaseQuery {
 
     return res;
   }
-
 
   buildJoinPathFn() {
     const query = this;
