@@ -116,14 +116,18 @@ export class BaseTimeDimension extends BaseFilter {
         return super.dimensionSql();
       }
 
-      return this.query.dimensionTimeGroupedColumn(this.query.dimensionSql(this), <Granularity>granularity);
+      if (!granularity) {
+        return this.convertedToTz();
+      }
+
+      return this.query.dimensionTimeGroupedColumn(this.query.dimensionSql(this), granularity);
     }
 
-    if (context.ungrouped) {
+    if (context.ungrouped || !granularity) {
       return this.convertedToTz();
     }
 
-    return this.query.dimensionTimeGroupedColumn(this.convertedToTz(), <Granularity>granularity);
+    return this.query.dimensionTimeGroupedColumn(this.convertedToTz(), granularity);
   }
 
   public dimensionDefinition(): DimensionDefinition | SegmentDefinition {

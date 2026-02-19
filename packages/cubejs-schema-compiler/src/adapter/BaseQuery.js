@@ -59,6 +59,473 @@ const SecondsDurations = {
   second: 1
 };
 
+const SQL_WORD_CHAR = /[A-Za-z0-9_$]/;
+const SQL_TEMPLATE_PLACEHOLDER = /\$\{\s*([A-Za-z_][A-Za-z0-9_$]*)\.[^{}]*\}/g;
+const SQL_TEMPLATE_REFERENCE = /\$\{\s*([^{}]+?)\s*\}/g;
+
+const isSqlWordBoundary = (char) => !char || !SQL_WORD_CHAR.test(char);
+
+function extractCubeParamsFromSql(sqlExpression) {
+  if (!sqlExpression || typeof sqlExpression !== 'string') {
+    return [];
+  }
+
+  const foundCubeParams = [];
+  let match = SQL_TEMPLATE_PLACEHOLDER.exec(sqlExpression);
+
+  while (match) {
+    const cubeName = match[1];
+    if (cubeName && foundCubeParams.indexOf(cubeName) === -1) {
+      foundCubeParams.push(cubeName);
+    }
+    match = SQL_TEMPLATE_PLACEHOLDER.exec(sqlExpression);
+  }
+
+  SQL_TEMPLATE_PLACEHOLDER.lastIndex = 0;
+  return foundCubeParams;
+}
+
+function extractSqlTemplateReferences(sqlExpression) {
+  if (!sqlExpression || typeof sqlExpression !== 'string') {
+    return [];
+  }
+
+  const references = [];
+  let match = SQL_TEMPLATE_REFERENCE.exec(sqlExpression);
+
+  while (match) {
+    const reference = (match[1] || '').trim();
+    if (reference && references.indexOf(reference) === -1) {
+      references.push(reference);
+    }
+    match = SQL_TEMPLATE_REFERENCE.exec(sqlExpression);
+  }
+
+  SQL_TEMPLATE_REFERENCE.lastIndex = 0;
+  return references;
+}
+
+function replaceSqlTemplateReferences(sqlExpression, replaceReference) {
+  if (!sqlExpression || typeof sqlExpression !== 'string') {
+    return sqlExpression;
+  }
+
+  if (typeof replaceReference !== 'function') {
+    return sqlExpression;
+  }
+
+  SQL_TEMPLATE_REFERENCE.lastIndex = 0;
+  return sqlExpression.replace(SQL_TEMPLATE_REFERENCE, (_, reference) => {
+    const normalizedReference = (reference || '').trim();
+    const replacement = replaceReference(normalizedReference);
+    return `\${${replacement || normalizedReference}}`;
+  });
+}
+
+function serializeSqlLogicalExpressionNode(node) {
+  if (!node || typeof node !== 'object') {
+    return '';
+  }
+
+  if (isSqlLogicalGroupNode(node)) {
+    const values = node.values
+      .map((childNode) => serializeSqlLogicalExpressionNode(childNode))
+      .filter(Boolean);
+
+    if (!values.length) {
+      return '';
+    }
+
+    if (values.length === 1) {
+      return values[0];
+    }
+
+    return `(${values.join(` ${node.operator.toUpperCase()} `)})`;
+  }
+
+  const definition = typeof node.definition === 'string'
+    ? node.definition.trim()
+    : (typeof node.sql === 'string' ? node.sql.trim() : '');
+
+  if (!definition) {
+    return '';
+  }
+
+  return `(${stripOuterParentheses(definition)})`;
+}
+
+function toSqlFunctionExpression(definition, cubeParams = []) {
+  const normalizedCubeParams = R.uniq(
+    (Array.isArray(cubeParams) ? cubeParams : [])
+      .filter((cubeParam) => typeof cubeParam === 'string')
+      .map((cubeParam) => cubeParam.trim())
+      .filter(Boolean)
+  );
+
+  return [
+    ...normalizedCubeParams,
+    `return \`${definition}\``
+  ];
+}
+
+function walkSqlWithQuoteAndDepth(expression, onTopLevelToken) {
+  let depth = 0;
+  let inSingleQuote = false;
+  let templatePlaceholderDepth = 0;
+  let hasNegativeDepth = false;
+
+  for (let i = 0; i < expression.length; i++) {
+    const char = expression[i];
+    const nextChar = expression[i + 1];
+
+    if (templatePlaceholderDepth > 0) {
+      if (char === '{') {
+        templatePlaceholderDepth += 1;
+      } else if (char === '}') {
+        templatePlaceholderDepth -= 1;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (char === '\'' && nextChar === '\'') {
+        i += 1;
+        continue;
+      }
+      if (char === '\'') {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    // Cube expressions are JS template strings with SQL placeholders like ${cube.member}.
+    // Treat placeholders as atomic chunks and ignore AND/OR inside them.
+    if (char === '$' && nextChar === '{') {
+      templatePlaceholderDepth = 1;
+      i += 1;
+      continue;
+    }
+
+    if (char === '\'') {
+      inSingleQuote = true;
+      continue;
+    }
+
+    if (char === '(') {
+      depth += 1;
+      continue;
+    }
+
+    if (char === ')') {
+      depth -= 1;
+      if (depth < 0) {
+        hasNegativeDepth = true;
+      }
+      continue;
+    }
+
+    if (depth === 0 && onTopLevelToken) {
+      onTopLevelToken(i);
+    }
+  }
+
+  return {
+    depth,
+    hasNegativeDepth,
+    hasUnclosedQuote: inSingleQuote,
+    hasUnclosedTemplatePlaceholder: templatePlaceholderDepth !== 0
+  };
+}
+
+function canTrimOutermostParentheses(expression) {
+  if (!expression.startsWith('(') || !expression.endsWith(')')) {
+    return false;
+  }
+
+  let depth = 0;
+  let inSingleQuote = false;
+  let templatePlaceholderDepth = 0;
+
+  for (let i = 0; i < expression.length; i++) {
+    const char = expression[i];
+    const nextChar = expression[i + 1];
+
+    if (templatePlaceholderDepth > 0) {
+      if (char === '{') {
+        templatePlaceholderDepth += 1;
+      } else if (char === '}') {
+        templatePlaceholderDepth -= 1;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (char === '\'' && nextChar === '\'') {
+        i += 1;
+        continue;
+      }
+      if (char === '\'') {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    if (char === '$' && nextChar === '{') {
+      templatePlaceholderDepth = 1;
+      i += 1;
+      continue;
+    }
+
+    if (char === '\'') {
+      inSingleQuote = true;
+      continue;
+    }
+
+    if (char === '(') {
+      depth += 1;
+      continue;
+    }
+
+    if (char === ')') {
+      depth -= 1;
+      if (depth < 0) {
+        return false;
+      }
+      if (depth === 0 && i < expression.length - 1) {
+        return false;
+      }
+    }
+  }
+
+  return !inSingleQuote && !templatePlaceholderDepth && depth === 0;
+}
+
+function stripOuterParentheses(expression) {
+  let normalized = expression.trim();
+  while (canTrimOutermostParentheses(normalized)) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  return normalized;
+}
+
+function splitByTopLevelLogicalOperator(expression, operator) {
+  const upperOperator = operator.toUpperCase();
+  const parts = [];
+  let partStart = 0;
+
+  walkSqlWithQuoteAndDepth(expression, (index) => {
+    if (
+      expression.slice(index, index + upperOperator.length).toUpperCase() === upperOperator &&
+      isSqlWordBoundary(expression[index - 1]) &&
+      isSqlWordBoundary(expression[index + upperOperator.length])
+    ) {
+      parts.push(expression.slice(partStart, index).trim());
+      partStart = index + upperOperator.length;
+    }
+  });
+
+  if (parts.length === 0) {
+    return null;
+  }
+
+  const tail = expression.slice(partStart).trim();
+  if (tail) {
+    parts.push(tail);
+  }
+
+  return parts.length > 1 ? parts : null;
+}
+
+function parseSqlLogicalExpressionNode(expression, inheritedCubeParams = []) {
+  const normalized = stripOuterParentheses(expression);
+
+  const orParts = splitByTopLevelLogicalOperator(normalized, 'OR');
+  if (orParts) {
+    return {
+      operator: 'or',
+      values: orParts.map((part) => parseSqlLogicalExpressionNode(part, inheritedCubeParams))
+    };
+  }
+
+  const andParts = splitByTopLevelLogicalOperator(normalized, 'AND');
+  if (andParts) {
+    return {
+      operator: 'and',
+      values: andParts.map((part) => parseSqlLogicalExpressionNode(part, inheritedCubeParams))
+    };
+  }
+
+  const conditionCubeParams = extractCubeParamsFromSql(normalized);
+  const expressionCubeParams = conditionCubeParams.length ? conditionCubeParams : inheritedCubeParams;
+
+  return {
+    type: 'condition',
+    definition: normalized,
+    expression: toSqlFunctionExpression(normalized, expressionCubeParams)
+  };
+}
+
+function normalizeSqlLogicalExpressionInput(expressionOrDefinition) {
+  if (typeof expressionOrDefinition === 'string') {
+    const trimmed = expressionOrDefinition.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const withoutDefinitionPrefix = trimmed.startsWith('definition:')
+      ? trimmed.slice('definition:'.length).trim()
+      : trimmed;
+
+    const isWrappedBySingleQuote =
+      withoutDefinitionPrefix.startsWith('\'') && withoutDefinitionPrefix.endsWith('\'');
+    const isWrappedByDoubleQuote =
+      withoutDefinitionPrefix.startsWith('"') && withoutDefinitionPrefix.endsWith('"');
+    const maybeUnwrappedJson = (isWrappedBySingleQuote || isWrappedByDoubleQuote)
+      ? withoutDefinitionPrefix.slice(1, -1).trim()
+      : withoutDefinitionPrefix;
+    const jsonInput = (
+      (maybeUnwrappedJson.startsWith('{') && maybeUnwrappedJson.endsWith('}')) ||
+      (maybeUnwrappedJson.startsWith('[') && maybeUnwrappedJson.endsWith(']'))
+    ) ? maybeUnwrappedJson : withoutDefinitionPrefix;
+
+    const parseCandidates = [jsonInput];
+    if (jsonInput.includes('\\\'')) {
+      parseCandidates.push(jsonInput.replace(/\\'/g, '\''));
+    }
+
+    for (const candidate of parseCandidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed?.expr?.sql && typeof parsed.expr.sql === 'string') {
+          const sqlExpression = parsed.expr.sql.trim();
+          const cubeParams = Array.isArray(parsed.expr.cubeParams)
+            ? parsed.expr.cubeParams
+            : extractCubeParamsFromSql(sqlExpression);
+          return {
+            sqlExpression,
+            cubeParams
+          };
+        }
+        if (parsed?.sql && typeof parsed.sql === 'string') {
+          const sqlExpression = parsed.sql.trim();
+          const cubeParams = Array.isArray(parsed.cubeParams)
+            ? parsed.cubeParams
+            : extractCubeParamsFromSql(sqlExpression);
+          return {
+            sqlExpression,
+            cubeParams
+          };
+        }
+      } catch (e) {
+        // Ignore parse errors and try fallback candidates.
+      }
+    }
+
+    const sqlExpression = withoutDefinitionPrefix.trim();
+    return {
+      sqlExpression,
+      cubeParams: extractCubeParamsFromSql(sqlExpression)
+    };
+  }
+
+  if (expressionOrDefinition && typeof expressionOrDefinition === 'object') {
+    if (typeof expressionOrDefinition.expr?.sql === 'string') {
+      const sqlExpression = expressionOrDefinition.expr.sql.trim();
+      const cubeParams = Array.isArray(expressionOrDefinition.expr.cubeParams)
+        ? expressionOrDefinition.expr.cubeParams
+        : extractCubeParamsFromSql(sqlExpression);
+      return {
+        sqlExpression,
+        cubeParams
+      };
+    }
+    if (typeof expressionOrDefinition.sql === 'string') {
+      const sqlExpression = expressionOrDefinition.sql.trim();
+      const cubeParams = Array.isArray(expressionOrDefinition.cubeParams)
+        ? expressionOrDefinition.cubeParams
+        : extractCubeParamsFromSql(sqlExpression);
+      return {
+        sqlExpression,
+        cubeParams
+      };
+    }
+  }
+
+  return null;
+}
+
+function isSqlLogicalGroupNode(node) {
+  return (
+    node &&
+    typeof node === 'object' &&
+    (node.operator === 'and' || node.operator === 'or') &&
+    Array.isArray(node.values)
+  );
+}
+
+function isSqlLogicalConditionNode(node) {
+  return (
+    node &&
+    typeof node === 'object' &&
+    (node.type === 'condition' || typeof node.definition === 'string' || typeof node.sql === 'string')
+  );
+}
+
+function filterSqlLogicalExpressionNode(node, isConditionAllowed) {
+  if (!node || typeof node !== 'object') {
+    return null;
+  }
+
+  if (isSqlLogicalGroupNode(node)) {
+    const filteredValues = node.values
+      .map((childNode) => filterSqlLogicalExpressionNode(childNode, isConditionAllowed))
+      .filter(Boolean);
+
+    if (!filteredValues.length) {
+      return null;
+    }
+
+    if (filteredValues.length === 1) {
+      return filteredValues[0];
+    }
+
+    return {
+      ...node,
+      values: filteredValues
+    };
+  }
+
+  if (!isSqlLogicalConditionNode(node)) {
+    return null;
+  }
+
+  const normalizedDefinition = typeof node.definition === 'string'
+    ? node.definition.trim()
+    : (typeof node.sql === 'string' ? node.sql.trim() : '');
+  if (!normalizedDefinition) {
+    return null;
+  }
+
+  const { sql: _deprecatedSql, ...nodeWithoutDeprecatedSql } = node;
+  const expressionCubeParams = extractCubeParamsFromSql(normalizedDefinition);
+
+  const normalizedConditionNode = {
+    ...nodeWithoutDeprecatedSql,
+    type: 'condition',
+    definition: normalizedDefinition,
+    expression: Array.isArray(node.expression)
+      ? node.expression
+      : toSqlFunctionExpression(normalizedDefinition, expressionCubeParams)
+  };
+
+  const backwardCompatibleNode = {
+    ...normalizedConditionNode,
+    sql: normalizedConditionNode.definition
+  };
+
+  return isConditionAllowed(backwardCompatibleNode) ? normalizedConditionNode : null;
+}
+
 /**
  * Set of the schema compilers.
  * @typedef {Object} Compilers
@@ -144,6 +611,8 @@ export class BaseQuery {
     /** @type {import('../compiler/JoinGraph').JoinGraph} */
     this.joinGraph = compilers.joinGraph;
     this.options = options || {};
+    // Collects extra pre-aggregations registered from manually built subqueries
+    this.extraPreAggregations = [];
 
     this.orderHashToString = this.orderHashToString.bind(this);
     this.defaultOrder = this.defaultOrder.bind(this);
@@ -905,17 +1374,39 @@ export class BaseQuery {
       }
     }
 
+    const cacheKey = ['buildSqlAndParams', 'withExtraPreAggregations', exportAnnotatedSql];
+
     return this.compilers.compiler.withQuery(
       this,
-      () => this.cacheValue(
-        ['buildSqlAndParams', exportAnnotatedSql],
-        () => this.paramAllocator.buildSqlAndParams(
-          this.buildParamAnnotatedSql(),
-          exportAnnotatedSql,
-          this.shouldReuseParams
-        ),
-        { cache: this.queryCache }
-      )
+      () => {
+        const cached = this.cacheValue(
+          cacheKey,
+          () => {
+            const sqlAndParams = this.paramAllocator.buildSqlAndParams(
+              this.buildParamAnnotatedSql(),
+              exportAnnotatedSql,
+              this.shouldReuseParams
+            );
+
+            return {
+              sqlAndParams,
+              // Persist sub-query pre-aggregation metadata alongside cached SQL
+              extraPreAggregations: [...(this.extraPreAggregations || [])],
+            };
+          },
+          { cache: this.queryCache }
+        );
+
+        if (Array.isArray(cached)) {
+          return cached;
+        }
+
+        if (cached?.extraPreAggregations) {
+          this.extraPreAggregations = [...cached.extraPreAggregations];
+        }
+
+        return cached?.sqlAndParams ?? cached;
+      }
     );
   }
 
@@ -1725,12 +2216,33 @@ export class BaseQuery {
         filters: this.keepFilters(queryContext.filters, filterMember => filterMember === memberPath),
       };
     } else {
-      queryContext = {
-        ...queryContext,
-        // TODO remove not related segments
-        // segments: queryContext.segments,
-        filters: this.keepFilters(queryContext.filters, filterMember => !this.memberInstanceByPath(filterMember).isMultiStage()),
-      };
+      // Check if filteredDimensionsReferences is defined
+      if (memberDef.filteredDimensionsReferences !== undefined) {
+        // If filteredDimensionsReferences is defined, apply only filters for those dimensions
+        const allowedDimensions = memberDef.filteredDimensionsReferences || [];
+        queryContext = {
+          ...queryContext,
+          // TODO remove not related segments
+          // segments: queryContext.segments,
+          filters: this.keepFilters(queryContext.filters, filterMember => {
+            // If allowedDimensions is empty array, keep no filters
+            if (allowedDimensions.length === 0) {
+              return false;
+            }
+            // Keep filter if it's in the allowed dimensions list
+            return allowedDimensions.includes(filterMember);
+          }),
+        };
+      } else {
+        // Default behavior when filteredDimensions is not set: use original logic
+        // Keep all filters except multiStage ones
+        queryContext = {
+          ...queryContext,
+          // TODO remove not related segments
+          // segments: queryContext.segments,
+          filters: this.keepFilters(queryContext.filters, filterMember => !this.memberInstanceByPath(filterMember).isMultiStage()),
+        };
+      }
     }
     return queryContext;
   }
@@ -3242,6 +3754,281 @@ export class BaseQuery {
     return this.evaluateSymbolContext || {};
   }
 
+  /**
+   * Check if a member was used in the query evaluation.
+   * 
+   * This method is part of the member collection infrastructure which has 3 levels:
+   * 
+   * Level 1: collectFrom(membersToCollectFrom, fn, methodName)
+   *   - Core method that REQUIRES objects with getMembers() method
+   *   - Maps: [{ getMembers: () => [...] }] -> [...] -> applies fn
+   *   - Used internally for traversing symbols
+   * 
+   * Level 2: collectFromMembers(excludeTimeDimensions, fn, methodName)
+   *   - Wrapper that converts simple member arrays to proper interface
+   *   - Takes this.measures, this.dimensions, etc.
+   *   - Wraps them with getMembers() for collectFrom()
+   * 
+   * Level 3: collectMemberNamesFor(fn), collectUsedMembersFromQuery(), etc.
+   *   - High-level specialized collectors
+   *   - Call collectFromMembers() internally
+   *   - Provide domain-specific collection logic
+   * 
+   * This method uses collectUsedMembersFromQuery() which properly delegates to
+   * collectFromMembers() to ensure all members are correctly collected.
+   * 
+   * @param {string} cubeName The cube name
+   * @param {string} memberName The member name
+   * @returns {boolean} true if the member was used, false otherwise
+   */
+  isMemberUsed(cubeName, memberName) {
+    try {
+      if (!cubeName || !memberName) {
+        return false;
+      }
+
+      const usedMembers = this.collectUsedMembersFromQuery();
+      const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
+      // Resolve to final alias member for proper matching
+
+      const { memberPath: normalizedPath } = this.resolveToFinalAliasMember(memberPath);
+
+      if (Array.isArray(usedMembers) && usedMembers.some(m => m.toLowerCase() === normalizedPath)) {
+        return true;
+      }
+
+      // Check if member is used as dependency in expression members (SQL pushdown)
+      const expressionMembers = this.findExpressionMembersWithDependency(memberPath);
+      return expressionMembers.length > 0;
+    } catch (error) {
+      // If any error occurs during collection, return false as safe default
+      // This prevents cascading errors in user code
+      return false;
+    }
+  }
+
+  /**
+   * Get all filters for a specific member, preserving AND/OR structure.
+   * Removes all other members but keeps the nesting structure intact.
+   * @param {string} cubeName The cube name
+   * @param {string} memberName The member name
+   * @returns {Object|null} Filter object with only this member's filters, or null if none
+   */
+  getMemberFilters(cubeName, memberName) {
+    if (!this.options || !Array.isArray(this.options.filters) || this.options.filters.length === 0) {
+      return null;
+    }
+
+    const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
+    // Resolve to final alias member for proper matching (case-insensitive)
+    const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(memberPath);
+
+    // Check filters for the member itself
+    let result = this.extractMemberFiltersRecursive(this.options.filters, resolvedPath);
+
+    // Also check filters for expression members where this member is a dependency (SQL pushdown)
+    /*const expressionMembers = this.findExpressionMembersWithDependency(memberPath);
+    for (const expr of expressionMembers) {
+      // expressionName is already lowercase from findExpressionMembersWithDependency
+      const exprFilters = this.extractMemberFiltersRecursive(this.options.filters, expr.expressionName.toLowerCase());
+      if (exprFilters) {
+        result = result ? { and: [result, exprFilters] } : exprFilters;
+      }
+    }*/
+
+    return result || null;
+  }
+
+  /**
+   * Resolve a member path to its final aliasMember by following the chain.
+   * Returns the original path if no aliasMember exists.
+   * @param {string} memberPath
+   * @returns {string}
+   */
+  resolveToFinalAliasMember(memberPath) {
+    if (!memberPath || typeof memberPath !== 'string') {
+      return { memberPath: memberPath };
+    }
+
+    let resolvedPath;
+
+    try {
+      const member = this.cubeEvaluator.byPathAnyType(memberPath);
+
+      if(this.cubeEvaluator.cubeFromPath(memberPath).isView) {
+        resolvedPath = member.aliasMember;
+      } else {
+        resolvedPath = memberPath;
+      }
+    } catch {
+      resolvedPath = memberPath;
+    }
+
+    return { memberPath: resolvedPath.toLowerCase() };
+  }
+
+  /**
+   * Find expression members in the query where the given member is a dependency.
+   * Used for SQL pushdown where members don't have traditional member paths.
+   * @param {string} memberPath - The member path to check as dependency
+   * @returns {Array<{expressionName: string, dependencies: string[]}>} Expression members info
+   */
+  findExpressionMembersWithDependency(memberPath) {
+    if (!memberPath || typeof memberPath !== 'string') {
+      return [];
+    }
+
+    const { memberPath: normalizedPath } = this.resolveToFinalAliasMember(memberPath);
+    const result = [];
+
+    const checkMembers = (members) => {
+      (members || []).forEach(member => {
+        if (member.expression && typeof member.expression === 'function') {
+          const expressionCubeName = member.expressionCubeName || member.cubeName;
+          try {
+            const { pathReferencesUsed } = this.cubeEvaluator.collectUsedCubeReferences(
+              expressionCubeName,
+              member.expression
+            );
+            const dependencies = pathReferencesUsed.map(pathArray => {
+              const depPath = this.cubeEvaluator.pathFromArray(pathArray);
+              const { memberPath: normalizedPath } = this.resolveToFinalAliasMember(depPath);
+              return normalizedPath;
+            });
+
+            if (dependencies.includes(normalizedPath)) {
+              const expressionName = member.expressionName ||
+                (member.cubeName && member.name ? `${member.cubeName}.${member.name}` : null);
+              if (expressionName) {
+                result.push({ expressionName, dependencies });
+              }
+            }
+          } catch {
+            // Ignore errors
+          }
+        }
+      });
+    };
+
+    checkMembers(this.dimensions);
+    checkMembers(this.timeDimensions);
+    checkMembers(this.measures);
+
+    return result;
+  }
+
+  /**
+   * Recursively extract filters for a specific member, preserving AND/OR structure.
+   * @private
+   */
+  extractMemberFiltersRecursive(filters, targetMemberPath) {
+    if (!filters) {
+      return null;
+    }
+
+    // Handle array of filters
+    if (Array.isArray(filters)) {
+      const extracted = filters
+        .map(f => this.extractMemberFiltersRecursive(f, targetMemberPath))
+        .filter(f => f !== null);
+      
+      return extracted.length > 0 ? extracted : null;
+    }
+
+    // Handle AND condition
+    if (filters.and) {
+      const extracted = filters.and
+        .map(f => this.extractMemberFiltersRecursive(f, targetMemberPath))
+        .filter(f => f !== null);
+      
+      if (extracted.length === 0) {
+        return null;
+      }
+
+      return { and: extracted };
+    }
+
+    // Handle OR condition
+    if (filters.or) {
+      const extracted = filters.or
+        .map(f => this.extractMemberFiltersRecursive(f, targetMemberPath))
+        .filter(f => f !== null);
+      
+      if (extracted.length === 0) {
+        return null;
+      }
+      
+      return { or: extracted };
+    }
+
+    // Handle single filter
+    const filterMember = filters.member || filters.dimension;
+    if (filterMember) {
+      // Resolve to final alias member for proper matching (case-insensitive)
+      const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(filterMember);
+      if (resolvedPath === targetMemberPath) {
+        // Return the filter without modifying it
+        return { ...filters };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get the used granularity for a time dimension member.
+   * @param {string} cubeName The cube name
+   * @param {string} memberName The time dimension name
+   * @returns {string|null} The granularity string (e.g., 'day', 'month') or null if not used
+   */
+  getUsedGranularity(cubeName, memberName) {
+    if (!this.timeDimensions || this.timeDimensions.length === 0) {
+      return null;
+    }
+
+    const memberPath = this.cubeEvaluator.pathFromArray([cubeName, memberName]);
+    // Resolve to final alias member for proper matching (case-insensitive)
+    const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(memberPath);
+
+    // Find the time dimension that matches the member path and has a granularity
+    const timeDimension = this.timeDimensions.find(td => {
+      // Check regular dimension path
+      if (td.dimension) {
+        const { memberPath: resolvedTdPath } = this.resolveToFinalAliasMember(td.dimension);
+        if (resolvedTdPath === resolvedPath) {
+          return true;
+        }
+      }
+      // Check expression time dimension dependencies (SQL pushdown)
+      if (td.expression && typeof td.expression === 'function') {
+        const expressionCubeName = td.expressionCubeName || td.cubeName;
+        try {
+          const { pathReferencesUsed } = this.cubeEvaluator.collectUsedCubeReferences(
+            expressionCubeName,
+            td.expression
+          );
+          const dependencies = pathReferencesUsed.map(pathArray => {
+            const depPath = this.cubeEvaluator.pathFromArray(pathArray);
+            const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(depPath);
+            return resolvedPath;
+          });
+          if (dependencies.includes(resolvedPath)) {
+            return true;
+          }
+        } catch {
+          // Ignore errors
+        }
+      }
+      return false;
+    });
+
+    if (timeDimension && timeDimension.granularity) {
+      return timeDimension.granularity;
+    }
+
+    return null;
+  }
+
   evaluateSymbolSql(cubeName, name, symbol, memberExpressionType, subPropertyName) {
     const isMemberExpr = !!memberExpressionType;
     if (!memberExpressionType) {
@@ -3308,12 +4095,66 @@ export class BaseQuery {
         const orderBySql = (symbol.orderBy || []).map(o => ({ sql: this.evaluateSql(cubeName, o.sql), dir: o.dir }));
         let sql;
         if (symbol.type !== 'rank') {
-          sql = symbol.sql && this.evaluateSql(cubeName, symbol.sql) ||
-            primaryKeys.length && (
-              primaryKeys.length > 1 ?
-                this.concatStringsSql(primaryKeys.map((pk) => this.castToString(this.primaryKeySql(pk, cubeName))))
-                : this.primaryKeySql(primaryKeys[0], cubeName)
-            ) || '*';
+
+          if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
+
+            // Get categorized members for dynamicSql function
+            const categorized = this.getCategorizedMembersForDynamicSql();
+
+            // Call dynamicSql function with categorized members
+            const dynamicSqlResult = symbol.dynamicSql(
+              categorized.usedMeasures,
+              categorized.usedDimensions,
+              categorized.usedTimeDimensions,
+              categorized.usedFilters
+            );
+            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
+
+            // Evaluate the SQL template
+            sql = this.evaluateSql(cubeName, symbol.sql);
+
+            if (typeof sql === 'string') {
+              let dynamicSql = this.evaluateSql(cubeName, dynamicSqlResult);
+              if (typeof dynamicSql === 'string') {
+                  // Replace {{dynamicSql}} placeholder with the result from dynamicSql function
+                  sql = sql.replace(/\{\{\s*dynamicSql\s*\}\}/g, dynamicSql);
+              }
+
+              if (typeof dynamicSql !== 'string') {
+                throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+              }
+            }
+
+            if (typeof sql !== 'string') {
+              throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+            }
+          } else {
+            sql = symbol.sql && this.evaluateSql(cubeName, symbol.sql) ||
+              primaryKeys.length && (
+                primaryKeys.length > 1 ?
+                  this.concatStringsSql(primaryKeys.map((pk) => this.castToString(this.primaryKeySql(pk, cubeName))))
+                  : this.primaryKeySql(primaryKeys[0], cubeName)
+              ) || '*';
+          }
+
+          if (symbol.correlatedQuery && !this.options.skipCorrelatedMeasures) {
+            const correlated = this.buildCorrelatedSubQuery(
+              symbol.correlatedQuery,
+              cubeName,
+              name
+            );
+
+            if (typeof sql === 'string') {
+              sql = sql
+                .replace(/\{\{\s*subQuery\s*\}\}/g, correlated.sql)
+                .replace(/\{\{\s*subQueryAlias\s*\}\}/g, correlated.subQueryAlias)
+                .replace(/\{\{\s*correlatedWhereClause\s*\}\}/g, correlated.correlatedWhereClause || '1=1');
+            }
+            if (typeof sql !== 'string') {
+              throw new UserError(`Correlated measure must resolve to SQL string for ${cubeName}.${name}`);
+            }
+          }
+
         }
         const result = this.renderSqlMeasure(
           name,
@@ -3367,6 +4208,40 @@ export class BaseQuery {
             '\',\'',
             this.autoPrefixAndEvaluateSql(cubeName, symbol.longitude.sql, isMemberExpr)
           ]);
+        } else if (symbol.type !== 'time' && symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
+
+          // Get categorized members for dynamicSql function
+          const categorized = this.getCategorizedMembersForDynamicSql();
+
+          // Call dynamicSql function with categorized members
+          const dynamicSqlResult = symbol.dynamicSql(
+            categorized.usedMeasures,
+            categorized.usedDimensions,
+            categorized.usedTimeDimensions,
+            categorized.usedFilters
+          );
+          this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
+
+          // Evaluate the SQL template
+          let sql = this.evaluateSql(cubeName, symbol.sql);
+
+          if (typeof sql === 'string') {
+            let dynamicSql = this.evaluateSql(cubeName, dynamicSqlResult);
+            if (typeof dynamicSql === 'string') {
+                // Replace {{dynamicSql}} placeholder with the result from dynamicSql function
+                sql = sql.replace(/\{\{\s*dynamicSql\s*\}\}/g, dynamicSql);
+            }
+
+            if (typeof dynamicSql !== 'string') {
+              throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+            }
+          }
+
+          if (typeof sql !== 'string') {
+            throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+          }
+
+          return this.autoPrefixWithCubeName(cubeName, sql, isMemberExpr);
         } else if (symbol.type === 'time' && subPropertyName) {
           // TODO: Beware! memberExpression && shiftInterval are not supported with the current implementation.
           // Ideally this should be implemented (at least partially) here + inside cube symbol evaluation logic.
@@ -3375,13 +4250,49 @@ export class BaseQuery {
             dimension: this.cubeEvaluator.pathFromArray([cubeName, name]),
             granularity: subPropertyName
           });
-          // for time dimension with granularity convertedToTz() is called internally in dimensionSql() flow,
-          // so we need to ignore convertTz later even if context convertTzForRawTimeDimension is set to true
-          return this.evaluateSymbolSqlWithContext(
+
+          // Evaluate the SQL template
+          let sql = this.evaluateSymbolSqlWithContext(
             () => td.dimensionSql(),
             { ignoreConvertTzForTimeDimension: true },
           );
+
+          if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
+            // Get categorized members for dynamicSql function
+            const categorized = this.getCategorizedMembersForDynamicSql();
+
+            // Call dynamicSql function with categorized members
+            const dynamicSqlResult = symbol.dynamicSql(
+              categorized.usedMeasures,
+              categorized.usedDimensions,
+              categorized.usedTimeDimensions,
+              categorized.usedFilters
+            );
+            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
+
+            if (typeof sql === 'string') {
+            
+              let dynamicSql = this.evaluateSql(cubeName, dynamicSqlResult);
+              if (typeof dynamicSql === 'string') {
+                  // Replace {{dynamicSql}} placeholder with the result from dynamicSql function
+                  sql = sql.replace(/\{\{\s*dynamicSql\s*\}\}/g, dynamicSql);
+              }
+
+              if (typeof dynamicSql !== 'string') {
+                throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+              }
+            }
+
+            if (typeof sql !== 'string') {
+              throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+            }
+          }
+
+          // for time dimension with granularity convertedToTz() is called internally in dimensionSql() flow,
+          // so we need to ignore convertTz later even if context convertTzForRawTimeDimension is set to true
+          return sql;
         } else {
+
           let res = this.autoPrefixAndEvaluateSql(cubeName, symbol.sql, isMemberExpr);
           const memPath = this.cubeEvaluator.pathFromArray([cubeName, name]);
 
@@ -3408,14 +4319,48 @@ export class BaseQuery {
           ) {
             res = this.convertTz(res);
           }
+
+          if (symbol.dynamicSql && typeof symbol.dynamicSql === 'function') {
+            // Get categorized members for dynamicSql function
+            const categorized = this.getCategorizedMembersForDynamicSql();
+
+            // Call dynamicSql function with categorized members
+            const dynamicSqlResult = symbol.dynamicSql(
+              categorized.usedMeasures,
+              categorized.usedDimensions,
+              categorized.usedTimeDimensions,
+              categorized.usedFilters
+            );
+            this.getDynamicSqlDependencies(cubeName, symbol.dynamicSql, dynamicSqlResult);
+
+            if (typeof res === 'string') {
+            
+              let dynamicSql = this.evaluateSql(cubeName, dynamicSqlResult);
+              if (typeof dynamicSql === 'string') {
+                  // Replace {{dynamicSql}} placeholder with the result from dynamicSql function
+                  res = res.replace(/\{\{\s*dynamicSql\s*\}\}/g, dynamicSql);
+              }
+
+              if (typeof dynamicSql !== 'string') {
+                throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+              }
+            }
+
+            if (typeof res !== 'string') {
+              throw new UserError(`Dynamic SQL dimension must resolve to SQL string for ${cubeName}.${name}`);
+            }
+          }
+
           return res;
         }
       } else if (type === 'segment') {
+
         if ((this.safeEvaluateSymbolContext().renderedReference || {})[memberPath]) {
           return this.evaluateSymbolContext.renderedReference[memberPath];
         }
         return this.autoPrefixWithCubeName(cubeName, this.evaluateSql(cubeName, symbol.sql), isMemberExpr);
       }
+      
       return this.evaluateSql(cubeName, symbol.sql);
     } finally {
       this.safeEvaluateSymbolContext().currentMember = parentMember;
@@ -3956,7 +4901,1229 @@ export class BaseQuery {
    */
   newSubQuery(options) {
     const QueryClass = this.constructor;
-    return new QueryClass(this.compilers, this.subQueryOptions(options));
+    const subQuery = new QueryClass(this.compilers, this.subQueryOptions(options));
+    // Register pre-aggregations of this subquery so parent can expose them to orchestrator
+    this.registerSubQueryPreAggregations(subQuery);
+    return subQuery;
+  }
+
+  registerSubQueryPreAggregations(subQuery) {
+    const desc = subQuery?.preAggregations?.preAggregationsDescription?.();
+    if (desc?.length) {
+      this.extraPreAggregations.push(...desc);
+    }
+  }
+
+  compileSubQueryWithPreAggregations(options, exportAnnotatedSql) {
+    const subQuery = this.newSubQuery(options);
+    this.registerSubQueryPreAggregations(subQuery);
+    return subQuery.buildSqlAndParams(exportAnnotatedSql);
+  }
+
+  /**
+   * Build correlated subquery for measures with correlatedQuery configuration.
+   * 
+   * ## Overview
+   * 
+   * Correlated subqueries allow measures to reference data from related queries with different
+   * filtering or grouping. This method handles:
+   * - Dimension remapping between main query and subquery
+   * - Expression dimensions (computed dimensions with dependencies)
+   * - Filter transformation and validation
+   * - Partial filter exclusion and required dimension validation
+   * 
+   * ## Expression Dimensions
+   * 
+   * Expression dimensions are computed dimensions defined by JavaScript functions:
+   * ```javascript
+   * {
+   *   expression: (orders) => orders.total / orders.count,
+   *   expressionName: 'Orders.avgPrice',
+   *   cubeName: 'Orders'
+   * }
+   * ```
+   * 
+   * Key concepts:
+   * - **expressionName**: Arbitrary identifier for the expression dimension
+   * - **dependencies**: Real dimension paths used in the expression (extracted automatically)
+   * - **remapping**: Expression can be remapped to different cube with new cubeName
+   * 
+   * ## WHERE Clause Structure
+   * 
+   * For expression dimensions in WHERE clause:
+   * - **Left side**: Column alias from subquery (e.g., `subquery.activity_avgprice`)
+   * - **Right side**: SQL expression from main query (e.g., `orders.total / orders.count`)
+   * 
+   * Example:
+   * ```sql
+   * WHERE subquery.activity_avgprice = orders.total / orders.count
+   * ```
+   * 
+   * ## Usage Examples
+   * 
+   * ### Example 1: Expression Dimension with Dependencies
+   * 
+   * ```javascript
+   * correlatedQuery: {
+   *   allowedDimensions: [
+   *     ['Activity.avgPrice', 'Orders.avgPrice'],  // Expression dimension
+   *     ['Activity.total', 'Orders.total'],        // Required dependency
+   *     ['Activity.count', 'Orders.count']         // Required dependency
+   *   ]
+   * }
+   * ```
+   * 
+   * Result:
+   * - SubQuery creates expression dimension `Activity.avgPrice` with `cubeName: 'Activity'`
+   * - WHERE clause: `subquery.activity_avgprice = orders.total / orders.count`
+   * - Expression function evaluates in Activity cube context
+   * 
+   * ### Example 2: Expression Dimension in Filters
+   * 
+   * ```javascript
+   * filters: [{
+   *   dimension: {
+   *     expression: (orders) => orders.total / orders.count,
+   *     expressionName: 'Orders.avgPrice'
+   *   },
+   *   operator: 'gt',
+   *   values: [100]
+   * }]
+   * 
+   * correlatedQuery: {
+   *   allowedDimensions: [
+   *     ['Activity.avgPrice', 'Orders.avgPrice'],
+   *     ['Activity.total', 'Orders.total'],
+   *     ['Activity.count', 'Orders.count']
+   *   ]
+   * }
+   * ```
+   * 
+   * Result:
+   * - Filter transforms to Activity cube context
+   * - SubQuery WHERE: `(activity.total / activity.count) > 100`
+   * - All dependencies must be in allowedDimensions
+   * 
+   * ### Example 3: Dependencies Without Expression
+   * 
+   * ```javascript
+   * correlatedQuery: {
+   *   allowedDimensions: [
+   *     ['Activity.total', 'Orders.total'],
+   *     ['Activity.count', 'Orders.count']
+   *   ]
+   * }
+   * ```
+   * 
+   * Result:
+   * - Only dependencies are added to subQuery (as regular dimensions)
+   * - Expression dimension NOT created automatically
+   * - Filters on expression dimension will fail validation
+   * 
+   * ### Example 4: Exclude Filters
+   * 
+   * ```javascript
+   * correlatedQuery: {
+   *   allowedDimensions: ['Orders.status', 'Orders.createdAt'],
+   *   excludeFilters: ['Orders.createdAt']  // Remove date filters in subquery
+   * }
+   * ```
+   * 
+   * Result:
+   * - `Orders.createdAt` included in subQuery dimensions
+   * - Date filters on `Orders.createdAt` excluded from subQuery
+   * - For timeDimensions: dateRange and boundaryDateRange set to null
+   * 
+   * ### Example 5: Partial Coverage Validation
+   * 
+   * ```javascript
+   * // INVALID - will throw error:
+   * correlatedQuery: {
+   *   allowedDimensions: [
+   *     ['Activity.total', 'Orders.total']  // Missing Orders.count!
+   *   ],
+   *   excludeFilters: ['Orders.total']  // Only one dependency
+   * }
+   * ```
+   * 
+   * Error: Expression dimension 'Orders.avgPrice' depends on [orders.total, orders.count],
+   * but only some dependencies are in excludeFilters/allowedDimensions.
+   * 
+   * ## Validation Rules
+   * 
+   * 1. **Same Cube Dependencies**: All dependencies of expression must be from same cube
+   * 2. **No Partial Coverage**: Either include ALL dependencies or NONE
+   * 3. **Consistent Remapping**: When remapping to different cube, all dependencies
+   *    must map to same target cube
+   * 4. **Type Compatibility**: Left and right dimensions must have compatible types
+   * 5. **No Nested Correlation**: calculateMeasures cannot contain correlated measures
+   * 
+   * @param {Object} correlatedQuery - Configuration for correlated subquery
+   * @param {Array} correlatedQuery.allowedDimensions - Dimensions allowed in subquery with optional remapping
+   *   Format: ['dim1', 'dim2'] or [['leftDim', 'rightDim'], ['leftDim', 'rightDim', '>']]
+   * @param {Array} correlatedQuery.calculateMeasures - Measures to calculate in subquery
+   * @param {Array} correlatedQuery.excludeFilters - Dimensions whose filters should be excluded
+   * @param {Array} correlatedQuery.filtersRequiresDimension - Dimensions that require selection when filtered
+   * @param {Array} correlatedQuery.includeFilters - Additional filters to include in subquery
+   * @param {Object} correlatedQuery.optionOverrides - Options to override in subquery
+   * @param {string} correlatedQuery.subQueryAlias - Custom alias for subquery
+   * @param {string} cubeName - Name of the cube containing the measure
+   * @param {string} memberName - Name of the measure being processed
+   * 
+   * @returns {Object} Object containing:
+   *   - sql: SQL string for the subquery
+   *   - subQueryAlias: Alias for the subquery
+   *   - correlatedWhereClause: WHERE clause for correlation
+   */
+  buildCorrelatedSubQuery(correlatedQuery, cubeName, memberName) {
+    // ============================================================================
+    // STEP 1: Helper functions and utilities
+    // ============================================================================
+    
+    /**
+     * Normalize allowedDimensions array to unified format
+     * Handles multiple input formats and converts to consistent structure
+     * 
+     * Input formats:
+     * - 'dimension' -> { left: 'dimension', right: 'dimension', operator: '=' }
+     * - ['dimension'] -> { left: 'dimension', right: 'dimension', operator: '=' }
+     * - ['dimension', '>'] -> { left: 'dimension', right: 'dimension', operator: '>' }
+     * - [['left', 'right']] -> { left: 'left', right: 'right', operator: '=' }
+     * - [['left', 'right'], '>'] -> { left: 'left', right: 'right', operator: '>' }
+     */
+    const normalizeAllowedDimensions = (dims) => 
+      (Array.isArray(dims) ? dims : [])
+        .map((item) => {
+          if (!Array.isArray(item)) {
+            return { leftDimension: item, rightDimension: item, operator: '=' };
+          }
+          
+          const [first, operator = '='] = item;
+          
+          if (Array.isArray(first)) {
+            const [leftDimension, rightDimension = leftDimension] = first;
+            return { leftDimension, rightDimension, operator };
+          }
+          
+          return { leftDimension: first, rightDimension: first, operator };
+        })
+        .filter(d => d.leftDimension && d.rightDimension);
+
+    /**
+     * Get dimension type by path
+     * @returns {string|undefined} Dimension type ('time', 'string', 'number', etc.) or undefined
+     */
+    const getDimensionType = (path) => {
+      try {
+        return this.cubeEvaluator.dimensionByPath(path)?.type;
+      } catch {
+        return undefined;
+      }
+    };
+
+    /**
+     * Extract cube name from dimension path
+     * @example getCubeName('Orders.total') => 'Orders'
+     * @example getCubeName('orders.total') => 'orders'
+     */
+    const getCubeName = (dimensionPath) => {
+      if (!dimensionPath) return null;
+      const parts = dimensionPath.split('.');
+      return parts.length > 1 ? parts[0] : null;
+    };
+
+    /**
+     * Extract all member paths used inside an expression function
+     * Uses Cube.js collectUsedCubeReferences to analyze expression dependencies
+     * Returns normalized paths (lowercase, without join hints) for consistent comparison
+     * 
+     * @param {Function} expressionFunc - Expression function to analyze
+     * @param {string} expressionCubeName - Cube name for expression context
+     * @returns {Array<string>} Array of normalized dependency paths
+     * 
+     * @example
+     * expression: (orders) => orders.total / orders.count
+     * returns: ['orders.total', 'orders.count']
+     */
+    const getExpressionDependencies = (expressionFunc, expressionCubeName) => {
+      if (typeof expressionFunc !== 'function') {
+        return [];
+      }
+
+      try {
+        const { pathReferencesUsed } = this.cubeEvaluator.collectUsedCubeReferences(
+          expressionCubeName,
+          expressionFunc
+        );
+        
+        // Normalize each dependency: remove join hints and lowercase
+        return pathReferencesUsed.map(pathArray => {
+          const pathString = this.cubeEvaluator.pathFromArray(pathArray);
+          const { memberPath } = this.resolveToFinalAliasMember(pathString);
+          // const { path } = this.cubeEvaluator.constructor.joinHintFromPath(resolvedPath);
+          return memberPath;
+        });
+      } catch {
+        return [];
+      }
+    };
+
+    /**
+     * Normalize dimension path from string or expression object
+     * Removes join hints and converts to lowercase for consistent comparison
+     * 
+     * @param {string|Object} dim - Dimension string or expression object
+     * @returns {string|null} Normalized path
+     * 
+     * @example
+     * 'Orders[join_hint].total' => 'orders.total'
+     * 'Orders.total' => 'orders.total'
+     * { expression: ..., expressionName: 'Orders.avgPrice' } => 'orders.avgprice'
+     */
+    const normalizeDimensionPath = (dim) => {
+      if (typeof dim === 'string') {
+        const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(dim);
+        // const { path } = this.cubeEvaluator.constructor.joinHintFromPath(resolved);
+        return resolvedPath;
+      }
+
+      if (dim?.expression) {
+        const expressionName = dim.expressionName || dim.name;
+        if (!expressionName) return null;
+        // expressionName is synthetic (no join hints), just lowercase
+        return expressionName.toLowerCase();
+      }
+
+      return null;
+    };
+
+    /**
+     * Collect dimensions/timeDimensions metadata including expression dependencies
+     * 
+     * Strategy:
+     * - For expression dimensions: Create separate entry for EACH dependency
+     * - For regular dimensions: Create single entry with dimension path
+     * 
+     * This allows:
+     * 1. Finding expression dimensions by their dependency paths
+     * 2. Validating partial coverage of dependencies
+     * 3. Consistent lookup structure for both regular and expression dimensions
+     * 
+     * @param {Array} dimensionsArray - Array of dimension objects from this.dimensions or this.timeDimensions
+     * @returns {Array<Object>} Array of metadata objects
+     * 
+     * Metadata object structure:
+     * {
+     *   path: string,              // Normalized path (dependency for expressions, dimension for regular)
+     *   original: Object,          // Original dimension object
+     *   isExpression: boolean,     // True if this is expression dimension
+     *   expressionName: string,    // Normalized expression name (for expressions only)
+     *   allDependencies: Array     // All dependencies for this expression (for expressions only)
+     * }
+     * 
+     * @example
+     * Input: [
+     *   { dimension: 'Orders.total' },
+     *   { expression: (o) => o.total / o.count, expressionName: 'Orders.avgPrice' }
+     * ]
+     * 
+     * Output: [
+     *   { path: 'orders.total', isExpression: false, ... },
+     *   { path: 'orders.total', isExpression: true, expressionName: 'orders.avgprice', allDependencies: [...] },
+     *   { path: 'orders.count', isExpression: true, expressionName: 'orders.avgprice', allDependencies: [...] }
+     * ]
+     */
+    const collectDimensionsMetadata = (dimensionsArray, type) => {
+      const result = [];
+      
+      (dimensionsArray || []).forEach(dimObj => {
+        const isExpression = !!dimObj.expression;
+
+        if (isExpression) {
+          if (dimObj.expression) {
+            const expressionCubeName = dimObj.expressionCubeName || dimObj.cubeName;
+            const dependencies = getExpressionDependencies(dimObj.expression, expressionCubeName);
+
+            result.push({
+              path: dimObj.expressionName,
+              type: type,
+              original: dimObj,  // Store BaseDimension instance with dimensionSql() method
+              isExpression: true,
+              allDependencies: dependencies
+            });
+          }
+        } else {
+          // Regular dimension
+          let path = dimObj.dimension;
+          if (path) {
+            const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(path);
+            // const { path: normalizedPath } = this.cubeEvaluator.constructor.joinHintFromPath(resolvedPath);
+            // const { memberPath: resolvedDimensionPath } = this.resolveToFinalAliasMember(dimObj.dimension);
+            
+            result.push({
+              path: resolvedPath,
+              type: type,
+              original: dimObj,
+              isExpression: false,
+              allDependencies: [resolvedPath]
+            });
+          }
+        }
+      });
+      
+      return result;
+    };
+
+    /**
+     * Extract path from dimension object
+     * Handles both regular dimensions (string) and expression dimensions (object)
+     * 
+     * Used in correlatedWhereClause to compare dimension objects from subQuery/mainQuery
+     */
+    const extractDimensionPath = (dimObj) => {
+      if (typeof dimObj === 'string') return dimObj;
+      if (dimObj.expression) {
+        return dimObj.expressionName;
+      }
+      return dimObj.dimension;
+    };
+
+    /**
+     * Find expression dimension metadata by expressionName
+     * Searches both dimensions and timeDimensions maps
+     * 
+     * @param {string} expressionName - Name of expression dimension to find
+     * @returns {Object|null} Metadata object with type field ('dimension' or 'time') or null
+     * 
+     * @example
+     * findExpressionDimensionByName('Orders.avgPrice')
+     * returns: { path: 'orders.total', original: {...}, isExpression: true, type: 'dimension', ... }
+     */
+    const findExpressionDimensionByName = (expressionName) => {
+      const normalizedName = expressionName.toLowerCase();
+      
+      // Search in dimensions
+      for (const itemsArray of mainQueryContext.dimensions.map.values()) {
+        const expressionItem = itemsArray.find(item => 
+          item.isExpression && item.expressionName === normalizedName
+        );
+        if (expressionItem) return { ...expressionItem, type: 'dimension' };
+      }
+      
+      // Search in timeDimensions
+      for (const itemsArray of mainQueryContext.timeDimensions.map.values()) {
+        const expressionItem = itemsArray.find(item => 
+          item.isExpression && item.expressionName === normalizedName
+        );
+        if (expressionItem) return { ...expressionItem, type: 'time' };
+      }
+      
+      return null;
+    };
+
+    // ============================================================================
+    // STEP 2: Validate input parameters
+    // ============================================================================
+    
+    const allowedDimensions = normalizeAllowedDimensions(correlatedQuery?.allowedDimensions);
+    const calculateMeasures = correlatedQuery?.calculateMeasures;
+    const hasAllowedDimensions = allowedDimensions.length > 0;
+    const hasCalculateMeasures = Array.isArray(calculateMeasures) && calculateMeasures.length > 0;
+    
+    if (!hasCalculateMeasures && !hasAllowedDimensions) {
+      throw new UserError(
+        `correlatedQuery.allowedDimensions or correlatedQuery.calculateMeasures must be provided for ${cubeName}.${memberName}`
+      );
+    }
+
+    // ============================================================================
+    // STEP 3: Collect and index main query context
+    // ============================================================================
+
+    const mainQueryDimensionsMetadata = collectDimensionsMetadata(this.dimensions, 'dimension');
+    const mainQueryTimeDimensionsMetadata = collectDimensionsMetadata(this.timeDimensions, 'time');
+
+    /**
+     * Main query context structure:
+     * 
+     * dimensions/timeDimensions:
+     *   - set: Set of all paths (includes both regular dimensions and expression dependencies)
+     *   - map: Map of path -> array of metadata objects
+     * 
+     * For regular dimensions: map contains single entry per path
+     * For expression dimensions: map contains multiple entries (one per expression using that dependency)
+     * 
+     * filterMembers: Set of paths used in filters (for existsOnlyInFilters check)
+     */
+    const mainQueryContext = {
+      dimensions: {
+        set: new Set(mainQueryDimensionsMetadata.map(item => item.path)),
+        map: new Map()
+      },
+      timeDimensions: {
+        set: new Set(mainQueryTimeDimensionsMetadata.map(item => item.path)),
+        map: new Map()
+      },
+      filterMembers: new Set()
+    };
+
+    // Build maps: path -> [metadata objects]
+    // Array is needed because one path can be both regular dimension AND expression dependency
+    const buildContextMap = (metadata, contextMap) => {
+      metadata.forEach(item => {
+        if (!contextMap.has(item.path)) {
+          contextMap.set(item.path, []);
+        }
+        contextMap.get(item.path).push(item);
+      });
+    };
+
+    buildContextMap(mainQueryDimensionsMetadata, mainQueryContext.dimensions.map);
+    buildContextMap(mainQueryTimeDimensionsMetadata, mainQueryContext.timeDimensions.map);
+
+    // Collect filter members (dimensions/timeDimensions used in filters)
+    const collectFilterMembers = (filter) => {
+      if (!filter) return;
+      if (filter.and) return filter.and.forEach(collectFilterMembers);
+      if (filter.or) return filter.or.forEach(collectFilterMembers);
+
+      const member = filter.dimension || filter.member || filter.measure;
+      if (member) {
+        const normalizedPath = normalizeDimensionPath(member);
+        if (normalizedPath) {
+          mainQueryContext.filterMembers.add(normalizedPath);
+        }
+      }
+    };
+
+    (this.options.filters || []).forEach(collectFilterMembers);
+
+    // Add timeDimensions with dateRange/boundaryDateRange to filter members
+    // These timeDimensions are effectively filtered even without explicit filter
+    mainQueryTimeDimensionsMetadata.forEach(({ path, original }) => {
+      const td = original.timeDimension || original;
+      if (td.dateRange || td.boundaryDateRange) {
+        mainQueryContext.filterMembers.add(path);
+      }
+    });
+
+    // ============================================================================
+    // STEP 4: Process and validate configuration options
+    // ============================================================================
+
+    const config = {
+      includeFilters: Array.isArray(correlatedQuery?.includeFilters) 
+        ? correlatedQuery.includeFilters 
+        : [],
+      excludeFilters: new Set(
+        (correlatedQuery?.excludeFilters || [])
+          .map(dim => normalizeDimensionPath(dim))
+          .filter(Boolean)
+      ),
+      filtersRequireDimension: new Set(
+        (correlatedQuery?.filtersRequiresDimension || [])
+          .map(dim => normalizeDimensionPath(dim))
+          .filter(Boolean)
+      )
+    };
+
+    // ============================================================================
+    // STEP 5: Validate and normalize allowedDimensions
+    // ============================================================================
+  
+    /**
+     * Process each allowedDimension entry:
+     * 1. Normalize rightDimension for lookups
+     * 2. Check if it's expression dimension (by name)
+     * 3. Validate existence in main query
+     * 4. Validate type compatibility
+     * 
+     * Result: Array of validated dimension mappings with metadata
+     */
+    let validatedAllowedDimensions = allowedDimensions
+      .map(({ leftDimension, rightDimension, operator }) => {
+        const normalizedRightDimension = normalizeDimensionPath(rightDimension);
+        if (!normalizedRightDimension) return null;
+        
+        // Check if rightDimension is expression dimension by name
+        // const expressionMetadata = findExpressionDimensionByName(normalizedRightDimension);
+
+        // Validate existence
+        const existsInMainQuery = 
+          mainQueryContext.dimensions.set.has(normalizedRightDimension) || 
+          mainQueryContext.timeDimensions.set.has(normalizedRightDimension);
+     
+        const dimensionType = getDimensionType(leftDimension);
+
+        return {
+          leftDimension,
+          rightDimension: normalizedRightDimension,
+          originalRightDimension: rightDimension,
+          operator,
+          type: dimensionType,
+          isExpressionDimension: false,
+          expressionMetadata: null,
+          isPresented: existsInMainQuery
+        };
+      })
+      .filter(Boolean)
+      .filter(({ leftDimension, rightDimension, originalRightDimension, isExpressionDimension, expressionMetadata }) => {
+
+        // Validate type compatibility
+        const leftDimensionType = getDimensionType(leftDimension);
+        const rightDimensionType = getDimensionType(rightDimension);
+
+        if (leftDimensionType !== rightDimensionType) {
+          throw new UserError(
+            `Correlated dimensions '${leftDimension}' and '${originalRightDimension}' ` +
+            `must have the same type but are '${leftDimensionType}' and '${rightDimensionType}'.`
+          );
+        }
+
+        return true;
+      });
+
+    // Create quick-lookup sets
+    let allowedSubQueryDimensions = new Set(
+      hasAllowedDimensions ? validatedAllowedDimensions.map(d => d.leftDimension) : []
+    );
+
+    let allowedRightDimensionsSet = new Set(
+      validatedAllowedDimensions.map(d => d.rightDimension)
+    );
+
+
+    // ============================================================================
+    // STEP 6: Validate expression dimensions dependencies
+    // ============================================================================
+
+    /**
+     * Two validation paths:
+     * 
+     * Path A: Expression dimension explicitly in allowedDimensions (by name)
+     *   - Validate all dependencies from same cube
+     *   - Validate all dependencies present in allowedDimensions
+     *   - Validate cross-cube remapping consistency
+     * 
+     * Path B: Expression dimension implicitly via dependencies
+     *   - Validate no partial coverage
+     *   - Validate dependencies don't remap to different cubes
+     */
+
+    // Path A: Explicit expression dimensions in allowedDimensions
+
+
+    /**
+     * Auto-include expression dimension in allowedDimensions when all its dependencies are allowed.
+     * This keeps correlation symmetric: expression is present on both sides, not just its dependencies.
+     */
+    const expressionsWithAllDeps = [
+        ...(mainQueryDimensionsMetadata || []),
+        ...(mainQueryTimeDimensionsMetadata || [])
+      ].filter(item => item.isExpression);
+
+    if (hasAllowedDimensions && expressionsWithAllDeps.length) {
+      expressionsWithAllDeps.map((exprItem) => {
+        const exprName = exprItem?.original?.expressionName;
+
+        // Skip if already explicitly allowed
+        if (allowedRightDimensionsSet.has(exprName)) return null;
+
+        if (!exprName) return null;
+
+        return {
+          leftDimension: exprName,
+          rightDimension: exprName,
+          originalRightDimension: exprName,
+          operator: '=',
+          type: exprItem.type,
+          isExpressionDimension: true,
+          expressionMetadata: exprItem,
+          isPresented: true
+        };
+
+      }).filter(Boolean)
+      .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, isPresented, type }) => {
+        if (!expressionMetadata) return;
+        
+        const rightCubeName = expressionMetadata.original.expressionCubeName || expressionMetadata.original.cubeName;
+        const leftCubeName = expressionMetadata.original.expressionCubeName || expressionMetadata.original.cubeName;
+        
+        if (!rightCubeName || !leftCubeName) {
+          throw new UserError(
+            `Expression dimension '${leftDimension}' must have cube names in both ` +
+            `left and right dimensions (format: CubeName.dimensionName).`
+          );
+        }
+        
+        // Validate: all dependencies present
+        const missingDependencies = expressionMetadata.allDependencies.filter(
+          dep => !allowedRightDimensionsSet.has(dep)
+        ) || [];
+
+        // Validate: all dependencies present
+        const presentedDependencies = expressionMetadata.allDependencies.filter(
+          dep => allowedRightDimensionsSet.has(dep)
+        ) || [];
+
+        if (missingDependencies.length > 0 && presentedDependencies.length > 0) {
+          throw new UserError(
+            `Expression dimension '${leftDimension}':'${rightDimension}' requires all its dependencies in allowedDimensions. ` +
+            `Missing: [${missingDependencies.join(', ')}].`
+          );
+        }
+
+        if (presentedDependencies.length == 0) return;
+
+        let operator;
+
+        expressionMetadata.allDependencies.forEach((dep) => {
+          const depItem = allowedDimensions.find(
+            ({ leftDimension, rightDimension, operator }) => normalizeDimensionPath(leftDimension) == dep
+          );
+
+          if(depItem) {
+            if(operator) {
+              if(depItem.operator != operator) {
+                throw new UserError(
+                  `Expression dimension '${leftDimension}':'${rightDimension}' must have consistent operators.`
+                );
+              } else {
+                operator = depItem.operator;
+              }
+            } else {
+              operator = depItem.operator;
+            }
+          }
+        });
+
+        if (!operator) {
+          throw new UserError(
+            `Expression dimension '${leftDimension}':'${rightDimension}' requires opertator.`
+          );
+        }
+        
+        validatedAllowedDimensions.push(
+          { 
+            rightDimension, 
+            leftDimension, 
+            isExpressionDimension, 
+            expressionMetadata, 
+            originalRightDimension, 
+            operator: operator,
+            type,
+            isPresented
+          }
+        );
+
+        allowedRightDimensionsSet.add(rightDimension);
+        allowedSubQueryDimensions.add(rightDimension);
+        
+      });
+    }
+
+    // ============================================================================
+    // STEP 7: Validate calculateMeasures
+    // ============================================================================
+
+    if (hasCalculateMeasures) {
+      calculateMeasures.forEach(measure => {
+        if (this.newMeasure(measure).definition()?.correlatedQuery) {
+          throw new UserError(
+            `Measure '${measure}' in calculateMeasures of '${cubeName}.${memberName}' ` +
+            `cannot be correlated (nested correlation not supported).`
+          );
+        }
+      });
+    }
+
+    // ============================================================================
+    // STEP 8: Build subQuery options base
+    // ============================================================================
+
+    const subQueryOptions = {
+      ...this.options,
+      skipCorrelatedMeasures: true,
+      ...(correlatedQuery?.optionOverrides || {})
+    };
+
+    // ============================================================================
+    // STEP 9: Build dimensions and timeDimensions for subQuery
+    // ============================================================================
+
+    const subOriginalTimeDimensionsMetadata = [];
+    const subOriginalDimensionsMetadata = [];
+
+    if (hasAllowedDimensions) {
+      const subQueryDimensions = [];
+      const subQueryTimeDimensions = [];
+      const processed = {
+        dimensions: new Set(),
+        timeDimensions: new Set()
+      };
+
+      /**
+       * Create expression dimension object for subQuery
+       * 
+       * Key transformation: Change cubeName to target cube (leftDimension cube)
+       * Expression function remains the same - Cube.js resolves dependencies in new context
+       * 
+       * @example
+       * Input:  { expression: (o) => o.total / o.count, expressionName: 'Orders.avgPrice', cubeName: 'Orders' }
+       * Output: { expression: (o) => o.total / o.count, expressionName: 'Activity.avgPrice', cubeName: 'Activity' }
+       */
+      const createExpressionDimension = (expressionMetadata) => {
+        // original is now a BaseDimension instance
+        const baseDim = expressionMetadata?.original;
+        if (!baseDim?.expressionCubeName) {
+          throw new UserError(
+            `Only allowed expression '${baseDim?.expressionName}' with cube references, ` +
+            `references ${baseDim?.expressionCubeName}`
+          );
+        }
+        return {
+          expression: baseDim.expression,
+          cubeName: baseDim.expressionCubeName,
+          name: baseDim.expressionName,
+          expressionName: baseDim.expressionName,
+          definition: baseDim.expression  // For expression dimensions, definition is the expression itself
+        };
+      };
+
+      /**
+       * Add time dimension to subQuery
+       * Handles both explicit expression dimensions and implicit dependencies
+       */
+      const addTimeDimension = (leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata = null) => {
+        if (processed.timeDimensions.has(leftDimension)) return;
+
+        if (expressionMetadata && expressionMetadata?.original && isExpressionDimension) {
+            throw new UserError(
+              `Expression as time dimension is not supported.`
+            );
+        } else {
+          // Regular dimension or implicit expression dependency
+          const rightTdItems = mainQueryContext.timeDimensions.map.get(rightDimension) || [];
+          const originalMetadata = rightTdItems.find(item => !item.isExpression);
+
+          if(!isExpressionDimension && originalMetadata) {
+              subQueryTimeDimensions.push({
+                dimension: leftDimension,
+                granularity: originalMetadata.original.granularity,
+                dateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.original.dateRange,
+                boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.original.boundaryDateRange
+            });
+
+            if(originalMetadata.original?.granularity) {
+                subOriginalTimeDimensionsMetadata.push({metadata: originalMetadata, dimension: leftDimension, operator: operator});
+            }
+          } else {
+            return;
+          }
+        }
+
+        processed.timeDimensions.add(leftDimension);
+        allowedSubQueryDimensions.add(leftDimension);
+      };
+
+      /**
+       * Add dimension to subQuery
+       * Prefers regular dimensions over expression dependencies when both exist
+       */
+      const addDimension = (leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata = null) => {
+        if (processed.dimensions.has(leftDimension)) return;
+
+        if (expressionMetadata && expressionMetadata?.original && isExpressionDimension) {
+          subQueryDimensions.push(createExpressionDimension(expressionMetadata));
+          subOriginalDimensionsMetadata.push({metadata: expressionMetadata, dimension: expressionMetadata.original?.expressionName, operator: operator});
+        } else {
+          // Regular dimension - find original metadata from mainQueryContext (same as addTimeDimension)
+          const rightDimItems = mainQueryContext.dimensions.map.get(rightDimension) || [];
+          const originalMetadata = rightDimItems.find(item => !item.isExpression);
+
+          if (!isExpressionDimension && originalMetadata) {
+            subQueryDimensions.push(leftDimension);
+            subOriginalDimensionsMetadata.push({metadata: originalMetadata, dimension: leftDimension, operator: operator});
+          } else {
+            return;
+          }
+        }
+
+        processed.dimensions.add(leftDimension);
+        allowedSubQueryDimensions.add(leftDimension);
+      };
+
+      // Process all validated allowed dimensions
+      validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata, isPresented, operator, type}) => {
+        if (isPresented) {
+          const isTimeDimension = type === 'time';
+          
+          if (isTimeDimension) {
+            addTimeDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
+          } else {
+            addDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
+          }
+        }
+      });
+
+      subQueryOptions.dimensions = subQueryDimensions;
+      subQueryOptions.timeDimensions = subQueryTimeDimensions;
+    }
+
+    // ============================================================================
+    // STEP 10: Transform filters for subQuery
+    // ============================================================================
+    
+    const dimensionMapping = new Map(
+      validatedAllowedDimensions.map(({ leftDimension, rightDimension }) => 
+        [rightDimension, leftDimension]
+      )
+    );
+
+    /**
+     * Check if filter is allowed and transform it for subQuery
+     * 
+     * Transformation rules:
+     * 1. Expression dimension object: Create new object with target cube
+     * 2. Regular dimension: Transform via dimensionMapping
+     * 
+     * Validation:
+     * - Check excludeFilters
+     * - For expression dimensions: validate all dependencies present
+     * - For expression dependencies: validate no partial coverage
+     */
+    const isFilterAllowed = (filter) => {
+      if (!filter) return null;
+
+      if (filter.and) {
+        const allowedAndFilters = filter.and.map(isFilterAllowed).filter(Boolean);
+        return allowedAndFilters.length ? { ...filter, and: allowedAndFilters } : null;
+      }
+
+      if (filter.or) {
+        const allowedOrFilters = filter.or.map(isFilterAllowed).filter(Boolean);
+        return allowedOrFilters.length ? { ...filter, or: allowedOrFilters } : null;
+      }
+
+      if (filter.measure) return null;
+
+      const filterMember = filter.dimension || filter.member;
+      if (!filterMember) return null;
+
+      const isExpressionObject = typeof filterMember === 'object' && filterMember.expression;
+      
+      if (isExpressionObject) {
+        throw new UserError(
+          `Expression as filter is not supported.`
+        );
+      }
+
+      const normalizedFilterMember = normalizeDimensionPath(filterMember);
+
+      if (config.excludeFilters.has(normalizedFilterMember)) return null;
+
+      // Regular dimension or measure
+      const leftMember = dimensionMapping.get(normalizedFilterMember);
+
+      if (hasAllowedDimensions && leftMember && allowedSubQueryDimensions.has(leftMember)) {
+
+        if (filter.dimension) {
+          return {
+            ...filter,
+            dimension: leftMember
+          };
+        }
+
+        if (filter.member) {
+          return {
+            ...filter,
+            member: leftMember
+          };
+        }
+
+      }
+
+      return null;
+    };
+
+    subQueryOptions.filters = [
+      ...(this.options.filters || []).map(isFilterAllowed).filter(Boolean),
+      ...config.includeFilters
+    ];
+
+    const transformSegmentForSubQuery = (segment) => {
+      if (!segment) {
+        return null;
+      }
+
+      // Keep regular path segments untouched (segment SQL function cannot be safely remapped here).
+      if (typeof segment === 'string') {
+        throw new UserError(
+          `Using segments with correlated queries is not supported.`
+        );
+      }
+
+      const segmentDefinitionSource = segment.definition;
+      let segmentAst;
+      try {
+        segmentAst = BaseQuery.parseSqlLogicalExpressionTree(segmentDefinitionSource);
+      } catch {
+        // If a segment is not represented as SQL logical expression, preserve original shape.
+        return segment;
+      }
+
+      const filteredAst = BaseQuery.filterSqlLogicalExpressionTreeByMemberMapping(segmentAst, {
+        normalizeDimensionPath: normalizeDimensionPath,
+        isExcludedMember: (member) => config.excludeFilters.has(member),
+        mapMember: (member) => dimensionMapping.get(member),
+        isMappedMemberAllowed: (member) => allowedSubQueryDimensions.has(member),
+        hasAllowedDimensions: hasAllowedDimensions
+      });
+
+      const normalizedAst = BaseQuery.filterSqlLogicalExpressionTree(filteredAst);
+      if (!normalizedAst) {
+        return null;
+      }
+
+      const newSegmentSqlDefinition = BaseQuery.serializeSqlLogicalExpressionTree(normalizedAst);
+      const cubeParams = extractCubeParamsFromSql(newSegmentSqlDefinition);
+      const expressionArray = toSqlFunctionExpression(newSegmentSqlDefinition, cubeParams);
+      const newSegmentExpression = Function.constructor.apply(null, expressionArray);
+      const segmentAlias = segment.expressionName || segment.name || segment.alias || 'segment';
+      const segmentCubeName = segment.cubeName || cubeName;
+      const groupingSet = segment.groupingSet == null ? null : segment.groupingSet;
+
+      return {
+        ...segment,
+        cubeName: segmentCubeName,
+        name: segment.name || segmentAlias,
+        expressionName: segment.expressionName || segmentAlias,
+        expression: newSegmentExpression,
+        definition: JSON.stringify({
+          cubeName: segmentCubeName,
+          alias: segmentAlias,
+          expr: {
+            type: 'SqlFunction',
+            cubeParams,
+            sql: newSegmentSqlDefinition
+          },
+          groupingSet
+        })
+      };
+    };
+
+    subQueryOptions.segments = (this.options.segments || [])
+      .map(transformSegmentForSubQuery)
+      .filter(Boolean);
+
+    // ============================================================================
+    // STEP 11: Set measures for subQuery
+    // ============================================================================
+    
+    subQueryOptions.measures = hasCalculateMeasures ? calculateMeasures : [];
+
+    // ============================================================================
+    // STEP 12: Validate filtersRequiresDimension
+    // ============================================================================
+    
+    if (config.filtersRequireDimension.size > 0) {
+
+      const validateRequiredDimension = (rightDimension) => {
+        if (!rightDimension) return;
+
+        const normalizedRightDimension = normalizeDimensionPath(rightDimension);
+        if (config.excludeFilters.has(normalizedRightDimension)) return;
+
+        if (hasAllowedDimensions) {
+          const leftDimension = dimensionMapping.get(normalizedRightDimension);
+          if (!leftDimension || !allowedSubQueryDimensions.has(leftDimension)) return;
+        }
+
+        const selected = mainQueryDimensionsMetadata.find(
+          item => item?.allDependencies?.includes(normalizedRightDimension)
+        );
+
+        if (config.filtersRequireDimension.has(normalizedRightDimension) &&
+            !selected) {
+          throw new UserError(
+            `Filter on '${normalizedRightDimension}' requires dimension selection in main query.`
+          );
+        }
+      };
+
+      (this.options.filters || []).forEach(filter => {
+        validateRequiredDimension(filter.dimension || filter.member || filter.measure);
+      });
+    }
+
+    // ============================================================================
+    // STEP 13: Build subQuery and generate SQL
+    // ============================================================================
+    
+    const subQueryAlias = correlatedQuery?.subQueryAlias;
+    const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
+
+    const subQuery = this.newSubQuery(subQueryOptions);
+
+    this.registerSubQueryPreAggregations(subQuery);
+    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, dimensionMapping], null, 2)}\n*/` + subQuery.buildParamAnnotatedSql();
+
+    // ============================================================================
+    // STEP 14: Build pre-aggregation context for main query
+    // ============================================================================
+    
+    let mainQueryAlias;
+    let mainQueryRenderedReference;
+
+    const preAggregationForQuery = this.preAggregations?.preAggregationForQuery;
+    if (preAggregationForQuery) {
+      const effectivePreAggregation = 
+        preAggregationForQuery.preAggregation?.type === 'rollupJoin' && 
+        preAggregationForQuery.rollupJoin?.length
+          ? preAggregationForQuery.rollupJoin[0].fromPreAggObj || preAggregationForQuery
+          : preAggregationForQuery;
+
+      const preAggregationReferences = effectivePreAggregation.references || 
+                                      preAggregationForQuery.references;
+      
+      const preAggregationAliasPath = this.cubeEvaluator.pathFromArray([
+        effectivePreAggregation.cube, 
+        effectivePreAggregation.preAggregationName
+      ]);
+      mainQueryAlias = this.cubeAlias(preAggregationAliasPath);
+
+      if (preAggregationReferences) {
+        const renderedReference = {
+          ...(this.preAggregations.dimensionsRenderedReference?.(preAggregationForQuery) || {})
+        };
+
+        (preAggregationReferences.timeDimensions || []).forEach(timeDimension => {
+          Object.assign(
+            renderedReference,
+            this.preAggregations.timeDimensionsRenderedReference?.(
+              timeDimension.granularity, 
+              preAggregationForQuery
+            ) || {}
+          );
+        });
+
+        mainQueryRenderedReference = Object.fromEntries(
+          Object.entries(renderedReference)
+            .map(([key, value]) => [key, `${mainQueryAlias}.${value}`])
+        );
+      }
+    }
+
+    // ============================================================================
+    // STEP 15: Build correlatedWhereClause
+    // ============================================================================
+
+    /**
+     * Get column alias for dimension in subQuery
+     * Mirrors BaseDimension/BaseTimeDimension unescapedAliasName logic
+     */
+    const getSubQueryColumnName = (metadata, dimension) => {
+      const original = metadata?.original;
+      if (!original) return null;
+
+      // Expression dimension: same as BaseDimension.unescapedAliasName
+      if (original.expressionName) {
+        return subQuery.aliasName(original.expressionName);
+      }
+
+      // Time dimension with granularity: mirror BaseTimeDimension.unescapedAliasName
+      if (original.granularity) {
+        const fullName = `${dimension}.${original.granularity}`;
+
+        if (subQuery.options.memberToAlias?.[fullName]) {
+          return subQuery.options.memberToAlias[fullName];
+        }
+
+        return `${subQuery.aliasName(dimension)}_${original.granularity}`;
+      }
+
+      // Regular dimension
+      return subQuery.aliasName(dimension);
+    };
+
+    /**
+     * Get SQL for dimension in main query
+     * 
+     * For expression dimensions: Returns SQL expression (e.g., "orders.total / orders.count")
+     * For regular dimensions: Returns column reference (e.g., "orders.total")
+     * 
+     * This is the key difference: Expression dimensions in WHERE clause use their SQL expression,
+     * not just a column reference
+     */
+    const getMainQueryDimensionSql = (original) => {
+      if (mainQueryAlias && mainQueryRenderedReference) {
+        try {
+          const rewrittenSql = this.evaluateSymbolSqlWithContext(
+            () => original.dimensionSql(),
+            { renderedReference: mainQueryRenderedReference, rollupQuery: true }
+          );
+          if (rewrittenSql != null) {
+            return rewrittenSql;
+          }
+        } catch {
+          // If renderedReference causes resolution issues (e.g. expressionName-only keys),
+          // fall back to plain dimensionSql without rewrites.
+        }
+      }
+      
+      return original.dimensionSql?.();
+    };
+
+    /**
+     * Build WHERE clause for correlation
+     *
+     * Format: subquery.column_alias = main_query.dimension_sql
+     */
+    const correlatedWhereClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
+      .map(({ metadata, dimension, operator }) => {
+
+        const dimensionAlias = getSubQueryColumnName(metadata, dimension);
+        if (!dimensionAlias) return null;
+
+        const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimensionAlias)}`;
+
+        const original = metadata?.original;
+        if (!original) return null;
+
+        let mainQuerySql;
+
+        // Expression dimension (SQL pushdown / member expression)
+        if (original.expression) {
+          try {
+            mainQuerySql = this.evaluateSql(original.expressionCubeName, original.expression);
+            
+          } catch (e) {
+            return null;
+          }
+        } else {
+            if (original.dimensionSql) {
+              mainQuerySql = getMainQueryDimensionSql(original);
+            } else {
+              return null;
+            }
+        }
+
+        if (!mainQuerySql) return null;
+
+        return `${subQueryColumn} ${operator} ${mainQuerySql}`;
+      })
+      .filter(Boolean)
+      .join(' AND ') || 'true';
+
+    // ============================================================================
+    // STEP 16: Return result
+    // ============================================================================
+    
+    return {
+      sql: `(${subQuerySql})`,
+      subQueryAlias: subQueryAlias,
+      correlatedWhereClause
+    };
   }
 
   newSubQueryForCube(cube, options) {
@@ -4849,7 +7016,8 @@ export class BaseQuery {
         filterGroup: this.filterGroupFunction(),
         sqlUtils: {
           convertTz: this.convertTz.bind(this)
-        }
+        },
+        queryContext: this.queryContextProxy()
       }, R.map(
         (symbols) => this.contextSymbolsProxy(symbols),
         this.contextSymbols
@@ -4866,6 +7034,7 @@ export class BaseQuery {
         convertTz: (field) => field,
       },
       securityContext: CubeSymbols.contextSymbolsProxyFrom({}, allocateParam),
+      queryContext: BaseQuery.queryContextProxyFromQuery([], [], [], [], [], {}),
     };
   }
 
@@ -4897,6 +7066,181 @@ export class BaseQuery {
     } else {
       return null;
     }
+  }
+
+  /**
+   * Converts SQL boolean expression into nested JSON tree with AND/OR groups.
+   * Input can be:
+   * - raw SQL expression string
+   * - segment definition object ({ expr: { sql } } or { sql })
+   * - JSON string with the same structure
+   *
+   * Returns:
+   * - group node: { operator: 'and'|'or', values: [...] }
+   * - leaf node: {
+   *     type: 'condition',
+   *     definition: '<sql fragment>',
+   *     expression: [...cubeParams, 'return `<sql fragment>`']
+   *   }
+   */
+  static parseSqlLogicalExpressionTree(expressionOrDefinition) {
+    const normalizedInput = normalizeSqlLogicalExpressionInput(expressionOrDefinition);
+    const sqlExpression = normalizedInput?.sqlExpression;
+    const cubeParams = normalizedInput?.cubeParams || [];
+
+    if (!sqlExpression) {
+      throw new UserError('SQL expression is required to build logical expression tree');
+    }
+
+    const syntaxState = walkSqlWithQuoteAndDepth(sqlExpression);
+    if (
+      syntaxState.hasUnclosedQuote ||
+      syntaxState.hasUnclosedTemplatePlaceholder ||
+      syntaxState.hasNegativeDepth ||
+      syntaxState.depth !== 0
+    ) {
+      throw new UserError(`Malformed SQL expression: ${sqlExpression}`);
+    }
+
+    return parseSqlLogicalExpressionNode(sqlExpression, cubeParams);
+  }
+
+  /**
+   * Recursively filters SQL logical expression tree.
+   * - removes condition nodes rejected by predicate
+   * - removes empty groups
+   * - flattens groups with single child
+   *
+   * @param tree SQL logical expression tree produced by parseSqlLogicalExpressionTree
+   * @param isConditionAllowed predicate for condition nodes ({ type: 'condition', definition, expression })
+   * @returns filtered tree or null when all nodes are removed
+   */
+  static filterSqlLogicalExpressionTree(tree, isConditionAllowed = () => true) {
+    if (!tree || typeof tree !== 'object') {
+      return null;
+    }
+
+    const conditionPredicate = typeof isConditionAllowed === 'function'
+      ? isConditionAllowed
+      : (() => true);
+
+    return filterSqlLogicalExpressionNode(tree, conditionPredicate);
+  }
+
+  /**
+   * Applies `isFilterAllowed`-like member filtering logic to SQL logical AST:
+   * - recursively filters `and/or` groups
+   * - removes conditions with excluded or unmapped members
+   * - remaps condition member references according to provided mapping
+   *
+   * @param tree SQL logical expression tree produced by parseSqlLogicalExpressionTree
+   * @param options
+   * @param options.normalizeDimensionPath member normalizer (e.g. removes view alias/join hints)
+   * @param options.isExcludedMember predicate for excluded members
+   * @param options.mapMember mapping from right member to left member
+   * @param options.isMappedMemberAllowed predicate for mapped member in subquery context
+   * @param options.hasAllowedDimensions same as in correlatedQuery flow
+   * @returns filtered/remapped tree or null
+   */
+  static filterSqlLogicalExpressionTreeByMemberMapping(tree, options = {}) {
+    if (!tree || typeof tree !== 'object') {
+      return null;
+    }
+
+    const normalizeDimensionPath = typeof options.normalizeDimensionPath === 'function'
+      ? options.normalizeDimensionPath
+      : ((member) => member);
+    const isExcludedMember = typeof options.isExcludedMember === 'function'
+      ? options.isExcludedMember
+      : (() => false);
+    const mapMember = typeof options.mapMember === 'function'
+      ? options.mapMember
+      : ((member) => member);
+    const isMappedMemberAllowed = typeof options.isMappedMemberAllowed === 'function'
+      ? options.isMappedMemberAllowed
+      : (() => true);
+    const hasAllowedDimensions = !!options.hasAllowedDimensions;
+
+    const isAstNodeAllowed = (node) => {
+      if (!node || typeof node !== 'object') {
+        return null;
+      }
+
+      if (isSqlLogicalGroupNode(node)) {
+        const allowedValues = node.values
+          .map((childNode) => isAstNodeAllowed(childNode))
+          .filter(Boolean);
+
+        return allowedValues.length
+          ? { ...node, values: allowedValues }
+          : null;
+      }
+
+      const definition = typeof node.definition === 'string'
+        ? node.definition.trim()
+        : (typeof node.sql === 'string' ? node.sql.trim() : '');
+
+      if (!definition) {
+        return null;
+      }
+
+      const references = extractSqlTemplateReferences(definition);
+      if (!references.length) {
+        return null;
+      }
+
+      const remappedMembers = new Map();
+      for (const reference of references) {
+        const normalizedMember = normalizeDimensionPath(reference);
+        if (!normalizedMember) {
+          return null;
+        }
+
+        if (isExcludedMember(normalizedMember)) {
+          return null;
+        }
+
+        const mappedMember = mapMember(normalizedMember);
+        if (!hasAllowedDimensions || !mappedMember || !isMappedMemberAllowed(mappedMember)) {
+          return null;
+        }
+
+        remappedMembers.set(normalizedMember, mappedMember);
+      }
+
+      const remappedDefinition = replaceSqlTemplateReferences(
+        definition,
+        (reference) => remappedMembers.get(normalizeDimensionPath(reference)) || reference
+      ).trim();
+
+      return {
+        ...node,
+        type: 'condition',
+        definition: remappedDefinition,
+        expression: toSqlFunctionExpression(remappedDefinition, extractCubeParamsFromSql(remappedDefinition))
+      };
+    };
+
+    return isAstNodeAllowed(tree);
+  }
+
+  /**
+   * Serializes SQL logical expression tree back to SQL expression string.
+   *
+   * @param tree SQL logical expression tree
+   * @returns serialized SQL expression
+   */
+  static serializeSqlLogicalExpressionTree(tree) {
+    if (!tree || typeof tree !== 'object') {
+      throw new UserError('SQL logical expression tree is required for serialization');
+    }
+
+    const sqlExpression = serializeSqlLogicalExpressionNode(tree).trim();
+    if (!sqlExpression) {
+      throw new UserError('SQL logical expression tree cannot be serialized to empty SQL');
+    }
+
+    return sqlExpression;
   }
 
   static findAndSubTreeForFilterGroup(filter, groupMembers, newGroupFilter, aliases) {
@@ -4942,6 +7286,278 @@ export class BaseQuery {
       this.paramAllocator.allocateParam.bind(this.paramAllocator),
       this.newGroupFilter.bind(this),
     );
+  }
+
+  queryContextProxy() {
+    return BaseQuery.queryContextProxyFromQuery(
+      this.measures,
+      this.dimensions,
+      this.timeDimensions,
+      this.segments,
+      this.filters,
+      this.options
+    );
+  }
+
+  /**
+   * Collects all members used in the query.
+   * 
+   * @returns {Array<string>} Array of member paths (e.g., ["Orders.count", "Users.name"])
+   */
+  collectUsedMembersFromQuery() {
+    try {
+      // Use the standard collectFromMembers mechanism which properly handles:
+      // 1. Wrapping items with getMembers() interface
+      // 2. Caching results
+      // 3. Traversing symbols correctly
+      return this.collectFromMembers(
+        false,
+        this.collectMemberNamesFor.bind(this),
+        'collectUsedMembersFromQuery'
+      );
+    } catch (e) {
+      // Fallback: if collectFromMembers fails, fall back to direct collection
+      // This handles edge cases where the query structure is unusual
+      try {
+        const usedMembers = [];
+
+        // Safely collect members directly without using collectFromMembers
+        const addMemberIfValid = (memberPath) => {
+          if (typeof memberPath === 'string' && memberPath && !usedMembers.includes(memberPath)) {
+            usedMembers.push(memberPath);
+          }
+        };
+
+        // Collect from direct members
+        if (Array.isArray(this.measures)) {
+          this.measures.forEach(m => m?.measure && addMemberIfValid(m.measure));
+        }
+        if (Array.isArray(this.dimensions)) {
+          this.dimensions.forEach(d => d?.dimension && addMemberIfValid(d.dimension));
+        }
+        if (Array.isArray(this.timeDimensions)) {
+          this.timeDimensions.forEach(td => td?.dimension && addMemberIfValid(td.dimension));
+        }
+        if (Array.isArray(this.segments)) {
+          this.segments.forEach(s => s?.segment && addMemberIfValid(s.segment));
+        }
+
+        return usedMembers;
+      } catch (fallbackError) {
+        // If all collection attempts fail, return empty array
+        return [];
+      }
+    }
+  }
+
+  /**
+   * Get categorized members for dynamicSql function
+   * @returns {Object} Object with usedMeasures, usedDimensions, usedTimeDimensions, usedFilters
+   */
+  getCategorizedMembersForDynamicSql() {
+    const categorized = {
+      usedMeasures: [],
+      usedDimensions: [],
+      usedTimeDimensions: [],
+      usedFilters: []
+    };
+
+    const resolveMember = (memberPath) => {
+      if (!memberPath || typeof memberPath !== 'string') {
+        return null;
+      }
+      const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(memberPath);
+      return resolvedPath;
+    };
+
+    // Helper to categorize a member path
+    const categorizeMember = (memberPath) => {
+      try {
+        const pathArray = this.cubeEvaluator.parsePath('measures', memberPath);
+        if (this.cubeEvaluator.isMeasure(pathArray)) {
+          return 'measure';
+        }
+      } catch {
+        // not a measure
+      }
+
+      try {
+        const pathArray = this.cubeEvaluator.parsePath('dimensions', memberPath);
+        if (this.cubeEvaluator.isDimension(pathArray)) {
+          // Check if it's a time dimension
+          const dimension = this.cubeEvaluator.dimensionByPath(memberPath);
+          if (dimension.type === 'time') {
+            return 'time';
+          }
+          return 'dimension';
+        }
+      } catch {
+        // not a dimension
+      }
+
+      return null;
+    };
+
+    // Categorize measures
+    (this.measures || []).forEach(m => {
+      const memberPath = resolveMember(typeof m.measure === 'string' ? m.measure : null);
+      if (memberPath) {
+        categorized.usedMeasures.push(memberPath);
+      }
+    });
+
+    // Categorize dimensions
+    (this.dimensions || []).forEach(d => {
+      const memberPath = resolveMember(typeof d.dimension === 'string' ? d.dimension : null);
+      if (memberPath) {
+        categorized.usedDimensions.push(memberPath);
+      }
+    });
+
+    // Categorize time dimensions
+    (this.timeDimensions || []).forEach(td => {
+      const memberPath = resolveMember(typeof td.dimension === 'string' ? td.dimension : null);
+      if (memberPath) {
+        categorized.usedTimeDimensions.push(memberPath);
+      }
+    });
+
+    // Categorize filters
+    (this.filters || []).forEach(f => {
+      const memberPath = resolveMember(typeof f.measure === 'string' ? f.measure : (typeof f.dimension === 'string' ? f.dimension : null));
+      if (memberPath) {
+        categorized.usedFilters.push(memberPath);
+      }
+    });
+
+    // Deduplicate after resolving
+    categorized.usedMeasures = [...new Set(categorized.usedMeasures)];
+    categorized.usedDimensions = [...new Set(categorized.usedDimensions)];
+    categorized.usedTimeDimensions = [...new Set(categorized.usedTimeDimensions)];
+    categorized.usedFilters = [...new Set(categorized.usedFilters)];
+
+    return categorized;
+  }
+
+  /**
+   * Resolve dependencies referenced inside dynamicSql result
+   * @param {string} cubeName
+   * @param {Function} dynamicSqlFn
+   * @param {*} dynamicSqlResult
+   * @returns {Array<string>} Array of member paths
+   */
+  getDynamicSqlDependencies(cubeName, dynamicSqlFn, dynamicSqlResult) {
+    if (typeof dynamicSqlFn !== 'function') {
+      return [];
+    }
+
+    try {
+      let dynamicSqlResultLocal = dynamicSqlResult;
+      if (dynamicSqlResultLocal === undefined) {
+        const categorized = this.getCategorizedMembersForDynamicSql();
+        dynamicSqlResultLocal = dynamicSqlFn(
+          categorized.usedMeasures,
+          categorized.usedDimensions,
+          categorized.usedTimeDimensions,
+          categorized.usedFilters
+        );
+      }
+
+      // Best-effort: treat argument names of the returned function as member dependencies when they exist on the cube
+      const depsFromArgs = [];
+      if (typeof dynamicSqlResultLocal === 'function') {
+        try {
+          const args = this.cubeEvaluator.funcArguments(dynamicSqlResultLocal);
+          for (const arg of args) {
+            const path = `${cubeName}.${arg}`;
+            try {
+              this.cubeEvaluator.byPathAnyType(path);
+              depsFromArgs.push(path);
+            } catch (_e) {
+              // ignore non-member args
+            }
+          }
+        } catch (_e) {
+          // ignore parsing errors
+        }
+      }
+
+      const { pathReferencesUsed } = this.cubeEvaluator.collectUsedCubeReferences(
+        cubeName,
+        dynamicSqlResultLocal
+      );
+
+      const deps = [
+        ...new Set(
+          pathReferencesUsed
+            .map(path => this.cubeEvaluator.pathFromArray(path))
+            .concat(depsFromArgs)
+            // Map view members back to base cube members so rollup matching works with dynamicSql
+            .map(path => { 
+              const { memberPath: resolvedPath } = this.resolveToFinalAliasMember(path);
+              return resolvedPath;
+            })
+        )
+      ];
+
+      // Also register cubes referenced by dynamicSql while collecting cube names (e.g. for pre-aggregation matching)
+      const { cubeNames } = this.safeEvaluateSymbolContext();
+      if (Array.isArray(cubeNames)) {
+        deps.forEach(dep => {
+          try {
+            const depCube = this.cubeEvaluator.cubeNameFromPath(dep);
+            this.pushCubeNameForCollectionIfNecessary(depCube);
+          } catch (e) {
+            // Best-effort: ignore failures to resolve cube name
+          }
+        });
+      }
+
+      return deps;
+    } catch {
+      return [];
+    }
+  }
+
+  static queryContextProxyFromQuery(measures, dimensions, timeDimensions, segments, filters, options) {
+    const measureNames = (measures || []).map(m => m.measure);
+    const dimensionNames = (dimensions || []).map(d => d.dimension);
+    const timeDimensionNames = (timeDimensions || []).map(t => t.dimension);
+    const segmentNames = (segments || []).map(s => s.segment);
+    const filterNames = (filters || []).map(s => s.dimension);
+
+    const queryOptions = options;
+
+    return new Proxy({}, {
+      get: (_target, name) => {
+        if (name === '_objectWithResolvedProperties') {
+          return true;
+        }
+        if (name === 'measures') {
+          return measureNames;
+        }
+        if (name === 'dimensions') {
+          return dimensionNames;
+        }
+        if (name === 'timeDimensions') {
+          return timeDimensionNames;
+        }
+        if (name === 'filters') {
+          return filterNames;
+        }
+        if (name === 'queryOptions') {
+          return queryOptions;
+        }
+        if (name === 'members') {
+          return measureNames
+                  .concat(dimensionNames)
+                  .concat(timeDimensionNames)
+                  .concat(segmentNames)
+              .filter((e) => !!e);
+        }
+        return undefined;
+      }
+    });
   }
 
   filterGroupFunctionForRust(usedFilters) {

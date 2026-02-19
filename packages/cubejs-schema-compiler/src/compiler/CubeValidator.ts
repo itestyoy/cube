@@ -268,6 +268,7 @@ const BaseDimensionWithoutSubQuery = {
   public: Joi.boolean().strict(),
   title: Joi.string(),
   description: Joi.string(),
+  dynamicSql: Joi.func(),
   suggestFilterValues: Joi.boolean().strict(),
   enableSuggestions: Joi.boolean().strict(),
   format: Joi.when('type', {
@@ -397,6 +398,33 @@ const BaseMeasure = {
   ),
   title: Joi.string(),
   description: Joi.string(),
+  dynamicSql: Joi.func(),
+  correlatedQuery: Joi.object({
+    allowedDimensions: Joi.array().items(
+      Joi.alternatives().try(
+        Joi.string(),
+        Joi.array().items(
+          Joi.alternatives().try(
+            Joi.string(),
+            Joi.array().items(Joi.string().required(), Joi.string()).min(1).max(2)
+          ).required(),
+          Joi.string(),
+          Joi.string()
+        ).min(1).max(3)
+      )
+    ),
+    calculateMeasures: Joi.array().items(Joi.string()).min(1),
+    subQueryAlias: Joi.string(),
+    optionOverrides: Joi.object(),
+    includeFilters: Joi.array().items(Joi.object()),
+    excludeFilters: Joi.array().items(Joi.string()),
+    filtersRequiresDimension: Joi.array().items(Joi.string()),
+  }).custom((value, helpers) => {
+    if (!value.allowedDimensions?.length && !value.calculateMeasures?.length) {
+      return helpers.error('any.invalid', { message: 'correlatedQuery requires allowedDimensions or calculateMeasures' });
+    }
+    return value;
+  }),
   rollingWindow: Joi.alternatives().conditional(
     Joi.ref('.type'), [
       { is: 'year_to_date', then: YearToDate },
@@ -784,6 +812,7 @@ const MeasuresSchema = Joi.object().pattern(identifierRegex, Joi.alternatives().
       groupBy: Joi.func(),
       reduceBy: Joi.func(),
       addGroupBy: Joi.func(),
+      filteredDimensions: Joi.func(),
       timeShift: Joi.alternatives().conditional(Joi.array().length(1), {
         then: Joi.array().items(timeShiftItemOptional),
         otherwise: Joi.array().items(timeShiftItemRequired)
@@ -866,6 +895,7 @@ const DimensionsSchema = Joi.object().pattern(identifierRegex, Joi.alternatives(
       multiStage: Joi.boolean().valid(true),
       sql: Joi.func().required(),
       addGroupBy: Joi.func(),
+      filteredDimensions: Joi.func(),
     }),
     // TODO should be valid only for calendar cubes, but this requires significant refactoring
     // of all schemas. Left for the future when we'll switch to zod.

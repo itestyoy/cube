@@ -254,7 +254,8 @@ export const CONTEXT_SYMBOLS = {
   securityContext: 'securityContext',
   FILTER_PARAMS: 'filterParams',
   FILTER_GROUP: 'filterGroup',
-  SQL_UTILS: 'sqlUtils'
+  SQL_UTILS: 'sqlUtils',
+  CONTEXT: 'queryContext'
 };
 
 export const CURRENT_CUBE_CONSTANTS = ['CUBE', 'TABLE'];
@@ -1339,6 +1340,42 @@ export class CubeSymbols implements TranspilerSymbolResolver, CompilerInterface 
         }
         if (propertyName === 'sql') {
           return () => query.cubeSql(cube.cubeName());
+        }
+        // Support for isUsed() method to check if member was used in the query
+        if (propertyName === 'isUsed') {
+          return () => {
+            if (!refProperty) {
+              throw new UserError(`isUsed() can only be called on a member, not on a cube`);
+            }
+            if (!query || typeof query.isMemberUsed !== 'function') {
+              return false;
+            }
+            return query.isMemberUsed(cubeName, refProperty);
+          };
+        }
+        // Support for usedFilters() method to get all filters for a member
+        if (propertyName === 'usedFilters') {
+          return () => {
+            if (!refProperty) {
+              throw new UserError(`usedFilters() can only be called on a member, not on a cube`);
+            }
+            if (!query || typeof query.getMemberFilters !== 'function') {
+              return null;
+            }
+            return query.getMemberFilters(cubeName, refProperty);
+          };
+        }
+        // Support for usedGranularity() method to get the used granularity for a time dimension
+        if (propertyName === 'usedGranularity') {
+          return () => {
+            if (!refProperty) {
+              throw new UserError(`usedGranularity() can only be called on a member, not on a cube`);
+            }
+            if (!query || typeof query.getUsedGranularity !== 'function') {
+              return null;
+            }
+            return query.getUsedGranularity(cubeName, refProperty);
+          };
         }
         if (refProperty &&
           cube[refProperty].type === 'time' &&

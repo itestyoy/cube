@@ -34,6 +34,7 @@ export type SegmentDefinition = {
 export type DimensionDefinition = {
   type: string;
   sql(): string;
+  dynamicSql?: (...args: Array<unknown>) => () => string;
   primaryKey?: true;
   ownedByCube: boolean;
   fieldType?: string;
@@ -60,7 +61,18 @@ export type TimeShiftDefinitionReference = {
 
 export type MeasureDefinition = {
   type: string;
-  sql(): string;
+  sql: () => string;
+  dynamicSql?: (...args: Array<unknown>) => () => string;
+  correlatedQuery?: {
+    // Each entry: [leftDimension, operator?] or just leftDimension string
+    allowedDimensions?: (string | [string, string?] | [[string, string?], string?])[];
+    calculateMeasures?: string[];
+    optionOverrides?: Record<string, any>;
+    subQueryAlias?: string;
+    includeFilters?: any[];
+    excludeFilters?: string[];
+    filtersRequiresDimension?: string[];
+  };
   ownedByCube: boolean;
   rollingWindow?: any
   filters?: any
@@ -70,10 +82,12 @@ export type MeasureDefinition = {
   groupBy?: (...args: Array<unknown>) => Array<ToString>;
   reduceBy?: (...args: Array<unknown>) => Array<ToString>;
   addGroupBy?: (...args: Array<unknown>) => Array<ToString>;
+  filteredDimensions?: (...args: Array<unknown>) => Array<ToString>;
   timeShift?: TimeShiftDefinition[];
   groupByReferences?: string[];
   reduceByReferences?: string[];
   addGroupByReferences?: string[];
+  filteredDimensionsReferences?: string[];
   timeShiftReferences?: TimeShiftDefinitionReference[];
   patchedFrom?: { cubeName: string; name: string };
 };
@@ -471,6 +485,9 @@ export class CubeEvaluator extends CubeSymbols {
         }
         if (member.addGroupBy) {
           member.addGroupByReferences = this.evaluateReferences(cubeName, member.addGroupBy);
+        }
+        if (member.filteredDimensions) {
+          member.filteredDimensionsReferences = this.evaluateReferences(cubeName, member.filteredDimensions);
         }
         if (member.timeShift) {
           member.timeShiftReferences = member.timeShift.map((s): TimeShiftDefinitionReference => ({
