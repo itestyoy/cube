@@ -3,6 +3,30 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.6.14](https://github.com/cube-js/cube/compare/v1.6.13...v1.6.14) (2026-02-18)
+
+### Bug Fixes
+
+- **cubesql:** Support date-only `TO_TIMESTAMP` formats ([#10409](https://github.com/cube-js/cube/issues/10409)) ([1ca4624](https://github.com/cube-js/cube/commit/1ca46240e7a200d0cd5d664065c15287a7252a62))
+
+### Features
+
+- **cubesql:** Support SQL pushdown for `LAG`/`LEAD` functions ([#10407](https://github.com/cube-js/cube/issues/10407)) ([c968656](https://github.com/cube-js/cube/commit/c968656970a90e640548e6b0165e5f1327cf150a))
+
+## [1.6.13](https://github.com/cube-js/cube/compare/v1.6.12...v1.6.13) (2026-02-17)
+
+**Note:** Version bump only for package @cubejs-backend/cubesql
+
+## [1.6.12](https://github.com/cube-js/cube/compare/v1.6.11...v1.6.12) (2026-02-16)
+
+**Note:** Version bump only for package @cubejs-backend/cubesql
+
+## [1.6.11](https://github.com/cube-js/cube/compare/v1.6.10...v1.6.11) (2026-02-12)
+
+### Features
+
+- **cubesql:** Support setting time zone with `SET TIMEZONE` ([#10364](https://github.com/cube-js/cube/issues/10364)) ([5bb1e7d](https://github.com/cube-js/cube/commit/5bb1e7d45c94cadd221a5b19c29f818c3d654e57))
+
 ## [1.6.10](https://github.com/cube-js/cube/compare/v1.6.9...v1.6.10) (2026-02-09)
 
 ### Features
