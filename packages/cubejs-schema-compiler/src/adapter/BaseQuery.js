@@ -5965,8 +5965,12 @@ export class BaseQuery {
 
     const subQuery = null; // = this.newSubQuery(subQueryOptions);
 
+    const a =  validatedAllowedDimensions.map(({ leftDimension, rightDimension }) => 
+        [rightDimension, leftDimension]
+      );
+
     //this.registerSubQueryPreAggregations(subQuery);
-    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, dimensionMapping], null, 2)}\n*/`; // + subQuery.buildParamAnnotatedSql();
+    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, a, correlatedQuery?.allowedDimensions], null, 2)}\n*/`; // + subQuery.buildParamAnnotatedSql();
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
