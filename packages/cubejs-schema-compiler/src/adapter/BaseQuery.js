@@ -5963,10 +5963,10 @@ export class BaseQuery {
     const subQueryAlias = correlatedQuery?.subQueryAlias;
     const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
 
-    const subQuery = this.newSubQuery(subQueryOptions);
+    const subQuery = null; // = this.newSubQuery(subQueryOptions);
 
-    this.registerSubQueryPreAggregations(subQuery);
-    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, dimensionMapping], null, 2)}\n*/` + subQuery.buildParamAnnotatedSql();
+    //this.registerSubQueryPreAggregations(subQuery);
+    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, dimensionMapping], null, 2)}\n*/`; // + subQuery.buildParamAnnotatedSql();
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
@@ -6124,7 +6124,7 @@ export class BaseQuery {
     return {
       sql: `(${subQuerySql})`,
       subQueryAlias: subQueryAlias,
-      correlatedWhereClause
+      correlatedWhereClause: 'true'
     };
   }
 
