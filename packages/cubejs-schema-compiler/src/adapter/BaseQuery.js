@@ -5963,12 +5963,10 @@ export class BaseQuery {
     const subQueryAlias = correlatedQuery?.subQueryAlias;
     const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
 
-    const subQuery = null; // this.newSubQuery(subQueryOptions);
-    //this.registerSubQueryPreAggregations(subQuery);
+    const subQuery = this.newSubQuery(subQueryOptions);
+    this.registerSubQueryPreAggregations(subQuery);
 
-    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, validatedAllowedDimensions.map(({ leftDimension, rightDimension }) => 
-        [rightDimension, leftDimension]
-      )], null, 2)}\n*/`; // + subQuery.buildParamAnnotatedSql();
+    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions], null, 2)}\n*/` + subQuery.buildParamAnnotatedSql();
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
