@@ -5964,7 +5964,7 @@ export class BaseQuery {
     const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
 
     //const subQuery = this.newSubQuery(subQueryOptions);
-    const subQuery = null;
+    const subQuery = {};
 
     //this.registerSubQueryPreAggregations(subQuery);
     const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, dimensionMapping], null, 2)}\n*/`; // + subQuery.buildParamAnnotatedSql();
