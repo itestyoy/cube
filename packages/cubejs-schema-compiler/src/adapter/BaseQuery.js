@@ -5708,7 +5708,7 @@ export class BaseQuery {
 
           if(!isExpressionDimension && originalMetadata) {
               subQueryTimeDimensions.push({
-                dimension: leftDimension,
+                dimension: rightDimension,
                 granularity: originalMetadata.original.granularity,
                 dateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.original.dateRange,
                 boundaryDateRange: config.excludeFilters.has(rightDimension) ? null : originalMetadata.original.boundaryDateRange
@@ -5742,8 +5742,8 @@ export class BaseQuery {
           const originalMetadata = rightDimItems.find(item => !item.isExpression);
 
           if (!isExpressionDimension && originalMetadata) {
-            subQueryDimensions.push(leftDimension);
-            subOriginalDimensionsMetadata.push({metadata: originalMetadata, dimension: leftDimension, operator: operator});
+            subQueryDimensions.push(rightDimension);
+            subOriginalDimensionsMetadata.push({metadata: originalMetadata, dimension: rightDimension, operator: operator});
           } else {
             return;
           }
@@ -5963,11 +5963,10 @@ export class BaseQuery {
     const subQueryAlias = correlatedQuery?.subQueryAlias;
     const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
 
-    //const subQuery = this.newSubQuery(subQueryOptions);
-    const subQuery = null;
+    const subQuery = this.newSubQuery(subQueryOptions);
 
-    //this.registerSubQueryPreAggregations(subQuery);
-    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, dimensionMapping], null, 2)}\n*/`; // + subQuery.buildParamAnnotatedSql();
+    this.registerSubQueryPreAggregations(subQuery);
+    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, dimensionMapping], null, 2)}\n*/` + subQuery.buildParamAnnotatedSql();
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
@@ -6125,7 +6124,7 @@ export class BaseQuery {
     return {
       sql: `(${subQuerySql})`,
       subQueryAlias: subQueryAlias,
-      correlatedWhereClause: 'true'
+      correlatedWhereClause
     };
   }
 
