@@ -5703,8 +5703,8 @@ export class BaseQuery {
             );
         } else {
           // Regular dimension or implicit expression dependency
-          const rightTdItems = mainQueryContext.timeDimensions.map.get(rightDimension) || [];
-          const originalMetadata = rightTdItems.find(item => !item.isExpression);
+          const leftTdItems = mainQueryContext.timeDimensions.map.get(leftDimension) || [];
+          const originalMetadata = leftTdItems.find(item => !item.isExpression);
 
           if(!isExpressionDimension && originalMetadata) {
               subQueryTimeDimensions.push({
@@ -5715,7 +5715,7 @@ export class BaseQuery {
             });
 
             if(originalMetadata.original?.granularity) {
-                subOriginalTimeDimensionsMetadata.push({metadata: originalMetadata, dimension: leftDimension, operator: operator});
+                subOriginalTimeDimensionsMetadata.push({metadata: originalMetadata, dimension: rightDimension, operator: operator});
             }
           } else {
             return;
@@ -5738,8 +5738,8 @@ export class BaseQuery {
           subOriginalDimensionsMetadata.push({metadata: expressionMetadata, dimension: expressionMetadata.original?.expressionName, operator: operator});
         } else {
           // Regular dimension - find original metadata from mainQueryContext (same as addTimeDimension)
-          const rightDimItems = mainQueryContext.dimensions.map.get(rightDimension) || [];
-          const originalMetadata = rightDimItems.find(item => !item.isExpression);
+          const leftDimItems = mainQueryContext.dimensions.map.get(leftDimension) || [];
+          const originalMetadata = leftDimItems.find(item => !item.isExpression);
 
           if (!isExpressionDimension && originalMetadata) {
             subQueryDimensions.push(rightDimension);
