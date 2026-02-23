@@ -6081,7 +6081,7 @@ export class BaseQuery {
      *
      * Format: subquery.column_alias = main_query.dimension_sql
      */
-    const correlatedWhereClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
+    const correlatedWhereClause = () => subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
       .map(({ metadata, dimension, operator }) => {
 
         const dimensionAlias = getSubQueryColumnName(metadata, dimension);
@@ -6124,7 +6124,7 @@ export class BaseQuery {
     return {
       sql: `(${subQuerySql})`,
       subQueryAlias: subQueryAlias,
-      correlatedWhereClause
+      correlatedWhereClause: 'true'
     };
   }
 
