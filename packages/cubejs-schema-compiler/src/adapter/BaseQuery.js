@@ -5964,7 +5964,7 @@ export class BaseQuery {
     const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
 
     //const subQuery = this.newSubQuery(subQueryOptions);
-    const subQuery = {};
+    const subQuery = null;
 
     //this.registerSubQueryPreAggregations(subQuery);
     const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, dimensionMapping], null, 2)}\n*/`; // + subQuery.buildParamAnnotatedSql();
@@ -6023,7 +6023,9 @@ export class BaseQuery {
      * Get column alias for dimension in subQuery
      * Mirrors BaseDimension/BaseTimeDimension unescapedAliasName logic
      */
-    const getSubQueryColumnName = (metadata, dimension) => {
+    const getSubQueryColumnName = (metadata, dimension) => {      
+      if (!subQuery) return null;
+
       const original = metadata?.original;
       if (!original) return null;
 
