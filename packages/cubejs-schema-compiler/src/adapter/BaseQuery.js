@@ -5442,23 +5442,25 @@ export class BaseQuery {
      */
     let validatedAllowedDimensions = allowedDimensions
       .map(({ leftDimension, rightDimension, operator }) => {
+        const normalizedLeftDimension = normalizeDimensionPath(leftDimension);
+        if (!normalizedLeftDimension) return null;
+        
         const normalizedRightDimension = normalizeDimensionPath(rightDimension);
         if (!normalizedRightDimension) return null;
-        
+
         // Check if rightDimension is expression dimension by name
-        // const expressionMetadata = findExpressionDimensionByName(normalizedRightDimension);
+        // const expressionMetadata = findExpressionDimensionByName(normalizedLeftDimension);
 
         // Validate existence
         const existsInMainQuery = 
-          mainQueryContext.dimensions.set.has(normalizedRightDimension) || 
-          mainQueryContext.timeDimensions.set.has(normalizedRightDimension);
+          mainQueryContext.dimensions.set.has(normalizedLeftDimension) || 
+          mainQueryContext.timeDimensions.set.has(normalizedLeftDimension);
      
         const dimensionType = getDimensionType(leftDimension);
 
         return {
-          leftDimension,
+          leftDimension: normalizedLeftDimension,
           rightDimension: normalizedRightDimension,
-          originalRightDimension: rightDimension,
           operator,
           type: dimensionType,
           isExpressionDimension: false,
@@ -5467,7 +5469,7 @@ export class BaseQuery {
         };
       })
       .filter(Boolean)
-      .filter(({ leftDimension, rightDimension, originalRightDimension, isExpressionDimension, expressionMetadata }) => {
+      .filter(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata }) => {
 
         // Validate type compatibility
         const leftDimensionType = getDimensionType(leftDimension);
@@ -5475,7 +5477,7 @@ export class BaseQuery {
 
         if (leftDimensionType !== rightDimensionType) {
           throw new UserError(
-            `Correlated dimensions '${leftDimension}' and '${originalRightDimension}' ` +
+            `Correlated dimensions '${leftDimension}' and '${rightDimension}' ` +
             `must have the same type but are '${leftDimensionType}' and '${rightDimensionType}'.`
           );
         }
@@ -5534,7 +5536,6 @@ export class BaseQuery {
         return {
           leftDimension: exprName,
           rightDimension: exprName,
-          originalRightDimension: exprName,
           operator: '=',
           type: exprItem.type,
           isExpressionDimension: true,
@@ -5543,7 +5544,7 @@ export class BaseQuery {
         };
 
       }).filter(Boolean)
-      .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, originalRightDimension, isPresented, type }) => {
+      .forEach(({ rightDimension, leftDimension, isExpressionDimension, expressionMetadata, isPresented, type }) => {
         if (!expressionMetadata) return;
         
         const rightCubeName = expressionMetadata.original.expressionCubeName || expressionMetadata.original.cubeName;
@@ -5609,7 +5610,6 @@ export class BaseQuery {
             leftDimension, 
             isExpressionDimension, 
             expressionMetadata, 
-            originalRightDimension, 
             operator: operator,
             type,
             isPresented
@@ -5723,7 +5723,7 @@ export class BaseQuery {
         }
 
         processed.timeDimensions.add(leftDimension);
-        allowedSubQueryDimensions.add(leftDimension);
+        allowedSubQueryDimensions.add(rightDimension);
       };
 
       /**
@@ -5750,7 +5750,7 @@ export class BaseQuery {
         }
 
         processed.dimensions.add(leftDimension);
-        allowedSubQueryDimensions.add(leftDimension);
+        allowedSubQueryDimensions.add(rightDimension);
       };
 
       // Process all validated allowed dimensions
@@ -5963,14 +5963,10 @@ export class BaseQuery {
     const subQueryAlias = correlatedQuery?.subQueryAlias;
     const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
 
-    const subQuery = null; // = this.newSubQuery(subQueryOptions);
-
-    const a =  validatedAllowedDimensions.map(({ leftDimension, rightDimension }) => 
-        [rightDimension, leftDimension]
-      );
+    const subQuery = this.newSubQuery(subQueryOptions);
 
     //this.registerSubQueryPreAggregations(subQuery);
-    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions, a, correlatedQuery?.allowedDimensions], null, 2)}\n*/`; // + subQuery.buildParamAnnotatedSql();
+    const subQuerySql = `/*\n${JSON.stringify([subQueryOptions], null, 2)}\n*/` + subQuery.buildParamAnnotatedSql();
 
     // ============================================================================
     // STEP 14: Build pre-aggregation context for main query
@@ -6128,7 +6124,7 @@ export class BaseQuery {
     return {
       sql: `(${subQuerySql})`,
       subQueryAlias: subQueryAlias,
-      correlatedWhereClause: 'true'
+      correlatedWhereClause
     };
   }
 
