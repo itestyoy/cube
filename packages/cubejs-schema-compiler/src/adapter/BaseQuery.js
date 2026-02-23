@@ -5823,21 +5823,21 @@ export class BaseQuery {
       if (config.excludeFilters.has(normalizedFilterMember)) return null;
 
       // Regular dimension or measure
-      const leftMember = dimensionMapping.get(normalizedFilterMember);
+      const rightMember = validatedAllowedDimensions.find(d => d.leftDimension == normalizedFilterMember)?.rightDimension;
 
-      if (hasAllowedDimensions && leftMember && allowedSubQueryDimensions.has(leftMember)) {
+      if (hasAllowedDimensions && rightMember) {
 
         if (filter.dimension) {
           return {
             ...filter,
-            dimension: leftMember
+            dimension: rightMember
           };
         }
 
         if (filter.member) {
           return {
             ...filter,
-            member: leftMember
+            member: rightMember
           };
         }
 
