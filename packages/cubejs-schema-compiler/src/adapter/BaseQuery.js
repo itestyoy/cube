@@ -5723,7 +5723,7 @@ export class BaseQuery {
         }
 
         processed.timeDimensions.add(leftDimension);
-        allowedSubQueryDimensions.add(rightDimension);
+        allowedSubQueryDimensions.add(leftDimension);
       };
 
       /**
@@ -5750,7 +5750,7 @@ export class BaseQuery {
         }
 
         processed.dimensions.add(leftDimension);
-        allowedSubQueryDimensions.add(rightDimension);
+        allowedSubQueryDimensions.add(leftDimension);
       };
 
       // Process all validated allowed dimensions
