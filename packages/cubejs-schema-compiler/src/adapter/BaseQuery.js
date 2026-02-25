@@ -5963,17 +5963,7 @@ export class BaseQuery {
     const subQueryAlias = correlatedQuery?.subQueryAlias;
     const escapedSubQueryAlias = this.escapeColumnName(subQueryAlias);
 
-    const subQuery = this.newSubQuery({
-      rowLimit: subQueryOptions.rowLimit,
-      measures: subQueryOptions.measures,
-      dimensions: subQueryOptions.dimensions,
-      filters: subQueryOptions.filters,
-      segments: subQueryOptions.segments,
-      timeDimensions: subQueryOptions.timeDimensions,
-      order: subQueryOptions.order,
-      timezone: subQueryOptions.timezone,
-    });
-
+    const subQuery = this.newSubQuery(subQueryOptions);
     this.registerSubQueryPreAggregations(subQuery);
 
     const subQuerySql = `/*\n${JSON.stringify([subQueryOptions], null, 2)}\n*/` + subQuery.buildParamAnnotatedSql();
