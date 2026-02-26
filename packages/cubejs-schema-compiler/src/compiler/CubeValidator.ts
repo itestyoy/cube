@@ -419,6 +419,8 @@ const BaseMeasure = {
     includeFilters: Joi.array().items(Joi.object()),
     excludeFilters: Joi.array().items(Joi.string()),
     filtersRequiresDimension: Joi.array().items(Joi.string()),
+    asJoin: Joi.boolean().strict(),
+    joinType: Joi.string(),
   }).custom((value, helpers) => {
     if (!value.allowedDimensions?.length && !value.calculateMeasures?.length) {
       return helpers.error('any.invalid', { message: 'correlatedQuery requires allowedDimensions or calculateMeasures' });

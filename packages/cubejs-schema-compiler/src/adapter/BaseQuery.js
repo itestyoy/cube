@@ -804,6 +804,12 @@ export class BaseQuery {
      * @type {Array<{sql: string, on: {expression: Function}, joinType: 'LEFT' | 'INNER', alias: string}>}
      */
     this.customSubQueryJoins = this.options.subqueryJoins ?? [];
+    /**
+     * Pre-built join items from correlatedQuery with asJoin: true.
+     * Unlike customSubQueryJoins, these already have fully resolved SQL/ON clauses.
+     * @type {Array<{sql: string, alias: string, on: string, joinType: string}>}
+     */
+    this.correlatedSubQueryJoins = [];
     this.useNativeSqlPlanner = this.options.useNativeSqlPlanner ?? getEnv('nativeSqlPlanner');
     this.canUseNativeSqlPlannerPreAggregation = getEnv('nativeSqlPlannerPreAggregations');
     if (this.useNativeSqlPlanner && !this.canUseNativeSqlPlannerPreAggregation && !this.neverUseSqlPlannerPreaggregation()) {
@@ -2731,7 +2737,10 @@ export class BaseQuery {
   }
 
   query() {
-    return this.from && this.joinSql([this.from]) || this.joinQuery(this.join, this.collectFromMembers(
+    if (this.from) {
+      return this.joinSql([this.from, ...this.correlatedSubQueryJoins]);
+    }
+    return this.joinQuery(this.join, this.collectFromMembers(
       false,
       this.collectSubQueryDimensionsFor.bind(this),
       'collectSubQueryDimensionsFor'
@@ -2792,6 +2801,7 @@ export class BaseQuery {
       ...(subQueryDimensionsByCube[join.root] || []).map(d => this.subQueryJoin(d)),
       ...joins,
       ...this.customSubQueryJoins.map((customJoin) => this.customSubQueryJoin(customJoin)),
+      ...this.correlatedSubQueryJoins,
     ]);
   }
 
@@ -4145,11 +4155,23 @@ export class BaseQuery {
               name
             );
 
+            if (correlated.asJoin) {
+              // Register as a LEFT JOIN instead of embedding inline subquery (deduplicate by alias)
+              if (!this.correlatedSubQueryJoins.some(j => j.alias === correlated.alias)) {
+                this.correlatedSubQueryJoins.push({
+                  alias: correlated.alias, 
+                  on: correlated.on, 
+                  joinType: correlated.joinType, 
+                  sql: correlated.sql
+                });
+              }
+            }
+
             if (typeof sql === 'string') {
               sql = sql
                 .replace(/\{\{\s*subQuery\s*\}\}/g, correlated.sql)
-                .replace(/\{\{\s*subQueryAlias\s*\}\}/g, correlated.subQueryAlias)
-                .replace(/\{\{\s*correlatedWhereClause\s*\}\}/g, correlated.correlatedWhereClause || '1=1');
+                .replace(/\{\{\s*subQueryAlias\s*\}\}/g, correlated.alias)
+                .replace(/\{\{\s*correlatedWhereClause\s*\}\}/g, correlated.on || '1=1');
             }
             if (typeof sql !== 'string') {
               throw new UserError(`Correlated measure must resolve to SQL string for ${cubeName}.${name}`);
@@ -5068,6 +5090,9 @@ export class BaseQuery {
    * @param {Array} correlatedQuery.includeFilters - Additional filters to include in subquery
    * @param {Object} correlatedQuery.optionOverrides - Options to override in subquery
    * @param {string} correlatedQuery.subQueryAlias - Custom alias for subquery
+   * @param {boolean} [correlatedQuery.asJoin=false] - When true, adds subquery as LEFT JOIN instead of inline correlated subquery.
+   *   Generates: LEFT JOIN (subQuerySql) AS subQueryAlias ON correlatedWhereClause
+   * @param {string} [correlatedQuery.joinType='LEFT'] - Join type when asJoin is true ('LEFT' or 'INNER')
    * @param {string} cubeName - Name of the cube containing the measure
    * @param {string} memberName - Name of the measure being processed
    * 
@@ -5075,6 +5100,8 @@ export class BaseQuery {
    *   - sql: SQL string for the subquery
    *   - subQueryAlias: Alias for the subquery
    *   - correlatedWhereClause: WHERE clause for correlation
+   *   - asJoin: boolean indicating if this should be used as a JOIN
+   *   - joinItem: (only when asJoin=true) Pre-built join item {sql, alias, on, joinType}
    */
   buildCorrelatedSubQuery(correlatedQuery, cubeName, memberName) {
     // ============================================================================
@@ -6082,7 +6109,7 @@ export class BaseQuery {
      *
      * Format: subquery.column_alias = main_query.dimension_sql
      */
-    const correlatedWhereClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
+    const onClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
       .map(({ metadata, dimension, operator }) => {
 
         const dimensionAlias = getSubQueryColumnName(metadata, dimension);
@@ -6124,8 +6151,10 @@ export class BaseQuery {
     
     return {
       sql: `(${subQuerySql})`,
-      subQueryAlias: subQueryAlias,
-      correlatedWhereClause
+      alias: subQueryAlias,
+      on: onClause,
+      asJoin: correlatedQuery.asJoin || false,
+      joinType: correlatedQuery.joinType || 'LEFT',
     };
   }
 

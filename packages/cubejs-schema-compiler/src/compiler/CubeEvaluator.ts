@@ -72,6 +72,8 @@ export type MeasureDefinition = {
     includeFilters?: any[];
     excludeFilters?: string[];
     filtersRequiresDimension?: string[];
+    asJoin?: boolean;
+    joinType?: string;
   };
   ownedByCube: boolean;
   rollingWindow?: any
