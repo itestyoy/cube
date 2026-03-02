@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.6.17](https://github.com/cube-js/cube/compare/v1.6.16...v1.6.17) (2026-02-26)
+
+### Bug Fixes
+
+- **cube:** Issue with calculated measures in pre-aggragations ([#10429](https://github.com/cube-js/cube/issues/10429)) ([58bfe5e](https://github.com/cube-js/cube/commit/58bfe5e567e5999aba2e75e32a662fbba652bd02))
+- **schema-compiler:** Allow no-cache queries to use pre-aggregations ([#10440](https://github.com/cube-js/cube/issues/10440)) ([22286f5](https://github.com/cube-js/cube/commit/22286f50beeddadc93bcfba0b7055b114d06a824))
+
 ## [1.6.16](https://github.com/cube-js/cube/compare/v1.6.15...v1.6.16) (2026-02-25)
 
 ### Bug Fixes

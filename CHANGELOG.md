@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.6.17](https://github.com/cube-js/cube/compare/v1.6.16...v1.6.17) (2026-02-26)
+
+### Bug Fixes
+
+- **cube:** Issue with calculated measures in pre-aggragations ([#10429](https://github.com/cube-js/cube/issues/10429)) ([58bfe5e](https://github.com/cube-js/cube/commit/58bfe5e567e5999aba2e75e32a662fbba652bd02))
+- **cubestore:** Don't print all tables in error message ([#10442](https://github.com/cube-js/cube/issues/10442)) ([cbf40df](https://github.com/cube-js/cube/commit/cbf40dfe113cf9a836708cd3e9e7a219d982a459))
+- **docs:** Use VERCEL_GIT_PREVIOUS_SHA for deployment checks ([7be6536](https://github.com/cube-js/cube/commit/7be65365e07cabbe745094ba4db6ac25d7b274cf))
+- **schema-compiler:** Allow no-cache queries to use pre-aggregations ([#10440](https://github.com/cube-js/cube/issues/10440)) ([22286f5](https://github.com/cube-js/cube/commit/22286f50beeddadc93bcfba0b7055b114d06a824))
+
 ## [1.6.16](https://github.com/cube-js/cube/compare/v1.6.15...v1.6.16) (2026-02-25)
 
 ### Bug Fixes

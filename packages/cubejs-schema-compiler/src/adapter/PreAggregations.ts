@@ -40,6 +40,7 @@ export type PreAggregationForQuery = {
   preAggregationName: string;
   cube: string;
   canUsePreAggregation: boolean;
+  leafMeasureMatch?: boolean;
   preAggregationId: string;
   preAggregation: PreAggregationDefinitionExtended;
   references: PreAggregationReferences;
@@ -79,7 +80,8 @@ export type RollupJoinItem = JoinEdgeWithMembers & {
 
 export type RollupJoin = RollupJoinItem[];
 
-export type CanUsePreAggregationFn = (references: PreAggregationReferences) => boolean;
+export type CanUsePreAggregationResult = { canUse: boolean; leafMeasureMatch: boolean };
+export type CanUsePreAggregationFn = (references: PreAggregationReferences) => CanUsePreAggregationResult;
 
 /**
  * TODO: Write a real type.
@@ -678,7 +680,7 @@ export class PreAggregations {
     /**
      * Determine whether pre-aggregation can be used or not.
      */
-    const canUsePreAggregationNotAdditive: CanUsePreAggregationFn = (references: PreAggregationReferences): boolean => {
+    const canUsePreAggregationNotAdditive: CanUsePreAggregationFn = (references: PreAggregationReferences): CanUsePreAggregationResult => {
       const qryTimeDimensions = references.allowNonStrictDateRangeMatch
         ? transformedQuery.timeDimensions
         : transformedQuery.sortedTimeDimensions;
@@ -686,7 +688,7 @@ export class PreAggregations {
       const refTimeDimensions = backAlias(sortTimeDimensions(references.timeDimensions));
       const backAliasMeasures = backAlias(references.measures);
       const backAliasDimensions = backAlias(references.dimensions);
-      return ((
+      const canUse = ((
         transformedQuery.hasNoTimeDimensionsWithoutGranularity
       ) && (
         !transformedQuery.hasCumulativeMeasures
@@ -706,6 +708,7 @@ export class PreAggregations {
         // TODO do we need backAlias here?
         R.all(m => backAliasMeasures.includes(m), transformedQuery.leafMeasures)
       ));
+      return { canUse: !!canUse, leafMeasureMatch: false };
     };
 
     /**
@@ -750,7 +753,7 @@ export class PreAggregations {
         .map((newGranularity) => [dimension, newGranularity]);
     };
 
-    const canUsePreAggregationLeafMeasureAdditive: CanUsePreAggregationFn = (references): boolean => {
+    const canUsePreAggregationLeafMeasureAdditive: CanUsePreAggregationFn = (references): CanUsePreAggregationResult => {
       /**
        * Array of 2-element arrays with dimension and granularity.
        * @type {Array<Array<string>>}
@@ -772,7 +775,7 @@ export class PreAggregations {
         if (transformedQuery.leafMeasures.some(m => references.multipliedMeasures?.includes(m)) ||
           transformedQuery.measures.some(m => backAliasMultipliedMeasures.includes(m))
         ) {
-          return false;
+          return { canUse: false, leafMeasureMatch: true };
         }
       }
 
@@ -809,32 +812,36 @@ export class PreAggregations {
             dimensionsMatch(transformedQuery.sortedUsedCubePrimaryKeys, true) || dimensionsMatch(transformedQuery.sortedUsedCubePrimaryKeys, false)
           )
         ) {
-          return false;
+          return { canUse: false, leafMeasureMatch: true };
         }
       }
 
       const backAliasMeasures = backAlias(references.measures);
-      return ((
+      const canUse = ((
         windowGranularityMatches(references)
       ) && (
         R.all(
           (m: string) => references.measures.indexOf(m) !== -1,
           references.rollups.length > 0 ? transformedQuery.leafMeasures : transformedQuery.leafMeasuresFullPaths,
-        ) || R.all(
+        ) || (transformedQuery.isAdditive && R.all(
           m => backAliasMeasures.indexOf(m) !== -1,
           transformedQuery.measures,
-        )
+        ))
       ) && (
         dimensionsMatch(transformedQuery.sortedDimensions, true) && timeDimensionsMatch(queryTimeDimensionsList, true) ||
         dimensionsMatch(transformedQuery.ownedDimensions, false) && timeDimensionsMatch(ownedQueryTimeDimensionsList, false)
       ));
+      return { canUse: !!canUse, leafMeasureMatch: true };
     };
 
     const canUseFn: CanUsePreAggregationFn =
       (
         transformedQuery.leafMeasureAdditive && !transformedQuery.hasMultipliedMeasures && !transformedQuery.hasMultiStage || transformedQuery.ungrouped
-      ) ? ((r: PreAggregationReferences): boolean => canUsePreAggregationLeafMeasureAdditive(r) ||
-          canUsePreAggregationNotAdditive(r))
+      ) ? ((r: PreAggregationReferences): CanUsePreAggregationResult => {
+          const leaf = canUsePreAggregationLeafMeasureAdditive(r);
+          if (leaf.canUse) return leaf;
+          return canUsePreAggregationNotAdditive(r);
+        })
         : canUsePreAggregationNotAdditive;
 
     if (refs) {
@@ -971,7 +978,7 @@ export class PreAggregations {
   }
 
   public getRollupPreAggregationByName(cube, preAggregationName): PreAggregationForQueryWithTableName | {} {
-    const canUsePreAggregation = () => true;
+    const canUsePreAggregation: CanUsePreAggregationFn = () => ({ canUse: true, leafMeasureMatch: false });
     const preAggregation = R.pipe(
       R.toPairs,
       R.filter(([_, a]) => a.type === 'rollup' || a.type === 'rollupJoin' || a.type === 'rollupLambda'),
@@ -1115,13 +1122,17 @@ export class PreAggregations {
     canUsePreAggregation: CanUsePreAggregationFn
   ): PreAggregationForQuery {
     const references = this.evaluateAllReferences(cube, preAggregation, preAggregationName);
+    const rollupResult = preAggregation.type === 'rollup'
+      ? canUsePreAggregation(references)
+      : { canUse: false, leafMeasureMatch: false };
     const preAggObj: PreAggregationForQuery = {
       preAggregationName,
       preAggregation,
       cube,
       // For rollupJoin and rollupLambda we need to enrich references with data
       // from the underlying rollups which are collected later;
-      canUsePreAggregation: preAggregation.type === 'rollup' ? canUsePreAggregation(references) : false,
+      canUsePreAggregation: rollupResult.canUse,
+      leafMeasureMatch: rollupResult.leafMeasureMatch,
       references,
       preAggregationId: `${cube}.${preAggregationName}`
     };
@@ -1143,10 +1154,12 @@ export class PreAggregations {
         references.rollupsReferences.push(preAgg.references);
       });
       const rollupJoin = this.buildRollupJoin(preAggObj, preAggregationsToJoin);
+      const joinResult = canUsePreAggregation(references);
 
       return {
         ...preAggObj,
-        canUsePreAggregation: canUsePreAggregation(references),
+        canUsePreAggregation: joinResult.canUse,
+        leafMeasureMatch: joinResult.leafMeasureMatch,
         preAggregationsToJoin,
         rollupJoin,
       };
@@ -1196,9 +1209,11 @@ export class PreAggregations {
       referencedPreAggregations.forEach(preAgg => {
         references.rollupsReferences.push(preAgg.references);
       });
+      const lambdaResult = canUsePreAggregation(references);
       return {
         ...preAggObj,
-        canUsePreAggregation: canUsePreAggregation(references),
+        canUsePreAggregation: lambdaResult.canUse,
+        leafMeasureMatch: lambdaResult.leafMeasureMatch,
         referencedPreAggregations,
       };
     } else {
@@ -1602,6 +1617,13 @@ export class PreAggregations {
     return Object.fromEntries(measures
       .flatMap(path => {
         const measure = this.query.newMeasure(path);
+
+        // Skip non-additive measures in leaf-measure match mode —
+        // they will be recomputed from their leaf measures
+        if (preAggregationForQuery.leafMeasureMatch && !measure.isAdditive()) {
+          return [];
+        }
+
         const measurePath = measure.path();
         const column = this.query.ungrouped ? measure.aliasName() : (this.query.aggregateOnGroupedColumn(
           measure.measureDefinition(),
