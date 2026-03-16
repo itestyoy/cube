@@ -3,6 +3,47 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.6.20](https://github.com/cube-js/cube/compare/v1.6.19...v1.6.20) (2026-03-09)
+
+### Bug Fixes
+
+- **cube:** Issue with rollup pre-aggragations matching for views ([#10474](https://github.com/cube-js/cube/issues/10474)) ([7160283](https://github.com/cube-js/cube/commit/7160283c7dac5d5696cf683b8e59418e58453821))
+- **cubesql:** Do not panic when executing `MEASURE` function ([#10472](https://github.com/cube-js/cube/issues/10472)) ([3202d51](https://github.com/cube-js/cube/commit/3202d517dce747831ff2549f30f4888b11bb005b))
+
+### Features
+
+- **backend-native:** Add `throwContinueWait` parameter to `/cubesql` API endpoint ([#10385](https://github.com/cube-js/cube/issues/10385)) ([3687c5f](https://github.com/cube-js/cube/commit/3687c5f422d6b265409a3e539fc77f37df207eb1))
+- **cubestore-driver:** Share process-id with Cube Store ([#10477](https://github.com/cube-js/cube/issues/10477)) ([36c4aa2](https://github.com/cube-js/cube/commit/36c4aa2736122d14098b1ca3ec15c0828b5527e4))
+
+## [1.6.19](https://github.com/cube-js/cube/compare/v1.6.18...v1.6.19) (2026-03-03)
+
+### Bug Fixes
+
+- **api-gateway:** Accept `cache` parameter in WebSocket requests, fix [#10451](https://github.com/cube-js/cube/issues/10451) ([#10453](https://github.com/cube-js/cube/issues/10453)) ([5e8d0eb](https://github.com/cube-js/cube/commit/5e8d0ebf96e93afe5d8e7c1a5f2ae278b1671c17))
+- **api-gateway:** Remove Transfer-Encoding header on /cubesql error responses, fix [#10450](https://github.com/cube-js/cube/issues/10450) ([#10455](https://github.com/cube-js/cube/issues/10455)) ([1b4f137](https://github.com/cube-js/cube/commit/1b4f1375233cf3064f7d9cf909f053b9fc195541))
+- **query-orchestrator:** Queue - improve performance for high concurrency ([#9705](https://github.com/cube-js/cube/issues/9705)) ([7a3c1a6](https://github.com/cube-js/cube/commit/7a3c1a6dababeca87ec0279f168657c0742d9137))
+
+## [1.6.18](https://github.com/cube-js/cube/compare/v1.6.17...v1.6.18) (2026-03-02)
+
+### Bug Fixes
+
+- **client-core:** return null instead of undefined when query is cancelled by mutex, fix [#10261](https://github.com/cube-js/cube/issues/10261) ([#10274](https://github.com/cube-js/cube/issues/10274)) ([ea6b3e7](https://github.com/cube-js/cube/commit/ea6b3e78afc1aea7f020d44c7505ea14cfc4fe02))
+
+### Features
+
+- **client-core:** Add cache mode option to load method, thanks [@hannosgit](https://github.com/hannosgit) ([#10446](https://github.com/cube-js/cube/issues/10446)) ([aabbbc6](https://github.com/cube-js/cube/commit/aabbbc6d44408d368fd32a8f2c64b91c64d0437d))
+- **client-react:** Allow to pass cache mode as option ([#10447](https://github.com/cube-js/cube/issues/10447)) ([03e8ca5](https://github.com/cube-js/cube/commit/03e8ca53e8e92eb19a84587a475982a42261aba4))
+- **schema-compiler:** Add duplicate folder name and time shift validation ([#10423](https://github.com/cube-js/cube/issues/10423)) ([2000373](https://github.com/cube-js/cube/commit/200037317fc1f90edf169ce02d7967fa331a09f4))
+
+## [1.6.17](https://github.com/cube-js/cube/compare/v1.6.16...v1.6.17) (2026-02-26)
+
+### Bug Fixes
+
+- **cube:** Issue with calculated measures in pre-aggragations ([#10429](https://github.com/cube-js/cube/issues/10429)) ([58bfe5e](https://github.com/cube-js/cube/commit/58bfe5e567e5999aba2e75e32a662fbba652bd02))
+- **cubestore:** Don't print all tables in error message ([#10442](https://github.com/cube-js/cube/issues/10442)) ([cbf40df](https://github.com/cube-js/cube/commit/cbf40dfe113cf9a836708cd3e9e7a219d982a459))
+- **docs:** Use VERCEL_GIT_PREVIOUS_SHA for deployment checks ([7be6536](https://github.com/cube-js/cube/commit/7be65365e07cabbe745094ba4db6ac25d7b274cf))
+- **schema-compiler:** Allow no-cache queries to use pre-aggregations ([#10440](https://github.com/cube-js/cube/issues/10440)) ([22286f5](https://github.com/cube-js/cube/commit/22286f50beeddadc93bcfba0b7055b114d06a824))
+
 ## [1.6.16](https://github.com/cube-js/cube/compare/v1.6.15...v1.6.16) (2026-02-25)
 
 ### Bug Fixes
