@@ -1694,9 +1694,10 @@ class ApiGateway {
     normalizedQuery: NormalizedQuery,
     sqlQuery: any,
   ): Promise<ResultWrapper> {
+    const cubeQueryComment = `/* Cube Query: ${JSON.stringify(normalizedQuery).replace(/\*\//g, '* /')} */\n`;
     const queries: QueryBody[] = [{
       ...sqlQuery,
-      query: sqlQuery.sql[0],
+      query: cubeQueryComment + sqlQuery.sql[0],
       values: sqlQuery.sql[1],
       cacheMode: normalizedQuery.cacheMode,
       requestId: context.requestId,
@@ -1717,9 +1718,10 @@ class ApiGateway {
         context,
         [normalizedTotal],
       );
+      const totalQueryComment = `/* Cube Query (total): ${JSON.stringify(normalizedTotal).replace(/\*\//g, '* /')} */\n`;
       queries.push({
         ...totalQuery,
-        query: totalQuery.sql[0],
+        query: totalQueryComment + totalQuery.sql[0],
         values: totalQuery.sql[1],
         cacheMode: normalizedTotal.cacheMode,
         requestId: context.requestId,
