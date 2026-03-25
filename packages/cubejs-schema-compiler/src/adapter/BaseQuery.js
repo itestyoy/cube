@@ -4153,12 +4153,13 @@ export class BaseQuery {
 
             if (correlated.asJoin) {
               // Register as a LEFT JOIN instead of embedding inline subquery (deduplicate by alias)
+              // Use joinOn (all operators forced to '=') and joinSql (from joinSubQuery template or fallback to subQuery)
               if (!this.correlatedSubQueryJoins.some(j => j.alias === correlated.alias)) {
                 this.correlatedSubQueryJoins.push({
-                  alias: correlated.alias, 
-                  on: correlated.on, 
-                  joinType: correlated.joinType, 
-                  sql: correlated.sql
+                  alias: correlated.alias,
+                  on: correlated.joinOn,
+                  joinType: correlated.joinType,
+                  sql: correlated.joinSql
                 });
               }
             }
@@ -4167,7 +4168,10 @@ export class BaseQuery {
               sql = sql
                 .replace(/\{\{\s*subQuery\s*\}\}/g, correlated.sql)
                 .replace(/\{\{\s*subQueryAlias\s*\}\}/g, correlated.alias)
-                .replace(/\{\{\s*correlatedWhereClause\s*\}\}/g, correlated.on || '1=1');
+                .replace(/\{\{\s*correlatedWhereClause\s*\}\}/g, correlated.on || '1=1')
+                .replace(/\{\{\s*correlatedJoinClause\s*\}\}/g, correlated.correlatedJoinClause || '1=1')
+                .replace(/\{\{\s*usedDimensions\s*\}\}/g, (correlated.usedDimensions || []).join(', '))
+                .replace(/\{\{\s*mainAlias\s*\}\}/g, correlated.mainAlias || '');
             }
             if (typeof sql !== 'string') {
               throw new UserError(`Correlated measure must resolve to SQL string for ${cubeName}.${name}`);
@@ -6101,56 +6105,98 @@ export class BaseQuery {
     };
 
     /**
-     * Build WHERE clause for correlation
-     *
-     * Format: subquery.column_alias = main_query.dimension_sql
+     * Build correlated clause entries (reused for onClause and joinOnClause)
+     * Format: subquery.column_alias <operator> main_query.dimension_sql
      */
-    const onClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
-      .map(({ metadata, dimension, operator }) => {
+    const buildClauseEntries = (forceEqualOperator) =>
+      subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
+        .map(({ metadata, dimension, operator }) => {
 
-        const dimensionAlias = getSubQueryColumnName(metadata, dimension);
-        if (!dimensionAlias) return null;
+          const dimensionAlias = getSubQueryColumnName(metadata, dimension);
+          if (!dimensionAlias) return null;
 
-        const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimensionAlias)}`;
+          const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimensionAlias)}`;
 
-        const original = metadata?.original;
-        if (!original) return null;
+          const original = metadata?.original;
+          if (!original) return null;
 
-        let mainQuerySql;
+          let mainQuerySql;
 
-        // Expression dimension (SQL pushdown / member expression)
-        if (original.expression) {
-          try {
-            mainQuerySql = this.evaluateSql(original.expressionCubeName, original.expression);
-            
-          } catch (e) {
-            return null;
-          }
-        } else {
+          // Expression dimension (SQL pushdown / member expression)
+          if (original.expression) {
+            try {
+              mainQuerySql = this.evaluateSql(original.expressionCubeName, original.expression);
+            } catch (e) {
+              return null;
+            }
+          } else {
             if (original.dimensionSql) {
               mainQuerySql = getMainQueryDimensionSql(original);
             } else {
               return null;
             }
-        }
+          }
 
-        if (!mainQuerySql) return null;
+          if (!mainQuerySql) return null;
 
-        return `${subQueryColumn} ${operator} ${mainQuerySql}`;
-      })
-      .filter(Boolean)
-      .join(' AND ') || 'true';
+          const effectiveOperator = forceEqualOperator ? '=' : operator;
+          return `${subQueryColumn} ${effectiveOperator} ${mainQuerySql}`;
+        })
+        .filter(Boolean)
+        .join(' AND ') || 'true';
+
+    const onClause = buildClauseEntries(false);
+    const joinOnClause = buildClauseEntries(true);
 
     // ============================================================================
     // STEP 16: Return result
     // ============================================================================
-    
+
+    const usedDimensions = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
+      .map(({ metadata, dimension }) => {
+        const col = getSubQueryColumnName(metadata, dimension);
+        return col ? `${escapedSubQueryAlias}.${this.escapeColumnName(col)}` : null;
+      })
+      .filter(Boolean);
+
+    const effectiveMainAlias = mainQueryAlias || this.cubeAlias(cubeName);
+
+    // correlatedJoinClause: mainAlias.col <operator> subQueryAlias.col (both column names from subquery)
+    const correlatedJoinClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
+      .map(({ metadata, dimension, operator }) => {
+        const dimensionAlias = getSubQueryColumnName(metadata, dimension);
+        if (!dimensionAlias) return null;
+        const escapedCol = this.escapeColumnName(dimensionAlias);
+        return `${effectiveMainAlias}.${escapedCol} ${operator} ${escapedSubQueryAlias}.${escapedCol}`;
+      })
+      .filter(Boolean)
+      .join(' AND ') || 'true';
+
+    // Build joinSql from joinSubQuery template if provided, otherwise fall back to subQuery sql
+    const rawSubQuerySql = `(${subQuerySql})`;
+    let joinSql = rawSubQuerySql;
+
+    if (correlatedQuery.joinSubQuery && typeof correlatedQuery.joinSubQuery === 'string') {
+      joinSql = correlatedQuery.joinSubQuery
+        .replace(/\{\{\s*subQuery\s*\}\}/g, rawSubQuerySql)
+        .replace(/\{\{\s*subQueryAlias\s*\}\}/g, subQueryAlias)
+        .replace(/\{\{\s*correlatedWhereClause\s*\}\}/g, onClause || '1=1')
+        .replace(/\{\{\s*correlatedJoinClause\s*\}\}/g, correlatedJoinClause)
+        .replace(/\{\{\s*usedDimensions\s*\}\}/g, usedDimensions.join(', '))
+        .replace(/\{\{\s*mainAlias\s*\}\}/g, effectiveMainAlias || '');
+    }
+
     return {
-      sql: `(${subQuerySql})`,
+      sql: rawSubQuerySql,
       alias: subQueryAlias,
       on: onClause,
+      joinOn: joinOnClause,
+      correlatedJoinClause,
+      joinSql,
       asJoin: correlatedQuery.asJoin || false,
       joinType: correlatedQuery.joinType || 'LEFT',
+      usedDimensions,
+      mainAlias: effectiveMainAlias,
     };
   }
 
