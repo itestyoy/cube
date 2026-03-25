@@ -9,7 +9,7 @@ pub use count::*;
 use super::common::AggregationType;
 use super::MemberSymbol;
 use crate::planner::query_tools::QueryTools;
-use crate::planner::sql_evaluator::{sql_nodes::SqlNode, SqlCall, SqlEvaluatorVisitor};
+use crate::planner::sql_evaluator::{sql_nodes::SqlNode, CubeRef, SqlCall, SqlEvaluatorVisitor};
 use crate::planner::sql_templates::PlanSqlTemplates;
 use cubenativeutils::CubeError;
 use std::rc::Rc;
@@ -90,15 +90,6 @@ impl MeasureKind {
         }
     }
 
-    pub fn get_dependencies_with_path(&self) -> Vec<(Rc<MemberSymbol>, Vec<String>)> {
-        match self {
-            Self::Count(c) => c.get_dependencies_with_path(),
-            Self::Aggregated(a) => a.get_dependencies_with_path(),
-            Self::Calculated(c) => c.get_dependencies_with_path(),
-            Self::Rank => vec![],
-        }
-    }
-
     pub fn apply_to_deps<F: Fn(&Rc<MemberSymbol>) -> Result<Rc<MemberSymbol>, CubeError>>(
         &self,
         f: &F,
@@ -117,6 +108,15 @@ impl MeasureKind {
             Self::Aggregated(a) => a.iter_sql_calls(),
             Self::Calculated(c) => c.iter_sql_calls(),
             Self::Rank => Box::new(std::iter::empty()),
+        }
+    }
+
+    pub fn get_cube_refs(&self) -> Vec<CubeRef> {
+        match self {
+            Self::Count(c) => c.get_cube_refs(),
+            Self::Aggregated(a) => a.get_cube_refs(),
+            Self::Calculated(c) => c.get_cube_refs(),
+            Self::Rank => vec![],
         }
     }
 
@@ -229,6 +229,10 @@ impl MeasureKind {
                 AggregationType::Min => AggregateWrap::Function("min"),
                 AggregationType::Max => AggregateWrap::Function("max"),
                 _ => AggregateWrap::Function("sum"),
+            },
+            Self::Calculated(c) => match c.calc_type() {
+                CalculatedMeasureType::Number => AggregateWrap::Function("sum"),
+                _ => AggregateWrap::Function("max"),
             },
             _ => AggregateWrap::Function("sum"),
         }

@@ -27,6 +27,7 @@ export const nonStringFields = new Set([
   'useOriginalSqlPreAggregations',
   'readOnly',
   'prefix',
+  'mask',
 ]);
 
 const identifierRegex = /^[_a-zA-Z][_a-zA-Z0-9]*$/;
@@ -258,6 +259,13 @@ const dimensionNumericFormatSchema = Joi.alternatives([
   customNumericFormatSchema
 ]);
 
+const MaskSchema = Joi.alternatives([
+  Joi.object().keys({ sql: Joi.func().required() }),
+  Joi.number(),
+  Joi.boolean().strict(),
+  Joi.string(),
+]);
+
 const BaseDimensionWithoutSubQuery = {
   aliases: Joi.array().items(Joi.string()),
   type: Joi.any().valid('string', 'number', 'boolean', 'time', 'geo').required(),
@@ -271,6 +279,7 @@ const BaseDimensionWithoutSubQuery = {
   dynamicSql: Joi.func(),
   suggestFilterValues: Joi.boolean().strict(),
   enableSuggestions: Joi.boolean().strict(),
+  mask: MaskSchema,
   format: Joi.when('type', {
     switch: [
       { is: 'time', then: timeFormatSchema },
@@ -391,6 +400,7 @@ const BaseMeasure = {
   // TODO: Deprecate and remove, please use public
   shown: Joi.boolean().strict(),
   cumulative: Joi.boolean().strict(),
+  mask: MaskSchema,
   filters: Joi.array().items(
     Joi.object().keys({
       sql: Joi.func().required()
@@ -974,6 +984,19 @@ const MemberLevelPolicySchema = Joi.object().keys({
   excludesMembers: Joi.array().items(Joi.string().required()),
 });
 
+const MemberMaskingPolicySchema = Joi.object().keys({
+  includes: Joi.alternatives([
+    Joi.string().valid('*'),
+    Joi.array().items(Joi.string())
+  ]),
+  excludes: Joi.alternatives([
+    Joi.string().valid('*'),
+    Joi.array().items(Joi.string().required())
+  ]),
+  includesMembers: Joi.array().items(Joi.string().required()),
+  excludesMembers: Joi.array().items(Joi.string().required()),
+});
+
 const RowLevelPolicySchema = Joi.object().keys({
   filters: Joi.array().items(PolicyFilterSchema, PolicyFilterConditionSchema),
   allowAll: Joi.boolean().valid(true).strict(),
@@ -984,6 +1007,7 @@ const RolePolicySchema = Joi.object().keys({
   group: Joi.string(),
   groups: Joi.array().items(Joi.string()),
   memberLevel: MemberLevelPolicySchema,
+  memberMasking: MemberMaskingPolicySchema,
   rowLevel: RowLevelPolicySchema,
   conditions: Joi.array().items(Joi.object().keys({
     if: Joi.func().required(),
@@ -992,7 +1016,8 @@ const RolePolicySchema = Joi.object().keys({
   .nand('group', 'groups') // Cannot have both group and groups
   .nand('role', 'group') // Cannot have both role and group
   .nand('role', 'groups') // Cannot have both role and groups
-  .or('role', 'group', 'groups'); // Must have at least one
+  .or('role', 'group', 'groups') // Must have at least one
+  .with('memberMasking', 'memberLevel'); // memberMasking requires memberLevel
 
 /* *****************************
  * ATTENTION:

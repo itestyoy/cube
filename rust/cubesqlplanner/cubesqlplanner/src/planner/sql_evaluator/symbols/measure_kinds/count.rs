@@ -1,6 +1,6 @@
 use super::super::MemberSymbol;
 use crate::planner::query_tools::QueryTools;
-use crate::planner::sql_evaluator::{sql_nodes::SqlNode, SqlCall, SqlEvaluatorVisitor};
+use crate::planner::sql_evaluator::{sql_nodes::SqlNode, CubeRef, SqlCall, SqlEvaluatorVisitor};
 use crate::planner::sql_templates::PlanSqlTemplates;
 use cubenativeutils::CubeError;
 use std::rc::Rc;
@@ -72,19 +72,6 @@ impl CountMeasure {
         deps
     }
 
-    pub fn get_dependencies_with_path(&self) -> Vec<(Rc<MemberSymbol>, Vec<String>)> {
-        let mut deps = vec![];
-        match &self.sql {
-            CountSql::Explicit(sql) => sql.extract_symbol_deps_with_path(&mut deps),
-            CountSql::Auto(pk_sqls) => {
-                for pk in pk_sqls {
-                    pk.extract_symbol_deps_with_path(&mut deps);
-                }
-            }
-        }
-        deps
-    }
-
     pub fn apply_to_deps<F: Fn(&Rc<MemberSymbol>) -> Result<Rc<MemberSymbol>, CubeError>>(
         &self,
         f: &F,
@@ -107,6 +94,19 @@ impl CountMeasure {
             CountSql::Explicit(sql) => Box::new(std::iter::once(sql)),
             CountSql::Auto(pk_sqls) => Box::new(pk_sqls.iter()),
         }
+    }
+
+    pub fn get_cube_refs(&self) -> Vec<CubeRef> {
+        let mut refs = vec![];
+        match &self.sql {
+            CountSql::Explicit(sql) => sql.extract_cube_refs(&mut refs),
+            CountSql::Auto(pk_sqls) => {
+                for pk in pk_sqls {
+                    pk.extract_cube_refs(&mut refs);
+                }
+            }
+        }
+        refs
     }
 
     pub fn is_owned_by_cube(&self) -> bool {

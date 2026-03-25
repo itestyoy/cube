@@ -1,7 +1,7 @@
 use super::super::common::DimensionType;
 use super::super::MemberSymbol;
 use crate::planner::query_tools::QueryTools;
-use crate::planner::sql_evaluator::{sql_nodes::SqlNode, SqlCall, SqlEvaluatorVisitor};
+use crate::planner::sql_evaluator::{sql_nodes::SqlNode, CubeRef, SqlCall, SqlEvaluatorVisitor};
 use crate::planner::sql_templates::PlanSqlTemplates;
 use cubenativeutils::CubeError;
 use std::rc::Rc;
@@ -45,10 +45,8 @@ impl RegularDimension {
         deps
     }
 
-    pub fn get_dependencies_with_path(&self) -> Vec<(Rc<MemberSymbol>, Vec<String>)> {
-        let mut deps = vec![];
-        self.member_sql.extract_symbol_deps_with_path(&mut deps);
-        deps
+    pub fn get_cube_refs(&self) -> Vec<CubeRef> {
+        self.member_sql.get_cube_refs()
     }
 
     pub fn apply_to_deps<F: Fn(&Rc<MemberSymbol>) -> Result<Rc<MemberSymbol>, CubeError>>(

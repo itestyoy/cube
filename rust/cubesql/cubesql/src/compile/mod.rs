@@ -37,7 +37,7 @@ mod tests {
     };
     use crate::{
         compile::{
-            engine::df::scan::MemberField,
+            engine::df::scan::{CacheMode, MemberField},
             rewrite::rewriter::Rewriter,
             test::{get_sixteen_char_member_cube, get_string_cube_meta},
         },
@@ -18589,5 +18589,112 @@ LIMIT {{ limit }}{% endif %}"#.to_string(),
         assert!(error.to_string().contains("required to be pushed down"));
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_set_cache_mode() -> Result<(), CubeError> {
+        if !Rewriter::sql_push_down_enabled() {
+            return Ok(());
+        }
+        init_testing_logger();
+
+        let context = TestContext::new(DatabaseProtocol::PostgreSQL).await;
+
+        context
+            .execute_query("SET cube_cache = 'must-revalidate'")
+            .await?;
+
+        // Test that cache mode has been successfully applied
+        let query = r#"
+            SELECT order_date
+            FROM KibanaSampleDataEcommerce
+            GROUP BY 1
+        "#;
+        let expected_cube_scan = V1LoadRequestQuery {
+            measures: Some(vec![]),
+            dimensions: Some(vec!["KibanaSampleDataEcommerce.order_date".to_string()]),
+            segments: Some(vec![]),
+            order: Some(vec![]),
+            ..Default::default()
+        };
+        let cube_scan = context
+            .convert_sql_to_cube_query(&query)
+            .await
+            .unwrap()
+            .as_logical_plan()
+            .find_cube_scan();
+        assert_eq!(cube_scan.request, expected_cube_scan);
+        assert_eq!(
+            cube_scan.options.cache_mode,
+            Some(CacheMode::MustRevalidate),
+        );
+
+        // Test that cache mode correctly resets to default
+        context.execute_query("SET cube_cache = DEFAULT").await?;
+
+        let query = r#"
+            SELECT order_date
+            FROM KibanaSampleDataEcommerce
+            GROUP BY 1
+        "#;
+        let expected_cube_scan = V1LoadRequestQuery {
+            measures: Some(vec![]),
+            dimensions: Some(vec!["KibanaSampleDataEcommerce.order_date".to_string()]),
+            segments: Some(vec![]),
+            order: Some(vec![]),
+            ..Default::default()
+        };
+        let cube_scan = context
+            .convert_sql_to_cube_query(&query)
+            .await
+            .unwrap()
+            .as_logical_plan()
+            .find_cube_scan();
+        assert_eq!(cube_scan.request, expected_cube_scan);
+        assert_eq!(cube_scan.options.cache_mode, None,);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_distinct_time_dimension() {
+        if !Rewriter::sql_push_down_enabled() {
+            return;
+        }
+        init_testing_logger();
+
+        let logical_plan = convert_select_to_query_plan(
+            r#"
+            SELECT DISTINCT
+                DATE_TRUNC('day', order_date) AS month
+            FROM KibanaSampleDataEcommerce
+            WHERE order_date >= '2025-01-01'::date AND order_date < '2025-02-01'::date
+            LIMIT 5
+            "#
+            .to_string(),
+            DatabaseProtocol::PostgreSQL,
+        )
+        .await
+        .as_logical_plan();
+
+        assert_eq!(
+            logical_plan.find_cube_scan().request,
+            V1LoadRequestQuery {
+                measures: Some(vec![]),
+                dimensions: Some(vec![]),
+                segments: Some(vec![]),
+                time_dimensions: Some(vec![V1LoadRequestQueryTimeDimension {
+                    dimension: "KibanaSampleDataEcommerce.order_date".to_string(),
+                    granularity: Some("day".to_string()),
+                    date_range: Some(json!(vec![
+                        "2025-01-01T00:00:00.000Z".to_string(),
+                        "2025-01-31T23:59:59.999Z".to_string(),
+                    ])),
+                }]),
+                order: Some(vec![]),
+                limit: Some(5),
+                ..Default::default()
+            }
+        )
     }
 }

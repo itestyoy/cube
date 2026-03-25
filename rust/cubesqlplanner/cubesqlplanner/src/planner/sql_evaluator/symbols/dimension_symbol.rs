@@ -1,4 +1,5 @@
 use super::common::Case;
+use super::common::CompiledMemberPath;
 use super::dimension_kinds::{
     CaseDimension, DimensionKind, GeoDimension, RegularDimension, SwitchDimension,
 };
@@ -8,8 +9,10 @@ use crate::cube_bridge::dimension_definition::DimensionDefinition;
 use crate::cube_bridge::evaluator::CubeEvaluator;
 use crate::cube_bridge::member_sql::MemberSql;
 use crate::planner::query_tools::QueryTools;
-use crate::planner::sql_evaluator::{sql_nodes::SqlNode, Compiler, SqlCall, SqlEvaluatorVisitor};
-use crate::planner::sql_evaluator::{CubeTableSymbol, TimeDimensionSymbol};
+use crate::planner::sql_evaluator::TimeDimensionSymbol;
+use crate::planner::sql_evaluator::{
+    sql_nodes::SqlNode, Compiler, CubeRef, SqlCall, SqlEvaluatorVisitor,
+};
 use crate::planner::sql_templates::PlanSqlTemplates;
 use crate::planner::GranularityHelper;
 use crate::planner::SqlInterval;
@@ -25,10 +28,8 @@ pub struct CalendarDimensionTimeShift {
 
 #[derive(Clone)]
 pub struct DimensionSymbol {
-    cube: Rc<CubeTableSymbol>,
-    name: String,
+    compiled_path: CompiledMemberPath,
     kind: DimensionKind,
-    alias: String,
     is_reference: bool, // Symbol is a direct reference to another symbol without any calculations
     is_view: bool,
     add_group_by: Option<Vec<Rc<MemberSymbol>>>,
@@ -38,14 +39,13 @@ pub struct DimensionSymbol {
     is_multi_stage: bool,
     is_sub_query: bool,
     propagate_filters_to_sub_query: bool,
+    mask_sql: Option<Rc<SqlCall>>,
 }
 
 impl DimensionSymbol {
     pub fn new(
-        cube: Rc<CubeTableSymbol>,
-        name: String,
+        compiled_path: CompiledMemberPath,
         kind: DimensionKind,
-        alias: String,
         is_reference: bool,
         is_view: bool,
         add_group_by: Option<Vec<Rc<MemberSymbol>>>,
@@ -55,12 +55,11 @@ impl DimensionSymbol {
         is_multi_stage: bool,
         is_sub_query: bool,
         propagate_filters_to_sub_query: bool,
+        mask_sql: Option<Rc<SqlCall>>,
     ) -> Rc<Self> {
         Rc::new(Self {
-            cube,
-            name,
+            compiled_path,
             kind,
-            alias,
             is_reference,
             is_view,
             add_group_by,
@@ -70,6 +69,7 @@ impl DimensionSymbol {
             is_multi_stage,
             is_sub_query,
             propagate_filters_to_sub_query,
+            mask_sql,
         })
     }
 
@@ -81,8 +81,8 @@ impl DimensionSymbol {
         templates: &PlanSqlTemplates,
     ) -> Result<String, CubeError> {
         self.kind.evaluate_sql(
-            &self.name,
-            &self.full_name(),
+            self.compiled_path.name(),
+            self.compiled_path.full_name(),
             visitor,
             node_processor,
             query_tools,
@@ -137,12 +137,20 @@ impl DimensionSymbol {
         self.time_shift_pk_full_name.clone()
     }
 
+    pub fn compiled_path(&self) -> &CompiledMemberPath {
+        &self.compiled_path
+    }
+
+    pub fn strip_join_prefix(&mut self) {
+        self.compiled_path = self.compiled_path.strip_join_prefix();
+    }
+
     pub fn full_name(&self) -> String {
-        format!("{}.{}", self.cube.cube_name(), self.name)
+        self.compiled_path.full_name().clone()
     }
 
     pub fn alias(&self) -> String {
-        self.alias.clone()
+        self.compiled_path.alias().clone()
     }
 
     pub fn owned_by_cube(&self) -> bool {
@@ -155,6 +163,10 @@ impl DimensionSymbol {
 
     pub fn is_sub_query(&self) -> bool {
         self.is_sub_query
+    }
+
+    pub fn mask_sql(&self) -> &Option<Rc<SqlCall>> {
+        &self.mask_sql
     }
 
     pub fn add_group_by(&self) -> &Option<Vec<Rc<MemberSymbol>>> {
@@ -225,20 +237,24 @@ impl DimensionSymbol {
         self.kind.get_dependencies()
     }
 
-    pub fn get_dependencies_with_path(&self) -> Vec<(Rc<MemberSymbol>, Vec<String>)> {
-        self.kind.get_dependencies_with_path()
+    pub fn get_cube_refs(&self) -> Vec<CubeRef> {
+        self.kind.get_cube_refs()
     }
 
-    pub fn cube_name(&self) -> &String {
-        self.cube.cube_name()
+    pub fn cube_name(&self) -> String {
+        self.compiled_path.cube_name().clone()
     }
 
     pub fn join_map(&self) -> &Option<Vec<Vec<String>>> {
-        self.cube.join_map()
+        self.compiled_path.join_map()
     }
 
-    pub fn name(&self) -> &String {
-        &self.name
+    pub fn name(&self) -> String {
+        self.compiled_path.name().clone()
+    }
+
+    pub fn path(&self) -> &Vec<String> {
+        self.compiled_path.path()
     }
 
     pub fn calendar_time_shift_for_interval(
@@ -283,6 +299,7 @@ impl DimensionSymbol {
 pub struct DimensionSymbolFactory {
     path: SymbolPath,
     sql: Option<Rc<dyn MemberSql>>,
+    mask_sql: Option<Rc<dyn MemberSql>>,
     definition: Rc<dyn DimensionDefinition>,
     cube_evaluator: Rc<dyn CubeEvaluator>,
 }
@@ -294,9 +311,11 @@ impl DimensionSymbolFactory {
     ) -> Result<Self, CubeError> {
         let definition = cube_evaluator.dimension_by_path(path.full_name().clone())?;
         let sql = definition.sql()?;
+        let mask_sql = definition.mask_sql()?;
         Ok(Self {
             path,
             sql,
+            mask_sql,
             definition,
             cube_evaluator,
         })
@@ -308,6 +327,7 @@ impl SymbolFactory for DimensionSymbolFactory {
         let Self {
             path,
             sql,
+            mask_sql,
             definition,
             cube_evaluator,
         } = self;
@@ -316,6 +336,12 @@ impl SymbolFactory for DimensionSymbolFactory {
 
         let sql = if let Some(sql) = sql {
             Some(compiler.compile_sql_call(path.cube_name(), sql)?)
+        } else {
+            None
+        };
+
+        let mask_sql = if let Some(mask_sql) = mask_sql {
+            Some(compiler.compile_sql_call(path.cube_name(), mask_sql)?)
         } else {
             None
         };
@@ -361,11 +387,15 @@ impl SymbolFactory for DimensionSymbolFactory {
         };
 
         let cube = cube_evaluator.cube_from_path(path.cube_name().clone())?;
-        let alias = PlanSqlTemplates::member_alias_name(
-            cube.static_data().resolved_alias(),
-            path.symbol_name(),
-            &None,
-        );
+        let alias = compiler
+            .alias_for_member(path.full_name())
+            .unwrap_or_else(|| {
+                PlanSqlTemplates::member_alias_name(
+                    cube.static_data().resolved_alias(),
+                    path.symbol_name(),
+                    &None,
+                )
+            });
         let is_view = cube.static_data().is_view.unwrap_or(false);
         let is_calendar = cube.static_data().is_calendar.unwrap_or(false);
         let mut is_self_time_shift_pk = false;
@@ -462,15 +492,19 @@ impl SymbolFactory for DimensionSymbolFactory {
             .propagate_filters_to_sub_query
             .unwrap_or(false);
 
-        let cube_symbol = compiler
-            .add_cube_table_evaluator(path.cube_name().clone())?
-            .as_cube_table()?;
+        let cube_symbol = compiler.add_cube_table_evaluator(path.cube_name().clone(), vec![])?;
+
+        let compiled_path = CompiledMemberPath::new(
+            cube_symbol,
+            path.full_name().clone(),
+            path.symbol_name().clone(),
+            alias,
+            path.path().clone(),
+        );
 
         let symbol = MemberSymbol::new_dimension(DimensionSymbol::new(
-            cube_symbol,
-            path.symbol_name().clone(),
+            compiled_path,
             kind,
-            alias,
             is_reference,
             is_view,
             add_group_by,
@@ -480,6 +514,7 @@ impl SymbolFactory for DimensionSymbolFactory {
             is_multi_stage,
             is_sub_query,
             propagate_filters_to_sub_query,
+            mask_sql,
         ));
 
         if let Some(granularity) = path.granularity() {

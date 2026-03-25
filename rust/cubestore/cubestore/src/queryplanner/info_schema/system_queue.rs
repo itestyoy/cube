@@ -3,7 +3,9 @@ use crate::queryplanner::info_schema::timestamp_nanos_or_panic;
 use crate::queryplanner::{InfoSchemaTableDef, InfoSchemaTableDefContext};
 use crate::CubeError;
 use async_trait::async_trait;
-use datafusion::arrow::array::{ArrayRef, Int64Array, StringArray, TimestampNanosecondArray};
+use datafusion::arrow::array::{
+    ArrayRef, BooleanArray, Int64Array, StringArray, TimestampNanosecondArray,
+};
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use std::sync::Arc;
 
@@ -44,6 +46,9 @@ impl InfoSchemaTableDef for SystemQueueTableDef {
             ),
             Field::new("value", DataType::Utf8, false),
             Field::new("extra", DataType::Utf8, true),
+            Field::new("process_id", DataType::Utf8, true),
+            Field::new("exclusive", DataType::Boolean, false),
+            Field::new("external_id", DataType::Utf8, true),
         ]
     }
 
@@ -114,6 +119,27 @@ impl InfoSchemaTableDef for SystemQueueTableDef {
                     items
                         .iter()
                         .map(|row| row.item.get_row().get_extra().clone()),
+                ))
+            }),
+            Box::new(|items| {
+                Arc::new(StringArray::from_iter(
+                    items
+                        .iter()
+                        .map(|row| row.item.get_row().get_process_id().clone()),
+                ))
+            }),
+            Box::new(|items| {
+                Arc::new(BooleanArray::from_iter(
+                    items
+                        .iter()
+                        .map(|row| Some(row.item.get_row().get_exclusive())),
+                ))
+            }),
+            Box::new(|items| {
+                Arc::new(StringArray::from_iter(
+                    items
+                        .iter()
+                        .map(|row| row.item.get_row().get_external_id().clone()),
                 ))
             }),
         ]
