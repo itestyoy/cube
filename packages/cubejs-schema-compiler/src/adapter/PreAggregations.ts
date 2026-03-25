@@ -1602,7 +1602,8 @@ export class PreAggregations {
       () => {
         const selectPart = this.query.selectAllDimensionsAndMeasures(measures);
         // Build FROM after selectAllDimensionsAndMeasures so that correlatedSubQueryJoins are populated
-        const fullFrom = this.query.joinSql([...toJoin, ...this.query.correlatedSubQueryJoins]);
+        const correlatedJoins = this.query.correlatedSubQueryJoins || [];
+        const fullFrom = this.query.joinSql([...toJoin, ...correlatedJoins] as [any, ...any[]]);
         return `SELECT ${selectPart} FROM ${fullFrom} ${this.query.baseWhere(replacedFilters)}` +
           this.query.groupByClause() +
           (
