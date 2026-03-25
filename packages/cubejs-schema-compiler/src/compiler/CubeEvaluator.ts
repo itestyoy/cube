@@ -74,6 +74,7 @@ export type MeasureDefinition = {
     filtersRequiresDimension?: string[];
     asJoin?: boolean;
     joinType?: string;
+    joinSubQuery?: string;
   };
   ownedByCube: boolean;
   rollingWindow?: any
