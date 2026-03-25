@@ -6177,13 +6177,13 @@ export class BaseQuery {
     let joinSql = rawSubQuerySql;
 
     if (correlatedQuery.joinSubQuery && typeof correlatedQuery.joinSubQuery === 'string') {
-      joinSql = correlatedQuery.joinSubQuery
+      joinSql = `(${correlatedQuery.joinSubQuery
         .replace(/\{\{\s*subQuery\s*\}\}/g, rawSubQuerySql)
         .replace(/\{\{\s*subQueryAlias\s*\}\}/g, subQueryAlias)
         .replace(/\{\{\s*correlatedWhereClause\s*\}\}/g, onClause || '1=1')
         .replace(/\{\{\s*correlatedJoinClause\s*\}\}/g, correlatedJoinClause)
         .replace(/\{\{\s*usedDimensions\s*\}\}/g, usedDimensions.join(', '))
-        .replace(/\{\{\s*mainAlias\s*\}\}/g, effectiveMainAlias || '');
+        .replace(/\{\{\s*mainAlias\s*\}\}/g, effectiveMainAlias || '')})`;
     }
 
     return {
