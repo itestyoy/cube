@@ -1580,8 +1580,6 @@ export class PreAggregations {
       toJoin = [sqlAndAlias(preAggregationForQuery)];
     }
 
-    const from = this.query.joinSql(toJoin);
-
     const replacedFilters =
       filters || [...this.query.segments, ...this.query.filters, ...(
         this.query.timeDimensions.map(dimension => dimension.dateRange && ({
@@ -1601,14 +1599,19 @@ export class PreAggregations {
 
     return this.query.evaluateSymbolSqlWithContext(
       // eslint-disable-next-line prefer-template
-      () => `SELECT ${this.query.selectAllDimensionsAndMeasures(measures)} FROM ${from} ${this.query.baseWhere(replacedFilters)}` +
-        this.query.groupByClause() +
-        (
-          isFullSimpleQuery ?
-            this.query.baseHaving(this.query.measureFilters) +
-            this.query.orderBy() +
-            this.query.groupByDimensionLimit() : ''
-        ),
+      () => {
+        const selectPart = this.query.selectAllDimensionsAndMeasures(measures);
+        // Build FROM after selectAllDimensionsAndMeasures so that correlatedSubQueryJoins are populated
+        const fullFrom = this.query.joinSql([...toJoin, ...this.query.correlatedSubQueryJoins]);
+        return `SELECT ${selectPart} FROM ${fullFrom} ${this.query.baseWhere(replacedFilters)}` +
+          this.query.groupByClause() +
+          (
+            isFullSimpleQuery ?
+              this.query.baseHaving(this.query.measureFilters) +
+              this.query.orderBy() +
+              this.query.groupByDimensionLimit() : ''
+          );
+      },
       {
         renderedReference,
         rollupQuery: true,
