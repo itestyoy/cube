@@ -1,6 +1,6 @@
 use super::super::super::MemberSymbol;
 use crate::planner::query_tools::QueryTools;
-use crate::planner::sql_evaluator::{sql_nodes::SqlNode, SqlCall, SqlEvaluatorVisitor};
+use crate::planner::sql_evaluator::{sql_nodes::SqlNode, CubeRef, SqlCall, SqlEvaluatorVisitor};
 use crate::planner::sql_templates::PlanSqlTemplates;
 use cubenativeutils::CubeError;
 use std::rc::Rc;
@@ -86,14 +86,6 @@ impl CalculatedMeasure {
         deps
     }
 
-    pub fn get_dependencies_with_path(&self) -> Vec<(Rc<MemberSymbol>, Vec<String>)> {
-        let mut deps = vec![];
-        if let Some(sql) = &self.member_sql {
-            sql.extract_symbol_deps_with_path(&mut deps);
-        }
-        deps
-    }
-
     pub fn apply_to_deps<F: Fn(&Rc<MemberSymbol>) -> Result<Rc<MemberSymbol>, CubeError>>(
         &self,
         f: &F,
@@ -110,6 +102,14 @@ impl CalculatedMeasure {
 
     pub fn iter_sql_calls(&self) -> Box<dyn Iterator<Item = &Rc<SqlCall>> + '_> {
         Box::new(self.member_sql.iter())
+    }
+
+    pub fn get_cube_refs(&self) -> Vec<CubeRef> {
+        let mut refs = vec![];
+        if let Some(sql) = &self.member_sql {
+            sql.extract_cube_refs(&mut refs);
+        }
+        refs
     }
 
     pub fn is_owned_by_cube(&self) -> bool {

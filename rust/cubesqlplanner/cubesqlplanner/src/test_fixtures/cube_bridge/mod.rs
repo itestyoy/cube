@@ -35,6 +35,7 @@ mod mock_sql_templates_render;
 mod mock_sql_utils;
 mod mock_struct_with_sql_member;
 mod mock_timeshift_definition;
+pub mod time_series;
 
 pub use base_query_options::{members_from_strings, MockBaseQueryOptions};
 pub use mock_base_tools::MockBaseTools;
@@ -56,6 +57,7 @@ pub use mock_join_graph::MockJoinGraph;
 pub use mock_join_item::MockJoinItem;
 pub use mock_join_item_definition::MockJoinItemDefinition;
 pub use mock_measure_definition::MockMeasureDefinition;
+pub use mock_member_expression_definition::MockMemberExpressionDefinition;
 pub use mock_member_order_by::MockMemberOrderBy;
 pub use mock_member_sql::MockMemberSql;
 pub use mock_pre_aggregation_description::MockPreAggregationDescription;

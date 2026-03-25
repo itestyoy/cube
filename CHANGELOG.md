@@ -3,6 +3,77 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.6.27](https://github.com/cube-js/cube/compare/v1.6.26...v1.6.27) (2026-03-24)
+
+### Features
+
+- **cubestore:** Queue - allow path lookup, if there was miss on external_id ([#10543](https://github.com/cube-js/cube/issues/10543)) ([8fe8892](https://github.com/cube-js/cube/commit/8fe88921e22bbe2967d68c3a0ef379ae97533347))
+
+## [1.6.26](https://github.com/cube-js/cube/compare/v1.6.25...v1.6.26) (2026-03-23)
+
+### Features
+
+- **cubestore:** Queue - allow to specify EXTERNAL_ID for RESULT ([#10536](https://github.com/cube-js/cube/issues/10536)) ([52a0c21](https://github.com/cube-js/cube/commit/52a0c21175a93c91ded63fecbe255b0d7c3252be))
+
+## [1.6.25](https://github.com/cube-js/cube/compare/v1.6.24...v1.6.25) (2026-03-20)
+
+### Bug Fixes
+
+- **cubestore:** Queue - filter expired queue_results ([#10527](https://github.com/cube-js/cube/issues/10527)) ([fc51856](https://github.com/cube-js/cube/commit/fc5185672cab1199683422e5bddbaba663a1ef38))
+- **docs:** Prevent scroll jump on CodeTabs tab switch ([#10523](https://github.com/cube-js/cube/issues/10523)) ([2270e28](https://github.com/cube-js/cube/commit/2270e28ecee10a45605e92a22d76ee325923fee1))
+- **server-core:** Restore log level inheritance ([#10532](https://github.com/cube-js/cube/issues/10532)) ([703d631](https://github.com/cube-js/cube/commit/703d6312e49521eb188e0c3cd24af16400934b95)), closes [#10144](https://github.com/cube-js/cube/issues/10144)
+
+### Features
+
+- **cubestore:** Queue - introduce external_id support ([#10507](https://github.com/cube-js/cube/issues/10507)) ([73f17b7](https://github.com/cube-js/cube/commit/73f17b7117f740444e445cdfa6b96cc48ee00b44))
+- **cubestore:** Queue - support QUEUE RESULT by $id ([#10529](https://github.com/cube-js/cube/issues/10529)) ([ef98588](https://github.com/cube-js/cube/commit/ef9858857bd933559afe51d211a92fad9067bab0))
+
+## [1.6.24](https://github.com/cube-js/cube/compare/v1.6.23...v1.6.24) (2026-03-18)
+
+### Bug Fixes
+
+- **cubesql:** Push `Distinct` down CubeScan with time dimensions ([#10518](https://github.com/cube-js/cube/issues/10518)) ([028eadc](https://github.com/cube-js/cube/commit/028eadcec1ce7aa294f29395cfb272448e9b08a1))
+- **query-orchestrator:** Return cached result when refreshKey changes during must-revalidate ([#10489](https://github.com/cube-js/cube/issues/10489)) ([e00fe12](https://github.com/cube-js/cube/commit/e00fe125a546926e85b5c1c1be70a46fabcd53ff))
+- **schema-compiler:** Use isNotDistinctFrom() for ClickHouse Tesseract multi-fact joins ([#10494](https://github.com/cube-js/cube/issues/10494)) ([43429eb](https://github.com/cube-js/cube/commit/43429eb59f941036f6e4a7fa22ca670544bb2193)), closes [#10493](https://github.com/cube-js/cube/issues/10493)
+- **tesseract:** Incorrect ubounded rolling window without granularity ([#10508](https://github.com/cube-js/cube/issues/10508)) ([33a68a0](https://github.com/cube-js/cube/commit/33a68a02574c815c748dd5383c421621e220d68d))
+- **tesseract:** Measure with string type ends up with SUM aggregation ([#10516](https://github.com/cube-js/cube/issues/10516)) ([589d20f](https://github.com/cube-js/cube/commit/589d20fc5fb6b93c861e54b1df2901742146a75a))
+- **tesseract:** Pre-aggregations matching should respect join path ([#10500](https://github.com/cube-js/cube/issues/10500)) ([eec59a2](https://github.com/cube-js/cube/commit/eec59a2e4736d4b3a973abe98028fbfd3af54262))
+- **tesseract:** Subquery dimension in filter ([#10506](https://github.com/cube-js/cube/issues/10506)) ([58c0687](https://github.com/cube-js/cube/commit/58c06879b93110336740fc7792144ca1165239df))
+- **tesseract:** Tesseract should respect sql api aliases ([#10505](https://github.com/cube-js/cube/issues/10505)) ([d5f6351](https://github.com/cube-js/cube/commit/d5f635105de2e4e881f5ec8b6a073cb62b031295))
+
+### Features
+
+- **tesseract:** ClickHouse support ([#10515](https://github.com/cube-js/cube/issues/10515)) ([cbdc6e8](https://github.com/cube-js/cube/commit/cbdc6e80108f15320a11b8cb6340251ea704c1db))
+
+## [1.6.23](https://github.com/cube-js/cube/compare/v1.6.22...v1.6.23) (2026-03-13)
+
+### Bug Fixes
+
+- **api-gateway:** Returns null for all measures except the last one, fix [#10482](https://github.com/cube-js/cube/issues/10482) ([#10495](https://github.com/cube-js/cube/issues/10495)) ([cc0b93a](https://github.com/cube-js/cube/commit/cc0b93abd9457b20140101da045cbf15f52a03db)), closes [#10428](https://github.com/cube-js/cube/issues/10428)
+
+### Features
+
+- **cubestore-driver:** Queue - use exclusive flag with new Cube Store ([#10488](https://github.com/cube-js/cube/issues/10488)) ([c6462e4](https://github.com/cube-js/cube/commit/c6462e478bcb8a8b2caccc32787e52a8b2198852))
+- **cubestore:** Filter queue_list by process_id for exclusive items ([#10490](https://github.com/cube-js/cube/issues/10490)) ([8458998](https://github.com/cube-js/cube/commit/84589988b29410f07c213b81405a824f49c599bc))
+- Data access policy masking ([#10463](https://github.com/cube-js/cube/issues/10463)) ([4b0d1bf](https://github.com/cube-js/cube/commit/4b0d1bfe49d8dbd72a9df03718793179e20ed167))
+
+## [1.6.22](https://github.com/cube-js/cube/compare/v1.6.21...v1.6.22) (2026-03-11)
+
+**Note:** Version bump only for package cubejs
+
+## [1.6.21](https://github.com/cube-js/cube/compare/v1.6.20...v1.6.21) (2026-03-10)
+
+### Bug Fixes
+
+- **cubesql:** Support per-column format codes (Tableau Desktop compatibility) ([#10484](https://github.com/cube-js/cube/issues/10484)) ([d6ad885](https://github.com/cube-js/cube/commit/d6ad885f384d675f25ca8405dad4ee5a559e98c3)), closes [#10418](https://github.com/cube-js/cube/issues/10418)
+
+### Features
+
+- **client-core:** Use `throwContinueWait` parameter in `cubeSql` method ([#10461](https://github.com/cube-js/cube/issues/10461)) ([53a80fd](https://github.com/cube-js/cube/commit/53a80fd159fb1655b5ac5b467414b4a5352fae90))
+- **cubesql:** Introduce `cube_cache` session variable ([#10483](https://github.com/cube-js/cube/issues/10483)) ([541aa34](https://github.com/cube-js/cube/commit/541aa3465f25cb55328249b95fa9c258c95f5e07))
+- **cubestore:** Logarithmic probabilistic increment of LFU counter ([#10478](https://github.com/cube-js/cube/issues/10478)) ([4b8ac6f](https://github.com/cube-js/cube/commit/4b8ac6ff81b0ee114cd0bc4a5e8235fe294c53a2))
+- **cubestore:** Queue - add exclusivity support ([#10479](https://github.com/cube-js/cube/issues/10479)) ([b5a0ec3](https://github.com/cube-js/cube/commit/b5a0ec32c061834af0c30bd7def9097ae27af32f))
+
 ## [1.6.20](https://github.com/cube-js/cube/compare/v1.6.19...v1.6.20) (2026-03-09)
 
 ### Bug Fixes

@@ -34,6 +34,8 @@ impl<IT: InnerTypes> BaseQuery<IT> {
             options.join_graph()?,
             options.static_data().timezone.clone(),
             options.static_data().export_annotated_sql,
+            options.static_data().masked_members.clone(),
+            options.static_data().member_to_alias.clone(),
         )?;
 
         let request = QueryProperties::try_new(query_tools.clone(), options)?;
