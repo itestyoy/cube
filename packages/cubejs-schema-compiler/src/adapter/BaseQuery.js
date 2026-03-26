@@ -4173,6 +4173,7 @@ export class BaseQuery {
                 this.correlatedSubQueryJoins.push({
                   alias: correlated.alias,
                   on: correlated.joinOn,
+                  joinOnEntries: correlated.joinOnEntries,
                   joinType: correlated.joinType,
                   sql: correlated.joinSql
                 });
@@ -6137,14 +6138,22 @@ export class BaseQuery {
 
     /**
      * Get SQL for dimension in main query
-     * 
-     * For expression dimensions: Returns SQL expression (e.g., "orders.total / orders.count")
-     * For regular dimensions: Returns column reference (e.g., "orders.total")
-     * 
-     * This is the key difference: Expression dimensions in WHERE clause use their SQL expression,
-     * not just a column reference
+     *
+     * Uses outer renderedReference (from rollupPreAggregation context) when available,
+     * prefixing with effectiveMainAlias. Falls back to STEP 14's mainQueryRenderedReference,
+     * then to plain dimensionSql.
      */
-    const getMainQueryDimensionSql = (original) => {
+    const getMainQueryDimensionSql = (original, dimension) => {
+      // Try outer context's renderedReference (set by rollupPreAggregation)
+      const outerRenderedRef = this.safeEvaluateSymbolContext().renderedReference;
+      if (outerRenderedRef && effectiveMainAlias) {
+        const ref = outerRenderedRef[dimension] || outerRenderedRef[dimension?.toLowerCase()];
+        if (ref) {
+          return `${effectiveMainAlias}.${ref}`;
+        }
+      }
+
+      // Try STEP 14's mainQueryRenderedReference
       if (mainQueryAlias && mainQueryRenderedReference) {
         try {
           const rewrittenSql = this.evaluateSymbolSqlWithContext(
@@ -6155,11 +6164,10 @@ export class BaseQuery {
             return rewrittenSql;
           }
         } catch {
-          // If renderedReference causes resolution issues (e.g. expressionName-only keys),
-          // fall back to plain dimensionSql without rewrites.
+          // fall back to plain dimensionSql
         }
       }
-      
+
       return original.dimensionSql?.();
     };
 
@@ -6190,7 +6198,7 @@ export class BaseQuery {
             }
           } else {
             if (original.dimensionSql) {
-              mainQuerySql = getMainQueryDimensionSql(original);
+              mainQuerySql = getMainQueryDimensionSql(original, dimension);
             } else {
               return null;
             }
@@ -6206,6 +6214,16 @@ export class BaseQuery {
 
     const onClause = buildClauseEntries(false);
     const joinOnClause = buildClauseEntries(true);
+
+    // Raw entries for rebuilding JOIN ON in pre-aggregation context
+    const joinOnEntries = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
+      .map(({ metadata, dimension }) => {
+        const dimensionAlias = getSubQueryColumnName(metadata, dimension);
+        if (!dimensionAlias) return null;
+        const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimensionAlias)}`;
+        return { subQueryColumn, dimension, original: metadata?.original };
+      })
+      .filter(Boolean);
 
     // ============================================================================
     // STEP 16: Return result
@@ -6250,6 +6268,7 @@ export class BaseQuery {
       alias: subQueryAlias,
       on: onClause,
       joinOn: joinOnClause,
+      joinOnEntries,
       correlatedJoinClause,
       joinSql,
       asJoin: correlatedQuery.asJoin || false,
