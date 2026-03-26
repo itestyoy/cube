@@ -6136,6 +6136,8 @@ export class BaseQuery {
       return subQuery.aliasName(dimension);
     };
 
+    const effectiveMainAlias = mainQueryAlias || this.cubeAlias(cubeName);
+
     /**
      * Get SQL for dimension in main query
      *
@@ -6235,8 +6237,6 @@ export class BaseQuery {
         return col ? `${escapedSubQueryAlias}.${this.escapeColumnName(col)}` : null;
       })
       .filter(Boolean);
-
-    const effectiveMainAlias = mainQueryAlias || this.cubeAlias(cubeName);
 
     // correlatedJoinClause: mainAlias.col <operator> subQueryAlias.col (both column names from subquery)
     const correlatedJoinClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
