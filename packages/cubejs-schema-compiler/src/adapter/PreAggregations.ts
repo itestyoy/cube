@@ -1600,6 +1600,9 @@ export class PreAggregations {
     return this.query.evaluateSymbolSqlWithContext(
       // eslint-disable-next-line prefer-template
       () => {
+        // Reset correlatedSubQueryJoins — they may have been populated earlier (e.g. in constructor
+        // via fullKeyQueryAggregateMeasures) without pre-aggregation context, producing wrong column refs.
+        this.query.correlatedSubQueryJoins = [];
         const selectPart = this.query.selectAllDimensionsAndMeasures(measures);
         // Build FROM after selectAllDimensionsAndMeasures so that correlatedSubQueryJoins are populated
         const correlatedJoins = this.query.correlatedSubQueryJoins || [];

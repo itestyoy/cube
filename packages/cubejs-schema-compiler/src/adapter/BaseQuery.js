@@ -6136,26 +6136,16 @@ export class BaseQuery {
       return subQuery.aliasName(dimension);
     };
 
-    const effectiveMainAlias = mainQueryAlias || this.cubeAlias(cubeName);
-
     /**
      * Get SQL for dimension in main query
      *
-     * Uses outer renderedReference (from rollupPreAggregation context) when available,
-     * prefixing with effectiveMainAlias. Falls back to STEP 14's mainQueryRenderedReference,
-     * then to plain dimensionSql.
+     * For expression dimensions: Returns SQL expression (e.g., "orders.total / orders.count")
+     * For regular dimensions: Returns column reference (e.g., "orders.total")
+     *
+     * This is the key difference: Expression dimensions in WHERE clause use their SQL expression,
+     * not just a column reference
      */
-    const getMainQueryDimensionSql = (original, dimension) => {
-      // Try outer context's renderedReference (set by rollupPreAggregation)
-      const outerRenderedRef = this.safeEvaluateSymbolContext().renderedReference;
-      if (outerRenderedRef && effectiveMainAlias) {
-        const ref = outerRenderedRef[dimension] || outerRenderedRef[dimension?.toLowerCase()];
-        if (ref) {
-          return `${effectiveMainAlias}.${ref}`;
-        }
-      }
-
-      // Try STEP 14's mainQueryRenderedReference
+    const getMainQueryDimensionSql = (original) => {
       if (mainQueryAlias && mainQueryRenderedReference) {
         try {
           const rewrittenSql = this.evaluateSymbolSqlWithContext(
@@ -6166,7 +6156,8 @@ export class BaseQuery {
             return rewrittenSql;
           }
         } catch {
-          // fall back to plain dimensionSql
+          // If renderedReference causes resolution issues (e.g. expressionName-only keys),
+          // fall back to plain dimensionSql without rewrites.
         }
       }
 
@@ -6200,7 +6191,7 @@ export class BaseQuery {
             }
           } else {
             if (original.dimensionSql) {
-              mainQuerySql = getMainQueryDimensionSql(original, dimension);
+              mainQuerySql = getMainQueryDimensionSql(original);
             } else {
               return null;
             }
@@ -6237,6 +6228,8 @@ export class BaseQuery {
         return col ? `${escapedSubQueryAlias}.${this.escapeColumnName(col)}` : null;
       })
       .filter(Boolean);
+
+    const effectiveMainAlias = mainQueryAlias || this.cubeAlias(cubeName);
 
     // correlatedJoinClause: mainAlias.col <operator> subQueryAlias.col (both column names from subquery)
     const correlatedJoinClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
