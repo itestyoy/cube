@@ -3133,16 +3133,21 @@ export class BaseQuery {
    */
   cubeSql(cube) {
     // Check for named pre-aggregation source (usePreaggregation option)
-    // We do NOT push to collectOriginalSqlPreAggregations here — the source pre-agg
-    // is already defined in the cube and will be scheduled/built independently by the orchestrator.
-    // The orchestrator's replacePreAggregationTableNames will resolve the logical table name
-    // (including UNION ALL for partitioned sources) at runtime.
     if (this.options.usePreaggregationInPreAggregation &&
       this.options.preAggregationQuery &&
       !this.safeEvaluateSymbolContext().preAggregationQuery
     ) {
       const namedPreAgg = this.preAggregations.findNamedPreAggregationForCube(cube, this.options.usePreaggregationInPreAggregation);
       if (namedPreAgg) {
+        // For non-partitioned sources: collect as dependency so the orchestrator
+        // builds the source before the dependent pre-aggregation.
+        // For partitioned sources: skip collection to avoid Invalid date errors
+        // during partition expansion — the user must ensure ordering via refresh_key.
+        if (this.safeEvaluateSymbolContext().collectOriginalSqlPreAggregations &&
+          !namedPreAgg.preAggregation.partitionGranularity
+        ) {
+          this.safeEvaluateSymbolContext().collectOriginalSqlPreAggregations.push(namedPreAgg);
+        }
         return this.preAggregations.originalSqlPreAggregationTable(namedPreAgg);
       }
     }
