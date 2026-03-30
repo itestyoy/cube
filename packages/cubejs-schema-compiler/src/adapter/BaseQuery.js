@@ -3132,6 +3132,20 @@ export class BaseQuery {
    * @param {string} cube
    */
   cubeSql(cube) {
+    // Check for named pre-aggregation source (usePreaggregation option)
+    if (this.options.usePreaggregationInPreAggregation &&
+      this.options.preAggregationQuery &&
+      !this.safeEvaluateSymbolContext().preAggregationQuery
+    ) {
+      const namedPreAgg = this.preAggregations.findNamedPreAggregationForCube(cube, this.options.usePreaggregationInPreAggregation);
+      if (namedPreAgg) {
+        if (this.safeEvaluateSymbolContext().collectOriginalSqlPreAggregations) {
+          this.safeEvaluateSymbolContext().collectOriginalSqlPreAggregations.push(namedPreAgg);
+        }
+        return this.preAggregations.originalSqlPreAggregationTable(namedPreAgg);
+      }
+    }
+
     const foundPreAggregation = this.preAggregations.findPreAggregationToUseForCube(cube);
     if (foundPreAggregation &&
       (!this.options.preAggregationQuery || this.options.useOriginalSqlPreAggregationsInPreAggregation) &&
@@ -6467,6 +6481,14 @@ export class BaseQuery {
           });
         } else if (preAggregation.type === 'rollup') {
           const query = this.preAggregations.rollupPreAggregationQuery(cube, preAggregation);
+          const usePreagg = query.options.usePreaggregationInPreAggregation;
+          if (usePreagg) {
+            const renderedReference = query.preAggregations.buildRenderedReferenceForSource(cube, usePreagg);
+            return query.evaluateSymbolSqlWithContext(() => query.buildSqlAndParams(), {
+              collectOriginalSqlPreAggregations,
+              renderedReference,
+            });
+          }
           return query.evaluateSymbolSqlWithContext(() => query.buildSqlAndParams(), {
             collectOriginalSqlPreAggregations
           });

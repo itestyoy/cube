@@ -484,6 +484,7 @@ const BasePreAggregationWithoutPartitionGranularity = {
   refreshKey: PreAggregationRefreshKeySchema,
   sqlAlias: Joi.string().optional(),
   useOriginalSqlPreAggregations: Joi.boolean().strict(),
+  usePreaggregation: Joi.string().optional(),
   external: Joi.boolean().strict(),
   scheduledRefresh: Joi.boolean().strict(),
   indexes: Joi.object().pattern(identifierRegex, Joi.alternatives().try(

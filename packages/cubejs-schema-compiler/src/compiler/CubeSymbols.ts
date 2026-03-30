@@ -74,6 +74,7 @@ export type CubeRefreshKey =
 type BasePreAggregationDefinition = {
   allowNonStrictDateRangeMatch?: boolean;
   useOriginalSqlPreAggregations?: boolean;
+  usePreaggregation?: string;
   timeDimensionReference?: (...args: any[]) => ToString;
   indexes?: Record<string, any>;
   refreshKey?: CubeRefreshKey;

@@ -145,7 +145,7 @@ export class PreAggregations {
     }
     if (
       !isInPreAggregationQuery ||
-      isInPreAggregationQuery && this.query.options.useOriginalSqlPreAggregationsInPreAggregation) {
+      isInPreAggregationQuery && (this.query.options.useOriginalSqlPreAggregationsInPreAggregation || this.query.options.usePreaggregationInPreAggregation)) {
       return R.pipe(
         R.map((cube: string) => {
           const { preAggregations } = this.collectOriginalSqlPreAggregations(() => this.query.cubeSql(cube));
@@ -413,6 +413,29 @@ export class PreAggregations {
       };
     }
     return null;
+  }
+
+  public findNamedPreAggregationForCube(cube: string, preAggName: string): PreAggregationForCube | null {
+    const preAggregates = this.query.cubeEvaluator.preAggregationsForCube(cube);
+    const preAggregation = preAggregates[preAggName];
+    if (!preAggregation) {
+      throw new UserError(
+        `Pre-aggregation '${preAggName}' not found in cube '${cube}'. ` +
+        `Available pre-aggregations: ${Object.keys(preAggregates).join(', ')}`
+      );
+    }
+    if (preAggregation.external === true) {
+      throw new UserError(
+        `Pre-aggregation '${preAggName}' in cube '${cube}' cannot be used as source because it has external: true. ` +
+        `Only pre-aggregations with external: false can be used as source for other pre-aggregations.`
+      );
+    }
+    return {
+      preAggregationName: preAggName,
+      preAggregation,
+      cube,
+      references: this.evaluateAllReferences(cube, preAggregation, preAggName)
+    };
   }
 
   public static transformQueryToCanUseForm(query: BaseQuery): TransformedQuery {
@@ -1313,11 +1336,72 @@ export class PreAggregations {
     );
   }
 
+  private static readonly GRANULARITY_ORDER: Record<string, number> = {
+    second: 0,
+    minute: 1,
+    hour: 2,
+    day: 3,
+    week: 4,
+    month: 5,
+    quarter: 6,
+    year: 7,
+  };
+
+  private validatePreaggregationColumns(cube: string, aggregation: PreAggregationDefinitionExtended, references: PreAggregationReferences): void {
+    if (!aggregation.usePreaggregation) {
+      return;
+    }
+    const sourcePreAgg = this.findNamedPreAggregationForCube(cube, aggregation.usePreaggregation);
+    if (!sourcePreAgg) {
+      return;
+    }
+
+    const sourceRefs = sourcePreAgg.references;
+
+    // Validate granularity for each matching time dimension
+    const sourceTimeDimMap = new Map(
+      (sourceRefs.timeDimensions || []).map(td => [td.dimension, td.granularity || 'day'])
+    );
+    for (const targetTd of (references.timeDimensions || [])) {
+      const sourceGranularity = sourceTimeDimMap.get(targetTd.dimension);
+      if (!sourceGranularity) continue;
+      const targetGranularity = targetTd.granularity || 'day';
+      const sourceOrder = PreAggregations.GRANULARITY_ORDER[sourceGranularity];
+      const targetOrder = PreAggregations.GRANULARITY_ORDER[targetGranularity];
+      if (sourceOrder !== undefined && targetOrder !== undefined && targetOrder < sourceOrder) {
+        throw new UserError(
+          `Pre-aggregation '${aggregation.usePreaggregation}' in cube '${cube}' has granularity '${sourceGranularity}' for time dimension '${targetTd.dimension}', ` +
+          `but the dependent pre-aggregation has finer granularity '${targetGranularity}'. ` +
+          `The dependent pre-aggregation's granularity must be equal to or coarser than the source's granularity.`
+        );
+      }
+    }
+
+    const sourceDimensions = new Set(sourceRefs.dimensions || []);
+    const sourceMeasures = new Set(sourceRefs.measures || []);
+    const sourceTimeDimensions = new Set((sourceRefs.timeDimensions || []).map(td => td.dimension));
+
+    const missingDimensions = (references.dimensions || []).filter(d => !sourceDimensions.has(d));
+    const missingMeasures = (references.measures || []).filter(m => !sourceMeasures.has(m));
+    const missingTimeDimensions = (references.timeDimensions || [])
+      .filter(td => !sourceTimeDimensions.has(td.dimension))
+      .map(td => td.dimension);
+
+    const allMissing = [...missingDimensions, ...missingMeasures, ...missingTimeDimensions];
+    if (allMissing.length > 0) {
+      throw new UserError(
+        `Pre-aggregation '${aggregation.usePreaggregation}' in cube '${cube}' is missing members required by the dependent pre-aggregation: ${allMissing.join(', ')}. ` +
+        `Ensure the source pre-aggregation includes all dimensions, measures, and time dimensions used by the dependent pre-aggregation.`
+      );
+    }
+  }
+
   public rollupPreAggregationQuery(cube: string, aggregation: PreAggregationDefinitionExtended, context: EvaluateReferencesContext = {}): BaseQuery {
     // `this.evaluateAllReferences` will retain not only members, but their join path as well, and pass join hints
     // to subquery. Otherwise, members in subquery would regenerate new join tree from clean state,
     // and it can be different from expected by join path in pre-aggregation declaration
     const references = this.evaluateAllReferences(cube, aggregation, null, context);
+    this.validatePreaggregationColumns(cube, aggregation, references);
     const cubeQuery = this.query.newSubQueryForCube(cube, {});
     return this.query.newSubQueryForCube(cube, {
       rowLimit: null,
@@ -1331,6 +1415,8 @@ export class PreAggregations {
       preAggregationQuery: true,
       useOriginalSqlPreAggregationsInPreAggregation:
         aggregation.useOriginalSqlPreAggregations,
+      usePreaggregationInPreAggregation:
+        aggregation.usePreaggregation,
       ungrouped:
         cubeQuery.preAggregationAllowUngroupingWithPrimaryKey(
           cube,
@@ -1355,6 +1441,7 @@ export class PreAggregations {
           this.mergePartitionTimeDimensions(aggregation, aggregation.partitionTimeDimensions),
         preAggregationQuery: true,
         useOriginalSqlPreAggregationsInPreAggregation: aggregation.useOriginalSqlPreAggregations,
+        usePreaggregationInPreAggregation: aggregation.usePreaggregation,
       }
     );
   }
@@ -1710,6 +1797,67 @@ export class PreAggregations {
           [memberPath, column],
         ];
       }));
+  }
+
+  public buildRenderedReferenceForSource(cube: string, sourcePreAggName: string): Record<string, string> {
+    const sourcePreAgg = this.findNamedPreAggregationForCube(cube, sourcePreAggName);
+    if (!sourcePreAgg) return {};
+
+    const sourceRefs = sourcePreAgg.references;
+    const result: Record<string, string> = {};
+
+    // Dimensions: map member path → pre-agg column name
+    for (const dimPath of (sourceRefs.dimensions || [])) {
+      const dim = this.query.newDimension(dimPath);
+      const column = this.query.escapeColumnName(dim.unescapedAliasName());
+      result[dimPath] = column;
+      const dimMemberPath = dim.path();
+      if (dimMemberPath) {
+        const resolved = this.query.cubeEvaluator.pathFromArray(dimMemberPath);
+        if (resolved !== dimPath) {
+          result[resolved] = column;
+        }
+      }
+    }
+
+    // Measures: map member path → aggregated pre-agg column
+    // renderedReference replaces the ENTIRE measure evaluation (including aggregation),
+    // so we must include the aggregate function here (e.g. sum(orders__count))
+    for (const measurePath of (sourceRefs.measures || [])) {
+      const measure = this.query.newMeasure(measurePath);
+      const aliasName = measure.aliasName();
+      const column = this.query.aggregateOnGroupedColumn(
+        measure.measureDefinition(),
+        aliasName,
+        true,
+        measurePath,
+      ) || `sum(${aliasName})`;
+      result[measurePath] = column;
+      const measureMemberPath = measure.path();
+      if (measureMemberPath) {
+        const resolved = this.query.cubeEvaluator.pathFromArray(measureMemberPath);
+        if (resolved !== measurePath) {
+          result[resolved] = column;
+        }
+      }
+    }
+
+    // Time dimensions: map member path → pre-agg column name (each with its own granularity)
+    for (const td of (sourceRefs.timeDimensions || [])) {
+      const timeDim = this.query.newTimeDimension(td);
+      const tdGranularity = td.granularity || 'day';
+      const column = this.query.escapeColumnName(timeDim.unescapedAliasName(tdGranularity));
+      result[td.dimension] = column;
+      const tdPath = timeDim.path();
+      if (tdPath) {
+        const resolved = this.query.cubeEvaluator.pathFromArray(tdPath);
+        if (resolved !== td.dimension) {
+          result[resolved] = column;
+        }
+      }
+    }
+
+    return result;
   }
 
   private rollupMembers<T extends 'measures' | 'dimensions' | 'timeDimensions'>(preAggregationForQuery: PreAggregationForQuery, type: T): PreAggregationReferences[T] {
