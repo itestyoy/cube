@@ -145,7 +145,7 @@ export class PreAggregations {
     }
     if (
       !isInPreAggregationQuery ||
-      isInPreAggregationQuery && (this.query.options.useOriginalSqlPreAggregationsInPreAggregation || this.query.options.usePreaggregationInPreAggregation)) {
+      isInPreAggregationQuery && this.query.options.useOriginalSqlPreAggregationsInPreAggregation) {
       return R.pipe(
         R.map((cube: string) => {
           const { preAggregations } = this.collectOriginalSqlPreAggregations(() => this.query.cubeSql(cube));
