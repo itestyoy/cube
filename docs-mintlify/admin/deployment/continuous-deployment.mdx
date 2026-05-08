@@ -1,0 +1,50 @@
+---
+title: Continuous deployment
+description: This guide covers features and tools you can use to deploy your Cube project to Cube Cloud.
+---
+
+## Deploy with Git
+
+Continuous deployment works by connecting a Git repository to a Cube Cloud
+deployment and keeping the two in sync.
+
+First, go to the **Build & Deploy** tab on the **Settings** screen
+to make sure your deployment is configured to deploy with Git. Then
+click **Generate Git credentials** to obtain Git credentials:
+
+<Frame>
+  <img src="https://ucarecdn.com/c79702ad-7a86-4a31-ac0c-9d64ccf91413/" />
+</Frame>
+
+The instructions to set up Cube Cloud as a Git remote are also available on the
+same screen:
+
+```bash
+git config credential.helper store
+git remote add cubecloud <YOUR-CUBE-CLOUD-GIT-URL>
+git push cubecloud master
+```
+
+## Deploy with GitHub
+
+First, ensure your deployment is configured to deploy with Git. Then connect
+your GitHub repository to your deployment by clicking the **Connect to
+GitHub** button, and selecting your repository.
+
+<Warning>
+
+If your organization uses SAML SSO for GitHub authentication, make sure to start an active SAML 
+session prior to connecting to your GitHub account from Cube.
+
+</Warning>
+
+<div style={{ textAlign: "center" }}>
+  <img
+    src="https://ucarecdn.com/3dab6d90-6bd9-44a5-ae4d-d5579a08dd89/"
+    style={{ border: "none" }}
+    width="100%"
+  />
+</div>
+
+Cube Cloud will automatically deploy from the specified production branch
+(`master` by default).

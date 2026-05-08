@@ -61,7 +61,8 @@ export type TimeShiftDefinitionReference = {
 
 export type MeasureDefinition = {
   type: string;
-  sql: () => string;
+  aggType?: string,
+  sql(): string;
   dynamicSql?: (...args: Array<unknown>) => () => string;
   correlatedQuery?: {
     // Each entry: [leftDimension, operator?] or just leftDimension string

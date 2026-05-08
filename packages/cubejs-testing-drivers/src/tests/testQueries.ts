@@ -234,6 +234,20 @@ export function testQueries(type: string, { includeIncrementalSchemaSuite, exten
       });
     });
 
+    // https://github.com/cube-js/cube/issues/10601
+    execute('querying ECommerce: dimensions + filter-only by TD to get empty results', async () => {
+      const response = await client.load({
+        dimensions: [
+          'ECommerce.city',
+        ],
+        timeDimensions: [{
+          dimension: 'ECommerce.orderDate',
+          dateRange: ['2099-01-01', '2099-12-31'],
+        }],
+      });
+      expect(response.rawData()).toEqual([]);
+    });
+
     execute('querying Customers: dimensions', async () => {
       const response = await client.load({
         dimensions: [
@@ -1140,6 +1154,24 @@ export function testQueries(type: string, { includeIncrementalSchemaSuite, exten
           'ECommerce.orderDate': 'asc'
         },
         total: true
+      });
+      expect(response.rawData()).toMatchSnapshot();
+    });
+
+    execute('querying ECommerce: count by month + order with non-UTC timezone (Asia/Kolkata)', async () => {
+      const response = await client.load({
+        measures: [
+          'ECommerce.count',
+        ],
+        timeDimensions: [{
+          dimension: 'ECommerce.customOrderDateNoPreAgg',
+          granularity: 'month',
+          dateRange: ['2020-01-01', '2020-12-31'],
+        }],
+        order: {
+          'ECommerce.customOrderDateNoPreAgg': 'asc'
+        },
+        timezone: 'Asia/Kolkata',
       });
       expect(response.rawData()).toMatchSnapshot();
     });

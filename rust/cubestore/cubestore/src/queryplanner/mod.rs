@@ -677,9 +677,9 @@ pub trait InfoSchemaTableDef {
         &self,
         ctx: InfoSchemaTableDefContext,
         limit: Option<usize>,
-    ) -> Result<Arc<Vec<Self::T>>, CubeError>;
+    ) -> Result<Vec<Self::T>, CubeError>;
 
-    fn columns(&self) -> Vec<Box<dyn Fn(Arc<Vec<Self::T>>) -> ArrayRef>>;
+    fn columns(&self, rows: Vec<Self::T>) -> Vec<ArrayRef>;
 
     fn schema(&self) -> Vec<Field>;
 }
@@ -711,11 +711,7 @@ macro_rules! base_info_schema_table_def {
             ) -> Result<datafusion::arrow::record_batch::RecordBatch, crate::CubeError> {
                 let rows = self.rows(ctx, limit).await?;
                 let schema = self.schema_ref();
-                let columns = self.columns();
-                let columns = columns
-                    .into_iter()
-                    .map(|c| c(rows.clone()))
-                    .collect::<Vec<_>>();
+                let columns = self.columns(rows);
                 Ok(datafusion::arrow::record_batch::RecordBatch::try_new(
                     schema, columns,
                 )?)
@@ -1046,7 +1042,11 @@ pub mod tests {
     use pretty_assertions::assert_eq;
 
     fn initial_plan(s: &str, ctx: MetaStoreSchemaProvider) -> LogicalPlan {
-        let statement = match CubeStoreParser::new(s).unwrap().parse_statement().unwrap() {
+        let statement = match CubeStoreParser::new(s, None)
+            .unwrap()
+            .parse_statement()
+            .unwrap()
+        {
             Statement::Statement(s) => s,
             other => panic!("not a statement, actual {:?}", other),
         };
@@ -1063,7 +1063,7 @@ pub mod tests {
             Arc::new(test_utils::MetaStoreMock {}),
             Arc::new(test_utils::CacheStoreMock {}),
             &vec![],
-            Arc::new(SqlResultCache::new(1 << 20, None, 10000)),
+            Arc::new(SqlResultCache::new(1 << 20, None, 10000, None)),
             Arc::new(SessionContext::new().state()),
         )
     }

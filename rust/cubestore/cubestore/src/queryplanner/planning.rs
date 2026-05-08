@@ -28,9 +28,9 @@ use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
 };
-use flatbuffers::bitflags::_core::any::Any;
-use flatbuffers::bitflags::_core::fmt::Formatter;
 use itertools::{EitherOrBoth, Itertools};
+use std::any::Any;
+use std::fmt::Formatter;
 
 use crate::cluster::{Cluster, WorkerPlanningParams};
 use crate::metastore::multi_index::MultiPartition;
@@ -2821,7 +2821,11 @@ pub mod tests {
     }
 
     fn initial_plan(s: &str, i: &TestIndices) -> LogicalPlan {
-        let statement = match CubeStoreParser::new(s).unwrap().parse_statement().unwrap() {
+        let statement = match CubeStoreParser::new(s, None)
+            .unwrap()
+            .parse_statement()
+            .unwrap()
+        {
             Statement::Statement(s) => s,
             other => panic!("not a statement, actual {:?}", other),
         };
