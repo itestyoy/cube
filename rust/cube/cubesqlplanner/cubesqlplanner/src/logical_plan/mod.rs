@@ -1,3 +1,10 @@
+//! Logical representation of a query as a tree of `PlanNode`s.
+//!
+//! Each node implements `LogicalNode` (children via `inputs()` /
+//! `with_inputs()`, plus a name for diagnostics). The tree is built
+//! by the planner and consumed by `physical_plan_builder`, which
+//! turns it into a `QueryPlan`. No SQL is produced here.
+
 #[macro_use]
 mod logical_source;
 mod aggregate_multiplied_subquery;
@@ -17,6 +24,7 @@ mod pre_aggregation;
 pub mod pretty_print;
 mod query;
 mod query_source;
+mod root_query;
 mod schema;
 pub mod visitor;
 
@@ -38,4 +46,5 @@ pub use pre_aggregation::*;
 pub use pretty_print::*;
 pub use query::*;
 pub use query_source::*;
+pub use root_query::*;
 pub use schema::*;

@@ -2,7 +2,7 @@ use crate::node_obj_deserializer::JsValueDeserializer;
 use crate::transport::MapCubeErrExt;
 use cubeorchestrator::query_message_parser::QueryResult;
 use cubeorchestrator::query_result_transform::{
-    DBResponsePrimitive, DBResponseValue, RequestResultData, RequestResultDataMulti,
+    DBResponsePrimitive, InternedKeyLookup, RequestResultData, RequestResultDataMulti,
     TransformedData,
 };
 use cubeorchestrator::transport::{JsRawColumnarData, TransformDataRequest};
@@ -12,8 +12,8 @@ use neon::context::{Context, FunctionContext, ModuleContext};
 use neon::handle::Handle;
 use neon::object::Object;
 use neon::prelude::{
-    JsArray, JsArrayBuffer, JsBox, JsBuffer, JsFunction, JsObject, JsPromise, JsResult, JsValue,
-    NeonResult,
+    JsArray, JsArrayBuffer, JsBox, JsBuffer, JsFunction, JsObject, JsPromise, JsResult, JsString,
+    JsValue, NeonResult,
 };
 use neon::types::buffer::TypedArray;
 use serde::Deserialize;
@@ -38,6 +38,7 @@ pub struct ResultWrapper {
     data: Arc<QueryResult>,
     transformed_data: Option<TransformedData>,
     pub last_refresh_time: Option<String>,
+    pub external: bool,
 }
 
 impl ResultWrapper {
@@ -114,6 +115,7 @@ impl ResultWrapper {
             data: query_result,
             transformed_data: None,
             last_refresh_time: None,
+            external: false,
         })
     }
 
@@ -170,7 +172,7 @@ impl ValueObject for ResultWrapper {
         let value = match data {
             TransformedData::Compact { members, dataset } => {
                 let Some(row) = dataset.get(index) else {
-                    return Err(CubeError::user(format!(
+                    return Err(CubeError::internal(format!(
                         "Unexpected response from Cube, can't get {} row",
                         index
                     )));
@@ -190,7 +192,7 @@ impl ValueObject for ResultWrapper {
                 };
 
                 let Some(column) = columns.get(member_index) else {
-                    return Err(CubeError::user(format!(
+                    return Err(CubeError::internal(format!(
                         "Unexpected response from Cube, missing column for '{}'",
                         field_name
                     )));
@@ -207,13 +209,14 @@ impl ValueObject for ResultWrapper {
             }
             TransformedData::Vanilla(dataset) => {
                 let Some(row) = dataset.get(index) else {
-                    return Err(CubeError::user(format!(
+                    return Err(CubeError::internal(format!(
                         "Unexpected response from Cube, can't get {} row",
                         index
                     )));
                 };
 
-                row.get(field_name).unwrap_or(&DBResponsePrimitive::Null)
+                row.get(&InternedKeyLookup::new(field_name))
+                    .unwrap_or(&DBResponsePrimitive::Null)
             }
         };
 
@@ -331,25 +334,35 @@ pub fn get_cubestore_result(mut cx: FunctionContext) -> JsResult<JsValue> {
     let result = cx.argument::<JsBox<Arc<QueryResult>>>(0)?;
 
     let js_array = cx.execute_scoped(|mut cx| {
-        let js_array = JsArray::new(&mut cx, result.rows.len());
+        let js_keys: Vec<Handle<JsString>> =
+            result.members().iter().map(|k| cx.string(k)).collect();
 
-        for (i, row) in result.rows.iter().enumerate() {
+        let row_count = result.row_count();
+        let columns: Vec<_> = (0..js_keys.len())
+            .map(|i| result.column(i))
+            .collect::<Result<_, _>>()
+            .or_else(|err| cx.throw_error(err.to_string()))?;
+        let js_array = JsArray::new(&mut cx, row_count);
+
+        for row_idx in 0..row_count {
             let js_row = cx.execute_scoped(|mut cx| {
                 let js_row = JsObject::new(&mut cx);
-                for (key, value) in result.members.iter().zip(row.iter()) {
-                    let js_key = cx.string(key);
+
+                for (col_idx, js_key) in js_keys.iter().enumerate() {
+                    let value = &columns[col_idx][row_idx];
                     let js_value: Handle<'_, JsValue> = match value {
-                        DBResponseValue::Primitive(DBResponsePrimitive::Null) => cx.null().upcast(),
+                        DBResponsePrimitive::Null => cx.null().upcast(),
                         // For compatibility, we convert all primitives to strings
                         other => cx.string(other.to_string()).upcast(),
                     };
 
-                    js_row.set(&mut cx, js_key, js_value)?;
+                    js_row.set(&mut cx, *js_key, js_value)?;
                 }
+
                 Ok(js_row)
             })?;
 
-            js_array.set(&mut cx, i as u32, js_row)?;
+            js_array.set(&mut cx, row_idx as u32, js_row)?;
         }
 
         Ok(js_array)

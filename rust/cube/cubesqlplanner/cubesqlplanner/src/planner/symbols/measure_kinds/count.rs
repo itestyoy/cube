@@ -3,12 +3,20 @@ use crate::planner::{CubeRef, SqlCall};
 use cubenativeutils::CubeError;
 use std::rc::Rc;
 
+/// Source of a `Count` measure's SQL.
+///
+/// - `Auto` — no explicit `sql` was declared; the count falls back
+///   to the cube's primary-key expressions.
+/// - `Explicit` — `sql` was declared on the measure.
 #[derive(Clone)]
 pub enum CountSql {
     Auto(Vec<Rc<SqlCall>>),
     Explicit(Rc<SqlCall>),
 }
 
+/// `Count` measure kind: counts rows of the underlying source.
+/// Without an explicit `sql` falls back to counting the cube's
+/// primary-key tuples.
 #[derive(Clone)]
 pub struct CountMeasure {
     sql: CountSql,
@@ -21,6 +29,13 @@ impl CountMeasure {
 
     pub fn sql(&self) -> &CountSql {
         &self.sql
+    }
+
+    /// True when this count can be rendered as a key-distinct count to
+    /// survive row multiplication: it falls back to the cube's primary
+    /// keys (`Auto`) and at least one key is available.
+    pub fn convertible_to_distinct(&self) -> bool {
+        matches!(&self.sql, CountSql::Auto(pks) if !pks.is_empty())
     }
 
     pub fn get_dependencies(&self) -> Vec<Rc<MemberSymbol>> {

@@ -320,9 +320,6 @@ const variables: Record<string, (...args: any) => any> = {
   memberExpressionsPreAggregations: () => get('CUBEJS_PRE_AGGREGATIONS_MEMBER_EXPRESSIONS')
     .default('false')
     .asBoolStrict(),
-  nativeOrchestrator: () => get('CUBEJS_TESSERACT_ORCHESTRATOR')
-    .default('true')
-    .asBoolStrict(),
   transpilationWorkerThreads: () => {
     const enabled = get('CUBEJS_TRANSPILATION_WORKER_THREADS')
       .default('true')
@@ -715,6 +712,14 @@ const variables: Record<string, (...args: any) => any> = {
   dbQueryDefaultLimit: (): number => get('CUBEJS_DB_QUERY_DEFAULT_LIMIT')
     .default(10000)
     .asInt(),
+
+  /**
+   * Whether queries are executed automatically without requiring an
+   * explicit user confirmation. Only used in Cube Cloud.
+   */
+  autoRunMode: (): boolean => get('CUBEJS_AUTO_RUN_MODE')
+    .default('true')
+    .asBoolStrict(),
 
   /**
    * Query stream `highWaterMark` value.
@@ -1939,6 +1944,20 @@ const variables: Record<string, (...args: any) => any> = {
     .asString(),
   playgroundAuthSecret: () => get('CUBEJS_PLAYGROUND_AUTH_SECRET')
     .asString(),
+  apiSecret: () => get('CUBEJS_API_SECRET')
+    .asString(),
+  // Comma-separated rotation list. Trimmed, empties dropped, deduplicated.
+  // Takes precedence over the singular `apiSecret` when non-empty.
+  apiSecrets: (): string[] | undefined => {
+    const raw = get('CUBEJS_API_SECRETS').asString();
+    if (!raw) {
+      return undefined;
+    }
+    const unique = Array.from(
+      new Set(raw.split(',').map((s) => s.trim()).filter(Boolean))
+    );
+    return unique.length > 0 ? unique : undefined;
+  },
   agentFrameSize: () => get('CUBEJS_AGENT_FRAME_SIZE')
     .default('200')
     .asInt(),

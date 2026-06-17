@@ -3,6 +3,104 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.6.59](https://github.com/cube-js/cube/compare/v1.6.58...v1.6.59) (2026-06-17)
+
+### Performance Improvements
+
+- **schema-compiler:** optimize granularityHierarchies to avoid O(n^2) object spread ([#11098](https://github.com/cube-js/cube/issues/11098)) ([13f1c91](https://github.com/cube-js/cube/commit/13f1c91576b0205edb0def130e90dccf4a536fad))
+
+## [1.6.58](https://github.com/cube-js/cube/compare/v1.6.57...v1.6.58) (2026-06-17)
+
+### Features
+
+- **cubesql:** Support FULL and RIGHT joins with non-push-to-Cube SQL push down ([#11008](https://github.com/cube-js/cube/issues/11008)) ([8ef4b54](https://github.com/cube-js/cube/commit/8ef4b54e825b2bb83743e10375694aa92f119ab9))
+- **schema-compiler:** capitalize ID acronyms in default meta titles ([#11047](https://github.com/cube-js/cube/issues/11047)) ([094974b](https://github.com/cube-js/cube/commit/094974b20c1bd573ac57873bedd58a32f2bbc1d4))
+
+## [1.6.57](https://github.com/cube-js/cube/compare/v1.6.56...v1.6.57) (2026-06-09)
+
+**Note:** Version bump only for package @cubejs-backend/schema-compiler
+
+## [1.6.56](https://github.com/cube-js/cube/compare/v1.6.55...v1.6.56) (2026-06-08)
+
+### Bug Fixes
+
+- **access-policies:** masked aggregate measures with row filters + multi-group member-level union ([#11026](https://github.com/cube-js/cube/issues/11026)) ([bf13b69](https://github.com/cube-js/cube/commit/bf13b69f87fe83e3ffe9ac779b91a5174d9b320a))
+
+## [1.6.55](https://github.com/cube-js/cube/compare/v1.6.54...v1.6.55) (2026-06-05)
+
+**Note:** Version bump only for package @cubejs-backend/schema-compiler
+
+## [1.6.54](https://github.com/cube-js/cube/compare/v1.6.53...v1.6.54) (2026-06-04)
+
+### Bug Fixes
+
+- **tesseract:** make pre-aggregations tests work under native SQL planner ([#10992](https://github.com/cube-js/cube/issues/10992)) ([33ca484](https://github.com/cube-js/cube/commit/33ca484e15dedee2a7a27ba99f8d2204829926d0))
+- **tesseract:** nested CTE generation with duplicate names ([#11005](https://github.com/cube-js/cube/issues/11005)) ([a321af5](https://github.com/cube-js/cube/commit/a321af5bd635ef38cad1673902c62345b1e6c593))
+
+## [1.6.53](https://github.com/cube-js/cube/compare/v1.6.52...v1.6.53) (2026-06-02)
+
+### Bug Fixes
+
+- **cubejs-questdb-driver:** Unsupported HAVING clause, thanks [@puzpuzpuz](https://github.com/puzpuzpuz) ([#10285](https://github.com/cube-js/cube/issues/10285)) ([632620d](https://github.com/cube-js/cube/commit/632620d783927bd3a62af1b9b05ef658dba7a784))
+
+### Features
+
+- Links in the data model ([#10852](https://github.com/cube-js/cube/issues/10852)) ([34fa717](https://github.com/cube-js/cube/commit/34fa717591e7949a1440c0602bb0e36a1bde4ae3))
+
+## [1.6.52](https://github.com/cube-js/cube/compare/v1.6.51...v1.6.52) (2026-05-29)
+
+### Bug Fixes
+
+- **drivers:** athena custom-granularity pre-aggregation build ([#10950](https://github.com/cube-js/cube/issues/10950)) ([f39bcf0](https://github.com/cube-js/cube/commit/f39bcf07fa09ee3b8d07da7206b7d259b431987c))
+
+### Features
+
+- **tesseract:** Multi-stage filter directives ([#10827](https://github.com/cube-js/cube/issues/10827)) ([2c7a614](https://github.com/cube-js/cube/commit/2c7a61422454a8d7dc30076292f341a59084a483))
+- **tesseract:** multi-stage grain directive ([#10957](https://github.com/cube-js/cube/issues/10957)) ([76eb75b](https://github.com/cube-js/cube/commit/76eb75b5a99ab863a661bc5d93ea61c05ee58ae9))
+
+## [1.6.51](https://github.com/cube-js/cube/compare/v1.6.50...v1.6.51) (2026-05-27)
+
+**Note:** Version bump only for package @cubejs-backend/schema-compiler
+
+## [1.6.50](https://github.com/cube-js/cube/compare/v1.6.49...v1.6.50) (2026-05-22)
+
+### Bug Fixes
+
+- **schema-compiler:** Throw error for duplicate cube and view names in JS models ([#10909](https://github.com/cube-js/cube/issues/10909)) ([06c16b4](https://github.com/cube-js/cube/commit/06c16b47d18f6bd31a240aba6a7b268e90d4763b))
+
+## [1.6.49](https://github.com/cube-js/cube/compare/v1.6.48...v1.6.49) (2026-05-21)
+
+### Bug Fixes
+
+- **tesseract:** multi-stage pre-aggregation usage substitution and IS NOT DISTINCT FROM ([#10925](https://github.com/cube-js/cube/issues/10925)) ([81b9de0](https://github.com/cube-js/cube/commit/81b9de02799c829fa982539537ebf1af24ce3e62))
+
+### Features
+
+- **cubesql:** Allow grouped joins with SQL push down ([#10234](https://github.com/cube-js/cube/issues/10234)) ([041d753](https://github.com/cube-js/cube/commit/041d753ca045d60453af6d5d737cff19ce411ca0))
+- **tesseract:** default value filters for views (CORE-357) ([#10892](https://github.com/cube-js/cube/issues/10892)) ([3477776](https://github.com/cube-js/cube/commit/34777768be099310e59fa02f0c2db6ef5e74aed4))
+
+## [1.6.48](https://github.com/cube-js/cube/compare/v1.6.47...v1.6.48) (2026-05-19)
+
+**Note:** Version bump only for package @cubejs-backend/schema-compiler
+
+## [1.6.47](https://github.com/cube-js/cube/compare/v1.6.46...v1.6.47) (2026-05-18)
+
+### Bug Fixes
+
+- **cubesql:** Correctly escape/unescape LIKE patterns ([#10862](https://github.com/cube-js/cube/issues/10862)) ([43331cc](https://github.com/cube-js/cube/commit/43331cc4cc572c469809ecd4bf48bc06b473d55f))
+- **schema-compiler:** resolve time dimension granularity columns in pre-aggregation indexes ([#10894](https://github.com/cube-js/cube/issues/10894)) ([c164aab](https://github.com/cube-js/cube/commit/c164aab31ec106bcff8dd26c305c3129a205f851))
+
+## [1.6.46](https://github.com/cube-js/cube/compare/v1.6.45...v1.6.46) (2026-05-11)
+
+**Note:** Version bump only for package @cubejs-backend/schema-compiler
+
+## [1.6.45](https://github.com/cube-js/cube/compare/v1.6.44...v1.6.45) (2026-05-11)
+
+### Bug Fixes
+
+- **schema-compiler:** handle sqlTable in originalSql pre-aggregation ([#10824](https://github.com/cube-js/cube/issues/10824)) ([3d82f94](https://github.com/cube-js/cube/commit/3d82f94b384260f5676fabaee1544d7f8b4935c4))
+- **schema-compiler:** invalidate Jinja render cache when imported macro file changes ([#10818](https://github.com/cube-js/cube/issues/10818)) ([e60ad99](https://github.com/cube-js/cube/commit/e60ad99f9ddee99cfa8c1e528b8746e2ebb3ee17))
+
 ## [1.6.44](https://github.com/cube-js/cube/compare/v1.6.43...v1.6.44) (2026-05-06)
 
 ### Features

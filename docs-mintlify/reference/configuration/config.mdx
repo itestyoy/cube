@@ -360,6 +360,47 @@ module.exports = {
 
 </CodeGroup>
 
+### `context_to_cube_store_router_id`
+
+`context_to_cube_store_router_id` is a function used to determine which Cube Store
+router a request is routed to. It returns a string id that is used as a routing
+key: requests that resolve to the same id share the same Cube Store router, while
+distinct ids are routed to separate routers.
+
+This is only relevant for deployments running multiple Cube Store routers (for
+example, when [tenants][ref-multitenancy] are partitioned across routers to
+isolate their pre-aggregation storage and query load). By default this function
+is not set, and all requests use the same Cube Store router.
+
+<Warning>
+
+`context_to_cube_store_router_id` requires
+[`context_to_orchestrator_id`][self-orchestrator-id] to also be defined.
+
+</Warning>
+
+Called on each request.
+
+<CodeGroup>
+
+```python title="Python"
+from cube import config
+
+@config('context_to_cube_store_router_id')
+def context_to_cube_store_router_id(ctx: dict) -> str:
+  return f"CUBE_ROUTER_{ctx['securityContext']['tenant_id']}"
+```
+
+```javascript title="JavaScript"
+module.exports = {
+  contextToCubeStoreRouterId: ({ securityContext }) => {
+    return `CUBE_ROUTER_${securityContext.tenant_id}`
+  }
+}
+```
+
+</CodeGroup>
+
 ### `driver_factory`
 
 A function to provide a custom configuration for the data source driver.
@@ -1535,15 +1576,15 @@ module.exports = {
 [ref-rest-scopes]: /reference/rest-api#api-scopes
 [ref-config-options]: /admin/connect-to-data#configuration-options
 [self-orchestrator-id]: #context_to_orchestrator_id
-[ref-multiple-data-sources]: /admin/connect-to-data/advanced/multiple-data-sources
+[ref-multiple-data-sources]: /admin/connect-to-data/multiple-data-sources
 [ref-websockets]: /reference/rest-api/real-time-data-fetch
 [ref-matching-preaggs]: /docs/pre-aggregations/matching-pre-aggregations
 [link-snake-case]: https://en.wikipedia.org/wiki/Snake_case
 [link-camel-case]: https://en.wikipedia.org/wiki/Camel_case
 [link-github-cube-drivers]: https://github.com/cube-js/cube/tree/master/packages
 [ref-ungrouped-query]: /reference/queries#ungrouped-query
-[ref-dap]: /docs/data-modeling/access-control/data-access-policies
-[ref-dap-roles]: /docs/data-modeling/access-control/data-access-policies#data-access-roles
+[ref-dap]: /docs/data-modeling/data-access-policies
+[ref-dap-roles]: /docs/data-modeling/data-access-policies#data-access-roles
 [ref-auth-integration]: /docs/data-modeling/access-control#authentication-integration
 [ref-dax-api]: /reference/dax-api
 [ref-ntlm]: /docs/integrations/power-bi/ntlm

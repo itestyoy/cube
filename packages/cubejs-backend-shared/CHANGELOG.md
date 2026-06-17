@@ -3,6 +3,72 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.6.59](https://github.com/cube-js/cube/compare/v1.6.58...v1.6.59) (2026-06-17)
+
+**Note:** Version bump only for package @cubejs-backend/shared
+
+## [1.6.58](https://github.com/cube-js/cube/compare/v1.6.57...v1.6.58) (2026-06-17)
+
+### Features
+
+- **backend-shared:** add CUBEJS_AUTO_RUN_MODE env variable ([#11062](https://github.com/cube-js/cube/issues/11062)) ([3278e4d](https://github.com/cube-js/cube/commit/3278e4d4ba7180c28eb558b296c2603c8c948bb6))
+
+## [1.6.57](https://github.com/cube-js/cube/compare/v1.6.56...v1.6.57) (2026-06-09)
+
+**Note:** Version bump only for package @cubejs-backend/shared
+
+## [1.6.56](https://github.com/cube-js/cube/compare/v1.6.55...v1.6.56) (2026-06-08)
+
+**Note:** Version bump only for package @cubejs-backend/shared
+
+## [1.6.55](https://github.com/cube-js/cube/compare/v1.6.54...v1.6.55) (2026-06-05)
+
+**Note:** Version bump only for package @cubejs-backend/shared
+
+## [1.6.54](https://github.com/cube-js/cube/compare/v1.6.53...v1.6.54) (2026-06-04)
+
+### Features
+
+- **api-gateway:** accept a list of API secrets for verification ([#10985](https://github.com/cube-js/cube/issues/10985)) ([d9a308f](https://github.com/cube-js/cube/commit/d9a308f0ef7d6cf11213bbc05858cb0cc1a55c36))
+
+## [1.6.53](https://github.com/cube-js/cube/compare/v1.6.52...v1.6.53) (2026-06-02)
+
+**Note:** Version bump only for package @cubejs-backend/shared
+
+## [1.6.52](https://github.com/cube-js/cube/compare/v1.6.51...v1.6.52) (2026-05-29)
+
+**Note:** Version bump only for package @cubejs-backend/shared
+
+## [1.6.51](https://github.com/cube-js/cube/compare/v1.6.50...v1.6.51) (2026-05-27)
+
+**Note:** Version bump only for package @cubejs-backend/shared
+
+## [1.6.50](https://github.com/cube-js/cube/compare/v1.6.49...v1.6.50) (2026-05-22)
+
+### Features
+
+- Enable native orchestrator for all cases (don't allow to disable it) ([#10919](https://github.com/cube-js/cube/issues/10919)) ([9268376](https://github.com/cube-js/cube/commit/9268376f1aed7c280e15dea7d52449792270d350))
+
+## [1.6.49](https://github.com/cube-js/cube/compare/v1.6.48...v1.6.49) (2026-05-21)
+
+**Note:** Version bump only for package @cubejs-backend/shared
+
+## [1.6.48](https://github.com/cube-js/cube/compare/v1.6.47...v1.6.48) (2026-05-19)
+
+**Note:** Version bump only for package @cubejs-backend/shared
+
+## [1.6.47](https://github.com/cube-js/cube/compare/v1.6.46...v1.6.47) (2026-05-18)
+
+**Note:** Version bump only for package @cubejs-backend/shared
+
+## [1.6.46](https://github.com/cube-js/cube/compare/v1.6.45...v1.6.46) (2026-05-11)
+
+**Note:** Version bump only for package @cubejs-backend/shared
+
+## [1.6.45](https://github.com/cube-js/cube/compare/v1.6.44...v1.6.45) (2026-05-11)
+
+**Note:** Version bump only for package @cubejs-backend/shared
+
 ## [1.6.44](https://github.com/cube-js/cube/compare/v1.6.43...v1.6.44) (2026-05-06)
 
 **Note:** Version bump only for package @cubejs-backend/shared

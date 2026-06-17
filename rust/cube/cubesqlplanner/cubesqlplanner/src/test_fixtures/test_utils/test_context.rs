@@ -11,7 +11,7 @@ use crate::planner::filter::Filter;
 use crate::planner::query_tools::QueryTools;
 use crate::planner::sql_templates::PlanSqlTemplates;
 use crate::planner::top_level_planner::TopLevelPlanner;
-use crate::planner::{GranularityHelper, QueryProperties};
+use crate::planner::{GranularityHelper, QueryProperties, QueryPropertiesCompiler};
 use crate::planner::{MemberSymbol, TimeDimensionSymbol};
 use crate::test_fixtures::cube_bridge::yaml::YamlBaseQueryOptions;
 use crate::test_fixtures::cube_bridge::{
@@ -26,6 +26,13 @@ pub struct TestContext {
     schema: MockSchema,
     query_tools: Rc<QueryTools>,
     security_context: Rc<dyn crate::cube_bridge::security_context::SecurityContext>,
+    /// Custom SQL templates carried over through `for_options` so that
+    /// timezone-driven `MockBaseTools` rebuilds (e.g. when the caller
+    /// requests a non-UTC tz on a query) preserve the extra templates
+    /// the context was constructed with — most notably the
+    /// `statements/generated_time_series_select` templates injected by
+    /// `new_with_generated_time_series`.
+    custom_sql_templates: Option<crate::test_fixtures::cube_bridge::MockSqlTemplatesRender>,
 }
 
 impl TestContext {
@@ -59,6 +66,7 @@ impl TestContext {
             schema,
             query_tools,
             security_context,
+            custom_sql_templates: None,
         })
     }
 
@@ -66,9 +74,11 @@ impl TestContext {
     pub fn new_with_generated_time_series(schema: MockSchema) -> Result<Self, CubeError> {
         use crate::test_fixtures::cube_bridge::{MockDriverTools, MockSqlTemplatesRender};
         let sql_templates = MockSqlTemplatesRender::default_templates_with_generated_time_series();
-        let driver_tools = MockDriverTools::with_sql_templates(sql_templates);
+        let driver_tools = MockDriverTools::with_sql_templates(sql_templates.clone());
         let base_tools = schema.create_base_tools_with_driver(driver_tools)?;
-        Self::new_with_base_tools(schema, base_tools)
+        let mut ctx = Self::new_with_base_tools(schema, base_tools)?;
+        ctx.custom_sql_templates = Some(sql_templates);
+        Ok(ctx)
     }
 
     #[allow(dead_code)]
@@ -90,6 +100,13 @@ impl TestContext {
         Self::new_with_options(schema, Tz::UTC, Some(items), None, false, false)
     }
 
+    pub fn new_with_masked_member_items(
+        schema: MockSchema,
+        masked_members: Vec<MaskedMemberItem>,
+    ) -> Result<Self, CubeError> {
+        Self::new_with_options(schema, Tz::UTC, Some(masked_members), None, false, false)
+    }
+
     fn for_options(&self, options: &dyn BaseQueryOptions) -> Result<Self, CubeError> {
         let static_data = options.static_data();
         let timezone = static_data
@@ -98,7 +115,7 @@ impl TestContext {
             .and_then(|tz| tz.parse::<Tz>().ok())
             .unwrap_or(Tz::UTC);
 
-        Self::new_with_options(
+        Self::new_with_options_internal(
             self.schema.clone(),
             timezone,
             static_data.masked_members.clone(),
@@ -107,6 +124,7 @@ impl TestContext {
             static_data
                 .convert_tz_for_raw_time_dimension
                 .unwrap_or(false),
+            self.custom_sql_templates.clone(),
         )
     }
 
@@ -118,7 +136,35 @@ impl TestContext {
         export_annotated_sql: bool,
         convert_tz_for_raw_time_dimension: bool,
     ) -> Result<Self, CubeError> {
-        let base_tools = schema.create_base_tools_with_timezone(timezone.to_string())?;
+        Self::new_with_options_internal(
+            schema,
+            timezone,
+            masked_members,
+            member_to_alias,
+            export_annotated_sql,
+            convert_tz_for_raw_time_dimension,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_options_internal(
+        schema: MockSchema,
+        timezone: Tz,
+        masked_members: Option<Vec<MaskedMemberItem>>,
+        member_to_alias: Option<std::collections::HashMap<String, String>>,
+        export_annotated_sql: bool,
+        convert_tz_for_raw_time_dimension: bool,
+        custom_sql_templates: Option<crate::test_fixtures::cube_bridge::MockSqlTemplatesRender>,
+    ) -> Result<Self, CubeError> {
+        let base_tools = if let Some(templates) = custom_sql_templates.clone() {
+            use crate::test_fixtures::cube_bridge::MockDriverTools;
+            let driver_tools =
+                MockDriverTools::with_sql_templates_and_timezone(templates, timezone.to_string());
+            schema.create_base_tools_with_driver(driver_tools)?
+        } else {
+            schema.create_base_tools_with_timezone(timezone.to_string())?
+        };
         let join_graph = Rc::new(schema.create_join_graph()?);
         let evaluator = schema.clone().create_evaluator();
         let security_context: Rc<dyn crate::cube_bridge::security_context::SecurityContext> =
@@ -140,6 +186,7 @@ impl TestContext {
             schema,
             query_tools,
             security_context,
+            custom_sql_templates,
         })
     }
 
@@ -222,6 +269,28 @@ impl TestContext {
 
     pub fn evaluate_symbol(&self, symbol: &Rc<MemberSymbol>) -> Result<String, CubeError> {
         let nodes_factory = SqlNodesFactory::default();
+        let cube_ref_evaluator = Rc::new(nodes_factory.cube_ref_evaluator());
+        let visitor = SqlEvaluatorVisitor::new(self.query_tools.clone(), cube_ref_evaluator, None);
+        let base_tools = self.query_tools.base_tools();
+        let driver_tools = base_tools.driver_tools(false)?;
+        let templates = PlanSqlTemplates::try_new(driver_tools, false)?;
+        let node_processor = nodes_factory.default_node_processor();
+
+        visitor.apply(symbol, node_processor, &templates)
+    }
+
+    /// Like `evaluate_symbol`, but configures the node factory with the given
+    /// GROUP BY members (grouped query). Used to exercise conditional masking of
+    /// aggregate measures, which depends on whether the mask filter references
+    /// grouped members.
+    pub fn evaluate_symbol_with_group_by(
+        &self,
+        symbol: &Rc<MemberSymbol>,
+        group_by_members: Vec<String>,
+    ) -> Result<String, CubeError> {
+        let mut nodes_factory = SqlNodesFactory::default();
+        nodes_factory.set_ungrouped(false);
+        nodes_factory.set_group_by_members(group_by_members.into_iter().collect());
         let cube_ref_evaluator = Rc::new(nodes_factory.cube_ref_evaluator());
         let visitor = SqlEvaluatorVisitor::new(self.query_tools.clone(), cube_ref_evaluator, None);
         let base_tools = self.query_tools.base_tools();
@@ -368,7 +437,7 @@ impl TestContext {
 
     pub fn create_query_properties(&self, yaml: &str) -> Result<Rc<QueryProperties>, CubeError> {
         let options = self.create_query_options_from_yaml(yaml);
-        QueryProperties::try_new(self.query_tools.clone(), options)
+        QueryPropertiesCompiler::new(self.query_tools.clone()).build(options)
     }
 
     #[allow(dead_code)]
@@ -382,7 +451,7 @@ impl TestContext {
         &self,
         options: Rc<dyn BaseQueryOptions>,
     ) -> Result<String, CubeError> {
-        let request = QueryProperties::try_new(self.query_tools.clone(), options)?;
+        let request = QueryPropertiesCompiler::new(self.query_tools.clone()).build(options)?;
         let planner = TopLevelPlanner::new(request, self.query_tools.clone(), true);
         let (sql, _) = planner.plan()?;
         Ok(sql)
@@ -394,7 +463,7 @@ impl TestContext {
     ) -> Result<(String, Vec<PreAggregationUsage>), cubenativeutils::CubeError> {
         let options = self.create_query_options_from_yaml(query);
         let ctx = self.for_options(options.as_ref())?;
-        let request = QueryProperties::try_new(ctx.query_tools.clone(), options)?;
+        let request = QueryPropertiesCompiler::new(ctx.query_tools.clone()).build(options)?;
         let planner = TopLevelPlanner::new(request, ctx.query_tools.clone(), true);
         planner.plan()
     }
@@ -421,7 +490,8 @@ impl TestContext {
         let ctx = self
             .for_options(options.as_ref())
             .expect("Failed to create context");
-        let request = QueryProperties::try_new(ctx.query_tools.clone(), options)
+        let request = QueryPropertiesCompiler::new(ctx.query_tools.clone())
+            .build(options)
             .expect("Failed to create query properties");
         let planner = TopLevelPlanner::new(request, ctx.query_tools.clone(), true);
         let (raw_sql, pre_aggregations) = planner.plan().expect("Failed to plan query");

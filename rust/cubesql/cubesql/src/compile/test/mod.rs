@@ -16,7 +16,7 @@ use crate::{
         CubeStreamReceiver, LoadRequestMeta, MetaContext, SpanId, SqlGenerator, SqlResponse,
         SqlTemplates, TransportLoadRequestQuery, TransportLoadResponse, TransportService,
     },
-    CubeError,
+    CubeError, CubeErrorCauseType,
 };
 use async_trait::async_trait;
 use cubeclient::models::V1CubeMetaType;
@@ -32,6 +32,8 @@ pub mod test_bi_workarounds;
 pub mod test_cube_join;
 #[cfg(test)]
 pub mod test_cube_join_grouped;
+#[cfg(test)]
+pub mod test_cube_join_views;
 #[cfg(test)]
 pub mod test_cube_scan;
 #[cfg(test)]
@@ -700,6 +702,7 @@ pub fn sql_generator(
                     ("functions/LOWER".to_string(), "LOWER({{ args_concat }})".to_string()),
                     ("functions/UPPER".to_string(), "UPPER({{ args_concat }})".to_string()),
                     ("functions/PERCENTILECONT".to_string(), "PERCENTILE_CONT({{ args_concat }})".to_string()),
+                    ("expressions/query_aliased".to_string(), "{{ query }} AS {{ quoted_alias }}".to_string()),
                     ("expressions/extract".to_string(), "EXTRACT({{ date_part }} FROM {{ expr }})".to_string()),
                     (
                         "statements/select".to_string(),
@@ -708,12 +711,17 @@ pub fn sql_generator(
   {% if from %}
 FROM (
   {{ from | indent(2) }}
-) AS {{ from_alias }} {% endif %} {% if filter %}
+) AS {{ from_alias }} {% endif %}{% for join in joins %}
+{{ join }}{% endfor %}{% if filter %}
 WHERE {{ filter }}{% endif %}{% if group_by %}
 GROUP BY {{ group_by }}{% endif %}{% if order_by %}
 ORDER BY {{ order_by | map(attribute='expr') | join(', ') }}{% endif %}{% if limit is not none %}
 LIMIT {{ limit }}{% endif %}{% if offset is not none %}
 OFFSET {{ offset }}{% endif %}"#.to_string(),
+                    ),
+                    (
+                        "statements/join".to_string(),
+                        "{{ join_type }} JOIN {{ source }} ON {{ condition }}".to_string(),
                     ),
                     (
                         "statements/group_by_exprs".to_string(),
@@ -748,6 +756,8 @@ OFFSET {{ offset }}{% endif %}"#.to_string(),
                     ("expressions/between".to_string(), "{{ expr }} {% if negated %}NOT {% endif %}BETWEEN {{ low }} AND {{ high }}".to_string()),
                     ("join_types/inner".to_string(), "INNER".to_string()),
                     ("join_types/left".to_string(), "LEFT".to_string()),
+                    ("join_types/right".to_string(), "RIGHT".to_string()),
+                    ("join_types/full".to_string(), "FULL".to_string()),
                     ("quotes/identifiers".to_string(), "\"".to_string()),
                     ("quotes/escape".to_string(), "\"\"".to_string()),
                     ("params/param".to_string(), "${{ param_index + 1 }}".to_string()),
@@ -772,6 +782,11 @@ OFFSET {{ offset }}{% endif %}"#.to_string(),
                     ("types/binary".to_string(), "BINARY".to_string()),
                 ]
                     .into_iter().chain(custom_templates)
+                    .collect::<HashMap<_, _>>()
+                    .into_iter()
+                    // Custom template with an empty value removes the base template,
+                    // allowing tests to check behavior of data sources without it
+                    .filter(|(_, value)| !value.is_empty())
                     .collect(),
                     false,
             )
@@ -1165,10 +1180,11 @@ impl TestContext {
         let mut output_flags = StatusFlags::empty();
 
         for query in queries {
-            let query = self
-                .convert_sql_to_cube_query(&query)
-                .await
-                .map_err(|e| CubeError::internal(format!("Error during planning: {}", e)))?;
+            let query = self.convert_sql_to_cube_query(&query).await.map_err(|e| {
+                let mut error = CubeError::from(e);
+                error.cause = CubeErrorCauseType::Planning(error.cause.meta().cloned());
+                error
+            })?;
             match query {
                 QueryPlan::DataFusionSelect(plan, ctx) => {
                     let df = DFDataFrame::new(ctx.state, &plan);

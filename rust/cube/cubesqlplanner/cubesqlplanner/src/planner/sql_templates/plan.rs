@@ -3,6 +3,7 @@ use crate::cube_bridge::driver_tools::DriverTools;
 use crate::cube_bridge::sql_templates_render::SqlTemplatesRender;
 use crate::physical_plan::join::JoinType;
 use crate::planner::sql_templates::structs::TemplateCalcGroup;
+use crate::utils::sql_expression_scanner::is_top_level_compound;
 use convert_case::{Boundary, Case, Casing};
 use cubenativeutils::CubeError;
 use minijinja::context;
@@ -53,7 +54,12 @@ impl PlanSqlTemplates {
     }
 
     pub fn convert_tz(&self, field: String) -> Result<String, CubeError> {
-        self.driver_tools.convert_tz(field)
+        let safe = if is_top_level_compound(&field) {
+            format!("({field})")
+        } else {
+            field
+        };
+        self.driver_tools.convert_tz(safe)
     }
 
     pub fn is_external(&self) -> bool {
@@ -300,6 +306,16 @@ impl PlanSqlTemplates {
         )
     }
 
+    pub fn wrap_segment_select(&self, expr: String) -> Result<String, CubeError> {
+        self.render
+            .render_template("expressions/wrap_segment_select", context! { expr => expr })
+    }
+
+    pub fn wrap_segment_filter(&self, expr: String) -> Result<String, CubeError> {
+        self.render
+            .render_template("expressions/wrap_segment_filter", context! { expr => expr })
+    }
+
     pub fn group_by(&self, items: Vec<TemplateGroupByColumn>) -> Result<String, CubeError> {
         self.render.render_template(
             "statements/group_by_exprs",
@@ -431,9 +447,9 @@ impl PlanSqlTemplates {
         join_type: &JoinType,
     ) -> Result<String, CubeError> {
         let join_type = match join_type {
-            JoinType::Full => self.render.get_template("join_types/full")?,
-            JoinType::Inner => self.render.get_template("join_types/inner")?,
-            JoinType::Left => self.render.get_template("join_types/left")?,
+            JoinType::Full => self.render.get_template("tesseract/join_types_full")?,
+            JoinType::Inner => self.render.get_template("tesseract/join_types_inner")?,
+            JoinType::Left => self.render.get_template("tesseract/join_types_left")?,
         };
         self.render.render_template(
             "statements/join",
@@ -484,7 +500,7 @@ impl PlanSqlTemplates {
     }
 
     pub fn supports_full_join(&self) -> bool {
-        self.render.contains_template("join_types/full")
+        self.render.contains_template("tesseract/join_types_full")
     }
 
     pub fn supports_is_not_distinct_from(&self) -> bool {

@@ -1,6 +1,7 @@
 use super::case_variant::CaseVariant;
 use super::geo_item::{GeoItem, NativeGeoItem};
 use super::member_sql::{MemberSql, NativeMemberSql};
+use super::multi_stage_filter::{MultiStageFilterReferences, NativeMultiStageFilterReferences};
 use crate::cube_bridge::timeshift_definition::{NativeTimeShiftDefinition, TimeShiftDefinition};
 use cubenativeutils::wrappers::serializer::{
     NativeDeserialize, NativeDeserializer, NativeSerialize,
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::rc::Rc;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, nativebridge::NativeBridgeStatic)]
 pub struct DimensionDefinitionStatic {
     #[serde(rename = "type")]
     pub dimension_type: String,
@@ -32,7 +33,7 @@ pub struct DimensionDefinitionStatic {
     pub primary_key: Option<bool>,
 }
 
-#[nativebridge::native_bridge(DimensionDefinitionStatic)]
+#[nativebridge::native_bridge(DimensionDefinitionStatic, with_static_meta)]
 pub trait DimensionDefinition {
     #[nbridge(field, optional)]
     fn sql(&self) -> Result<Option<Rc<dyn MemberSql>>, CubeError>;
@@ -48,6 +49,9 @@ pub trait DimensionDefinition {
 
     #[nbridge(field, vec, optional)]
     fn time_shift(&self) -> Result<Option<Vec<Rc<dyn TimeShiftDefinition>>>, CubeError>;
+
+    #[nbridge(field, optional)]
+    fn filter(&self) -> Result<Option<Rc<dyn MultiStageFilterReferences>>, CubeError>;
 
     #[nbridge(field, optional)]
     fn mask_sql(&self) -> Result<Option<Rc<dyn MemberSql>>, CubeError>;

@@ -1657,7 +1657,6 @@ export class PreAggregations {
     };
 
     return this.query.evaluateSymbolSqlWithContext(
-      // eslint-disable-next-line prefer-template
       () => {
         // Reset correlatedSubQueryJoins — they may have been populated earlier (e.g. in constructor
         // via fullKeyQueryAggregateMeasures) without pre-aggregation context, producing wrong column refs.
@@ -1666,14 +1665,13 @@ export class PreAggregations {
         // Build FROM after selectAllDimensionsAndMeasures so that correlatedSubQueryJoins are populated
         const correlatedJoins = this.query.correlatedSubQueryJoins || [];
         const fullFrom = this.query.joinSql([...toJoin, ...correlatedJoins] as [any, ...any[]]);
-        return `SELECT ${selectPart} FROM ${fullFrom} ${this.query.baseWhere(replacedFilters)}` +
-          this.query.groupByClause() +
-          (
-            isFullSimpleQuery ?
-              this.query.baseHaving(this.query.measureFilters) +
-              this.query.orderBy() +
-              this.query.groupByDimensionLimit() : ''
-          );
+        // eslint-disable-next-line prefer-template
+        const query = `SELECT ${selectPart} FROM ${fullFrom} ${this.query.baseWhere(replacedFilters)}` +
+          this.query.groupByClause();
+        return isFullSimpleQuery ?
+          this.query.baseHaving(query, this.query.measureFilters) +
+          this.query.orderBy() +
+          this.query.groupByDimensionLimit() : query;
       },
       {
         renderedReference,

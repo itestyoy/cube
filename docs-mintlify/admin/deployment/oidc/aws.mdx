@@ -1,13 +1,12 @@
 ---
 title: AWS
 sidebarTitle: AWS
-description: Configure AWS IAM trust for Cube's OIDC issuer and use it for Athena, S3 export buckets, Cube Store CSPS, and Bedrock.
-noindex: true
+description: Configure AWS IAM trust for Cube's OIDC issuer and use it for Athena, Redshift, S3 export buckets, Cube Store CSPS, and Bedrock.
 ---
 
 This guide walks through configuring AWS to trust Cube's OIDC issuer and
-shows the trust policies for the most common targets — Athena, an S3 export
-bucket, Cube Store CSPS, and Bedrock for bring-your-own LLM.
+shows the trust policies for the most common targets — Athena, Redshift, an
+S3 export bucket, Cube Store CSPS, and Bedrock for bring-your-own LLM.
 
 If you haven't enabled OIDC for your tenant yet, start with the
 [OIDC overview][ref-oidc-overview].
@@ -258,6 +257,59 @@ results from your S3 results bucket.
   </Step>
 </Steps>
 
+## Redshift
+
+Configure an IAM role that can obtain temporary Redshift database
+credentials. The Redshift driver uses the deployment's federated identity
+to call `redshift:GetClusterCredentialsWithIAM` — no database password is
+stored anywhere.
+
+<Steps>
+  <Step title="Create the IAM role">
+    Use the same trust policy shape as [Athena](#athena) — federated
+    principal, `aud` pinned to `sts.amazonaws.com`, and `sub` pinned to your
+    deployment.
+  </Step>
+  <Step title="Attach the Redshift permissions">
+    The role needs to fetch temporary credentials and describe the cluster:
+
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "redshift:GetClusterCredentialsWithIAM",
+            "redshift:DescribeClusters"
+          ],
+          "Resource": "*"
+        }
+      ]
+    }
+    ```
+
+    Tighten `Resource` to your cluster and database ARNs in production.
+  </Step>
+  <Step title="Configure the deployment">
+    Set the Redshift driver env vars for [IAM
+    authentication][ref-redshift-driver-iam] and omit `CUBEJS_DB_USER` /
+    `CUBEJS_DB_PASS`. With `AWS_ROLE_ARN` in place, the driver assumes the
+    role via OIDC federation and exchanges it for temporary database
+    credentials:
+
+    ```dotenv
+    CUBEJS_DB_TYPE=redshift
+    AWS_ROLE_ARN=arn:aws:iam::<aws-account-id>:role/cube-deployment-<tenant-name>
+    CUBEJS_DB_HOST=my-cluster.xxx.us-east-1.redshift.amazonaws.com
+    CUBEJS_DB_NAME=my_database
+    CUBEJS_DB_SSL=true
+    CUBEJS_DB_REDSHIFT_AWS_REGION=us-east-1
+    CUBEJS_DB_REDSHIFT_CLUSTER_IDENTIFIER=my-cluster
+    ```
+  </Step>
+</Steps>
+
 ## S3 export bucket
 
 If your data source uses an [export bucket][ref-export-bucket] for
@@ -308,6 +360,21 @@ deployment's default identity is the simplest place to put this.
     of variables.
   </Step>
 </Steps>
+
+<Warning>
+
+OIDC only covers Cube's **read** side of the export bucket. The data
+warehouse itself (Snowflake, Redshift, Athena, BigQuery, …) runs the
+`UNLOAD` that writes objects to the bucket, and the warehouse cannot
+federate with Cube's OIDC issuer. You still need to provide **separate
+credentials for the `UNLOAD`** so the warehouse can write to S3 — typically
+an AWS access key pair or a warehouse-side storage integration / IAM role
+— via the standard export bucket env vars (e.g.
+`CUBEJS_DB_EXPORT_BUCKET_AWS_KEY` and `CUBEJS_DB_EXPORT_BUCKET_AWS_SECRET`,
+or the driver-specific storage-integration variables). OIDC then handles
+Cube's download of the unloaded objects from the bucket.
+
+</Warning>
 
 ## Cube Store CSPS bucket
 
@@ -526,3 +593,4 @@ authenticating against which roles.
 [ref-cube-cloud-region]: /admin/deployment/infrastructure#what-is-a-cube-cloud-region
 [ref-export-bucket]: /admin/connect-to-data#export-bucket
 [ref-athena-assume-role]: /admin/connect-to-data/data-sources/aws-athena#environment-variables
+[ref-redshift-driver-iam]: /admin/connect-to-data/data-sources/aws-redshift#iam-authentication

@@ -1,3 +1,11 @@
+//! Chain of SQL-rendering nodes assembled by `SqlNodesFactory` and
+//! consumed by `SqlEvaluatorVisitor`. Each node decides — for a
+//! given `MemberSymbol` — whether to handle the rendering itself
+//! or to delegate to its `input`, so the chain progressively wraps
+//! the base SQL with cube prefixing, parenthesisation, CASE
+//! expressions, masking, aggregation, window functions, and
+//! pre-aggregation reference substitution.
+
 pub mod auto_prefix;
 pub mod calendar_time_shift;
 pub mod case;
@@ -15,6 +23,7 @@ pub mod parenthesize;
 pub mod render_references;
 pub mod rolling_window;
 pub mod root_processor;
+pub mod segment_dimension;
 pub mod sql_node;
 pub mod time_dimension;
 pub mod time_shift;
@@ -37,6 +46,7 @@ pub use parenthesize::ParenthesizeSqlNode;
 pub use render_references::*;
 pub use rolling_window::RollingWindowNode;
 pub use root_processor::RootSqlNode;
+pub use segment_dimension::SegmentDimensionSqlNode;
 pub use sql_node::SqlNode;
 pub use time_dimension::TimeDimensionNode;
 pub use time_shift::TimeShiftSqlNode;

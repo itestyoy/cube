@@ -19,6 +19,8 @@ export const transpiledFieldsPatterns: Array<RegExp> = [
   /^measures\.[_a-zA-Z][_a-zA-Z0-9]*\.(orderBy|order_by)\.[0-9]+\.sql$/,
   /^measures\.[_a-zA-Z][_a-zA-Z0-9]*\.(timeShift|time_shift)\.[0-9]+\.(timeDimension|time_dimension)$/,
   /^measures\.[_a-zA-Z][_a-zA-Z0-9]*\.(reduceBy|reduce_by|groupBy|group_by|addGroupBy|add_group_by)$/,
+  /^(measures|dimensions)\.[_a-zA-Z][_a-zA-Z0-9]*\.filter\.(exclude|keepOnly|keep_only)$/,
+  /^measures\.[_a-zA-Z][_a-zA-Z0-9]*\.grain\.(exclude|keepOnly|keep_only|include)$/,
   /^(measures|dimensions)\.[_a-zA-Z][_a-zA-Z0-9]*\.case\.switch$/,
   /^dimensions\.[_a-zA-Z][_a-zA-Z0-9]*\.(reduceBy|reduce_by|groupBy|group_by|addGroupBy|add_group_by|key)$/,
   /^(preAggregations|pre_aggregations)\.[_a-zA-Z][_a-zA-Z0-9]*\.indexes\.[_a-zA-Z][_a-zA-Z0-9]*\.columns$/,
@@ -37,7 +39,12 @@ export const transpiledFieldsPatterns: Array<RegExp> = [
   /^(accessPolicy|access_policy)\.[0-9]+\.(rowLevel|row_level)\.filters\.[0-9]+.*\.member$/,
   /^(accessPolicy|access_policy)\.[0-9]+\.(rowLevel|row_level)\.filters\.[0-9]+.*\.values$/,
   /^(accessPolicy|access_policy)\.[0-9]+\.conditions.[0-9]+\.if$/,
+  /^(defaultFilters|default_filters)\.[0-9]+\.member$/,
+  /^(defaultFilters|default_filters)\.[0-9]+\.values$/,
+  /^(defaultFilters|default_filters)\.[0-9]+\.unless$/,
   /^(measures|dimensions)\.[_a-zA-Z][_a-zA-Z0-9]*\.mask\.sql$/,
+  /^dimensions\.[_a-zA-Z][_a-zA-Z0-9]*\.links\.[0-9]+\.url$/,
+  /^dimensions\.[_a-zA-Z][_a-zA-Z0-9]*\.links\.[0-9]+\.params\.[0-9]+\.value$/,
 ];
 
 export const transpiledFields: Set<String> = new Set<String>();

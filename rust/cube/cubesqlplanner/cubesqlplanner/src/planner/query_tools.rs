@@ -12,6 +12,7 @@ use crate::planner::filter::compiler::FilterCompiler;
 use crate::planner::filter::{FilterGroup, FilterGroupOperator, FilterItem};
 use crate::planner::join_hints::JoinHints;
 use crate::planner::sql_templates::PlanSqlTemplates;
+use crate::planner::JoinTreeCache;
 use chrono_tz::Tz;
 use cubenativeutils::CubeError;
 use itertools::Itertools;
@@ -39,6 +40,7 @@ pub struct QueryTools {
     // after the QueryTools Rc is constructed (FilterCompiler requires it),
     // then never mutated again — RefCell only carries the construction phase.
     member_mask_filters: RefCell<HashMap<String, FilterItem>>,
+    join_tree_cache: JoinTreeCache,
 }
 
 impl QueryTools {
@@ -85,12 +87,17 @@ impl QueryTools {
             join_graph,
             templates_render,
             params_allocator: Rc::new(RefCell::new(ParamsAllocator::new(export_annotated_sql))),
-            evaluator_compiler,
+            evaluator_compiler: evaluator_compiler.clone(),
             timezone,
             convert_tz_for_raw_time_dimension,
             masked_members: masked_set,
             member_mask_filters: RefCell::new(HashMap::new()),
+            join_tree_cache: JoinTreeCache::default(),
         });
+
+        evaluator_compiler
+            .borrow_mut()
+            .set_query_tools(Rc::downgrade(&result));
 
         // Phase 2: compile mask filters once now that Rc<QueryTools> exists.
         // After this, member_mask_filters is treated as immutable for the
@@ -185,6 +192,10 @@ impl QueryTools {
 
     pub fn evaluator_compiler(&self) -> &Rc<RefCell<Compiler>> {
         &self.evaluator_compiler
+    }
+
+    pub fn join_tree_cache(&self) -> &JoinTreeCache {
+        &self.join_tree_cache
     }
 
     pub fn alias_name(&self, name: &str) -> String {

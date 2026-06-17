@@ -50,6 +50,18 @@ impl MockDriverTools {
         }
     }
 
+    pub fn with_sql_templates_and_timezone(
+        sql_templates: MockSqlTemplatesRender,
+        timezone: String,
+    ) -> Self {
+        Self {
+            timezone,
+            timestamp_precision: 3,
+            sql_templates: Rc::new(sql_templates),
+            visible_in_db_time_zone: false,
+        }
+    }
+
     #[allow(dead_code)]
     pub fn with_visible_in_db_time_zone(mut self) -> Self {
         self.visible_in_db_time_zone = true;
@@ -201,11 +213,11 @@ impl DriverTools for MockDriverTools {
     }
 
     fn hll_merge(&self, sql: String) -> Result<String, CubeError> {
-        Ok(format!("round(hll_cardinality(hll_union_agg({})))", sql))
+        Ok(format!("merge({})", sql))
     }
 
     fn hll_cardinality_merge(&self, sql: String) -> Result<String, CubeError> {
-        self.hll_merge(sql)
+        Ok(format!("cardinality(merge({}))", sql))
     }
 
     fn count_distinct_approx(&self, sql: String) -> Result<String, CubeError> {

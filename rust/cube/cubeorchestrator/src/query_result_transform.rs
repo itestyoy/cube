@@ -7,13 +7,17 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-use indexmap::IndexMap;
+use indexmap::{Equivalent, IndexMap};
 use itertools::multizip;
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{self, MapAccess, SeqAccess, Visitor},
+    Deserialize, Deserializer, Serialize,
+};
 use serde_json::Value;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     fmt::Display,
+    hash::{BuildHasher, Hash, Hasher},
     sync::{Arc, LazyLock},
 };
 
@@ -37,17 +41,142 @@ pub static GRANULARITY_LEVELS: LazyLock<HashMap<&'static str, u8>> = LazyLock::n
 });
 const DEFAULT_LEVEL_FOR_UNKNOWN: u8 = 10;
 
-/// Transform specified `value` with specified `type` to the network protocol type.
-pub fn transform_value(value: DBResponseValue, type_: &str) -> DBResponsePrimitive {
-    match value {
-        DBResponseValue::DateTime(dt) if type_ == "time" || type_.is_empty() => {
-            DBResponsePrimitive::String(
-                dt.with_timezone(&Utc)
-                    .format("%Y-%m-%dT%H:%M:%S%.3f")
-                    .to_string(),
-            )
+/// IndexMap key whose hash is computed once at construction. Combined with
+/// [`PrehashedBuildHasher`], this makes per-row `insert` skip the SipHash13
+/// pass over the string bytes — the hasher just stores and returns the
+/// pre-computed `u64`.
+pub struct InternedKey {
+    hash: u64,
+    text: Box<str>,
+}
+
+impl InternedKey {
+    pub fn new(text: &str) -> Self {
+        Self {
+            hash: hash_str(text),
+            text: text.into(),
         }
-        DBResponseValue::Primitive(DBResponsePrimitive::String(ref s)) if type_ == "time" => {
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
+
+fn hash_str(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+impl Hash for InternedKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+impl PartialEq for InternedKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash && self.text == other.text
+    }
+}
+impl Eq for InternedKey {}
+
+impl std::fmt::Debug for InternedKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.text, f)
+    }
+}
+
+impl std::fmt::Display for InternedKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl Serialize for InternedKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.text)
+    }
+}
+
+impl<'de> Deserialize<'de> for InternedKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text: String = String::deserialize(deserializer)?;
+        Ok(InternedKey::new(&text))
+    }
+}
+
+/// Lookup key for `IndexMap<Arc<InternedKey>, V, PrehashedBuildHasher>` that
+/// avoids allocating an `Arc<InternedKey>` per lookup when the caller only has
+/// a borrowed `&str` (e.g. per-cell `field_name` lookups from the SQL scan
+/// path in `cubejs-backend-native`). Computes the hash of the borrowed `&str`
+/// once at construction.
+pub struct InternedKeyLookup<'a> {
+    hash: u64,
+    text: &'a str,
+}
+
+impl<'a> InternedKeyLookup<'a> {
+    pub fn new(text: &'a str) -> Self {
+        Self {
+            hash: hash_str(text),
+            text,
+        }
+    }
+}
+
+impl Hash for InternedKeyLookup<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+impl Equivalent<Arc<InternedKey>> for InternedKeyLookup<'_> {
+    fn equivalent(&self, key: &Arc<InternedKey>) -> bool {
+        self.hash == key.hash && self.text == key.as_str()
+    }
+}
+
+/// Pass-through [`BuildHasher`] for IndexMaps keyed by [`InternedKey`] /
+/// [`InternedKeyLookup`]: takes the `u64` they emit and returns it unchanged.
+#[derive(Default, Clone)]
+pub struct PrehashedBuildHasher;
+
+impl BuildHasher for PrehashedBuildHasher {
+    type Hasher = PrehashedHasher;
+
+    fn build_hasher(&self) -> PrehashedHasher {
+        PrehashedHasher(0)
+    }
+}
+
+pub struct PrehashedHasher(u64);
+
+impl Hasher for PrehashedHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, _bytes: &[u8]) {
+        unreachable!("PrehashedHasher only accepts pre-computed u64 hashes via write_u64");
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.0 = n;
+    }
+}
+
+pub type VanillaRow = IndexMap<Arc<InternedKey>, DBResponsePrimitive, PrehashedBuildHasher>;
+
+pub fn empty_vanilla_row(capacity: usize) -> VanillaRow {
+    IndexMap::with_capacity_and_hasher(capacity, PrehashedBuildHasher)
+}
+
+/// Transform specified `value` with specified `type` to the network protocol type.
+pub fn transform_value(value: DBResponsePrimitive, type_: &str) -> DBResponsePrimitive {
+    match value {
+        DBResponsePrimitive::String(ref s) if type_ == "time" => {
             let formatted = DateTime::parse_from_rfc3339(s)
                 .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.3f").to_string())
                 .or_else(|_| {
@@ -88,9 +217,7 @@ pub fn transform_value(value: DBResponseValue, type_: &str) -> DBResponsePrimiti
                 .unwrap_or_else(|_| s.clone());
             DBResponsePrimitive::String(formatted)
         }
-        DBResponseValue::Primitive(p) => p,
-        DBResponseValue::Object { value } => value,
-        _ => DBResponsePrimitive::Null,
+        other => other,
     }
 }
 
@@ -324,11 +451,17 @@ pub fn get_members(
 
 /// One output cell in a compact row. Built once per request by
 /// [`build_compact_plan`] so the per-row materializer ([`get_compact_row`])
-/// only does the bounds check and [`transform_value`] call.
+/// only does a single bounds check (`column.get(row_idx)`) and the
+/// [`transform_value`] call. The plan borrows the column slice directly,
+/// eliminating the per-cell `db_data.data.get(col).and_then(...)` double
+/// lookup the row-major loop would otherwise do on every cell.
 pub(crate) enum CompactPlanEntry<'a> {
-    /// Read `db_row[column_index]` and run [`transform_value`].
+    /// Read `column[row_idx]` and run [`transform_value`]. `column` is a slice
+    /// of the corresponding [`ColumnarArray`]; the fat pointer inlines
+    /// `(ptr, len)` so the per-cell access avoids the extra Vec metadata
+    /// indirection.
     Cell {
-        column_index: usize,
+        column: &'a [DBResponsePrimitive],
         member_type: &'a str,
     },
     /// Constant value replicated across every row (the
@@ -344,7 +477,7 @@ pub(crate) fn build_compact_plan<'a>(
     members: &[String],
     members_to_alias_map: &IndexMap<String, String>,
     annotation: &'a HashMap<String, ConfigItem>,
-    columns_pos: &IndexMap<String, usize>,
+    cube_store_result: &'a QueryResult,
     query_type: &QueryType,
     time_dimensions: Option<&Vec<QueryTimeDimension>>,
 ) -> Result<CompactPlan<'a>> {
@@ -353,11 +486,10 @@ pub(crate) fn build_compact_plan<'a>(
     for m in members {
         if let Some(annotation_item) = annotation.get(m) {
             if let Some(alias) = members_to_alias_map.get(m) {
-                if let Some(&column_index) = columns_pos.get(alias) {
-                    let member_type = annotation_item.member_type.as_deref().unwrap_or("");
+                if let Some(&column_index) = cube_store_result.columns_pos.get(alias) {
                     entries.push(CompactPlanEntry::Cell {
-                        column_index,
-                        member_type,
+                        column: cube_store_result.data[column_index].as_slice(),
+                        member_type: annotation_item.member_type.as_deref().unwrap_or(""),
                     });
                 }
             }
@@ -373,15 +505,16 @@ pub(crate) fn build_compact_plan<'a>(
         QueryType::BlendingQuery => {
             let blending_key = get_blending_response_key(time_dimensions)?;
             if let Some(alias) = members_to_alias_map.get(&blending_key) {
-                if let Some(&column_index) = columns_pos.get(alias) {
+                if let Some(&column_index) = cube_store_result.columns_pos.get(alias) {
                     // Preserve the (likely-quirky) lookup at the original
                     // `get_compact_row`: member_type comes from
                     // `annotation[alias]`, not `annotation[member]`.
                     let member_type = annotation
                         .get(alias)
                         .map_or("", |a| a.member_type.as_deref().unwrap_or(""));
+                    let column = cube_store_result.data[column_index].as_slice();
                     entries.push(CompactPlanEntry::Cell {
-                        column_index,
+                        column,
                         member_type,
                     });
                 }
@@ -393,22 +526,19 @@ pub(crate) fn build_compact_plan<'a>(
     Ok(CompactPlan { entries })
 }
 
-/// Convert DB response row to the compact output
-pub fn get_compact_row(
-    plan: &CompactPlan<'_>,
-    db_row: &[DBResponseValue],
-) -> Vec<DBResponsePrimitive> {
+/// Convert DB response row to the compact output. The plan carries the
+/// per-cell column slice directly, so this loop only does one bounds check
+/// (`column.get(row_idx)`) per cell — no `db_data.data.get(col)` indirection.
+pub fn get_compact_row(plan: &CompactPlan<'_>, row_idx: usize) -> Vec<DBResponsePrimitive> {
     let mut row: Vec<DBResponsePrimitive> = Vec::with_capacity(plan.entries.len());
 
     for entry in &plan.entries {
         match entry {
             CompactPlanEntry::Cell {
-                column_index,
+                column,
                 member_type,
             } => {
-                if let Some(value) = db_row.get(*column_index) {
-                    row.push(transform_value(value.clone(), member_type));
-                }
+                row.push(transform_value(column[row_idx].clone(), member_type));
             }
             CompactPlanEntry::Constant(v) => {
                 row.push(v.clone());
@@ -421,12 +551,18 @@ pub fn get_compact_row(
 
 /// Per-column information that is constant across all rows for a given request.
 /// Built once and walked per row to avoid redoing hash lookups, annotation checks,
-/// and member-name parsing for every cell.
+/// and member-name parsing for every cell. Holds the column slice directly so
+/// the per-row materializer does one bounds check per cell instead of the
+/// `db_data.data.get(col).and_then(...)` double lookup.
 pub struct VanillaColumnPlan<'a> {
-    column_index: usize,
-    member_name: &'a str,
+    /// Slice of the corresponding [`ColumnarArray`]. Fat pointer inlines
+    /// `(ptr, len)`, so the per-cell access avoids the extra Vec metadata
+    /// indirection.
+    column: &'a [DBResponsePrimitive],
+    /// Interned IndexMap key for this column with a pre-computed hash.
+    /// Cloned via [`Arc::clone`] per row (atomic refcount inc).
+    key: Arc<InternedKey>,
     member_type: &'a str,
-    granularity_track: Option<VanillaGranularityTrack<'a>>,
 }
 
 pub(crate) struct VanillaGranularityTrack<'a> {
@@ -435,21 +571,51 @@ pub(crate) struct VanillaGranularityTrack<'a> {
     level: u8,
 }
 
+/// Resolved at plan time: for each deprecated-style base time dimension (one
+/// that appears in the query only via `{cube}.{dim}.{granularity}` aliases),
+/// the list of source columns whose value can be reused under the bare
+/// `{cube}.{dim}` key. Candidates are kept in column-encounter order. At row
+/// time we pick the lowest-level candidate whose value is actually present —
+/// so a row missing the finest column still falls back to a coarser one, as
+/// the previous per-row HashMap did. Ties resolve to the last column.
+pub(crate) struct VanillaGranularityExtra {
+    /// Interned IndexMap key for the bare `{cube}.{dim}` base member.
+    /// Built once at plan time and cloned via [`Arc::clone`] per row.
+    base_key: Arc<InternedKey>,
+    candidates: Vec<(u8, Arc<InternedKey>)>,
+}
+
 pub struct VanillaPlan<'a> {
     columns: Vec<VanillaColumnPlan<'a>>,
-    has_granularity_tracking: bool,
+    minimal_granularity_extras: Vec<VanillaGranularityExtra>,
+    /// Pre-computed tail entry that depends only on the query, not the row.
+    tail: VanillaTail,
+}
+
+enum VanillaTail {
+    None,
+    CompareDateRange {
+        key: Arc<InternedKey>,
+        value: DBResponsePrimitive,
+    },
+    Blending {
+        blending_key: Arc<InternedKey>,
+        /// Used only for lookup against the per-row map — never inserted.
+        response_key: InternedKey,
+    },
 }
 
 pub fn build_vanilla_plan<'a>(
-    columns_pos: &'a IndexMap<String, usize>,
+    cube_store_result: &'a QueryResult,
     alias_to_member_name_map: &'a HashMap<String, String>,
     annotation: &'a HashMap<String, ConfigItem>,
     query: &NormalizedQuery,
+    query_type: &QueryType,
 ) -> Result<VanillaPlan<'a>> {
-    let mut columns = Vec::with_capacity(columns_pos.len());
-    let mut has_granularity_tracking = false;
+    let mut columns = Vec::with_capacity(cube_store_result.columns_pos.len());
+    let mut candidates_for_base: IndexMap<&'a str, Vec<(u8, Arc<InternedKey>)>> = IndexMap::new();
 
-    for (alias, &index) in columns_pos {
+    for (alias, &index) in &cube_store_result.columns_pos {
         let member_name = match alias_to_member_name_map.get(alias) {
             Some(m) => m.as_str(),
             None => bail!("Missing member name for alias: {}", alias),
@@ -458,25 +624,52 @@ pub fn build_vanilla_plan<'a>(
         let annotation_for_member = annotation.get(member_name).unwrap();
         let member_type = annotation_for_member.member_type.as_deref().unwrap_or("");
 
-        // Handle deprecated time dimensions without granularity.
-        // Try to collect minimal granularity value for time dimensions without granularity
-        // as there might be more than one granularity column for the same dimension.
-        let granularity_track = compute_vanilla_granularity_track(member_name, query);
-        if granularity_track.is_some() {
-            has_granularity_tracking = true;
+        let key = Arc::new(InternedKey::new(member_name));
+
+        if let Some(track) = compute_vanilla_granularity_track(member_name, query) {
+            candidates_for_base
+                .entry(track.base_member)
+                .or_default()
+                .push((track.level, Arc::clone(&key)));
         }
 
+        let column = cube_store_result.data[index].as_slice();
+
         columns.push(VanillaColumnPlan {
-            column_index: index,
-            member_name,
+            column,
+            key,
             member_type,
-            granularity_track,
         });
     }
 
+    let minimal_granularity_extras = candidates_for_base
+        .into_iter()
+        .map(|(base_member, candidates)| VanillaGranularityExtra {
+            base_key: Arc::new(InternedKey::new(base_member)),
+            candidates,
+        })
+        .collect();
+
+    let tail = match query_type {
+        QueryType::CompareDateRangeQuery => VanillaTail::CompareDateRange {
+            key: Arc::new(InternedKey::new(COMPARE_DATE_RANGE_FIELD)),
+            value: get_date_range_value(query.time_dimensions.as_ref())?,
+        },
+        QueryType::BlendingQuery => VanillaTail::Blending {
+            blending_key: Arc::new(InternedKey::new(&get_blending_query_key(
+                query.time_dimensions.as_ref(),
+            )?)),
+            response_key: InternedKey::new(&get_blending_response_key(
+                query.time_dimensions.as_ref(),
+            )?),
+        },
+        _ => VanillaTail::None,
+    };
+
     Ok(VanillaPlan {
         columns,
-        has_granularity_tracking,
+        minimal_granularity_extras,
+        tail,
     })
 }
 
@@ -605,26 +798,22 @@ fn build_columnar_plan<'a>(
     Ok(plan)
 }
 
-/// Materialize [`TransformedData::Columnar`] columns directly from the
-/// row-major `cube_store_result.rows` matrix.
 fn build_columnar_columns(
     plan: &[ColumnarColumnPlan<'_>],
-    rows: &[Vec<DBResponseValue>],
-) -> Vec<Vec<DBResponsePrimitive>> {
-    let row_count = rows.len();
-    let mut columns: Vec<Vec<DBResponsePrimitive>> =
-        plan.iter().map(|_| Vec::with_capacity(row_count)).collect();
+    db_data: &QueryResult,
+) -> Vec<ColumnarArray> {
+    let row_count = db_data.row_count;
+    let mut columns: Vec<ColumnarArray> = plan
+        .iter()
+        .map(|_| ColumnarArray::with_capacity(row_count))
+        .collect();
 
     for (col_idx, plan_entry) in plan.iter().enumerate() {
         let out = &mut columns[col_idx];
         match &plan_entry.source {
             ColumnarColumnSource::DbColumn { index } => {
-                for row in rows {
-                    let cell = row
-                        .get(*index)
-                        .cloned()
-                        .unwrap_or(DBResponseValue::Primitive(DBResponsePrimitive::Null));
-                    out.push(transform_value(cell, plan_entry.member_type));
+                for cell in db_data.data[*index].iter() {
+                    out.push(transform_value(cell.clone(), plan_entry.member_type));
                 }
             }
             ColumnarColumnSource::Constant(v) => {
@@ -639,67 +828,61 @@ fn build_columnar_columns(
     columns
 }
 
-/// Convert DB response object to the vanilla output format.
-pub fn get_vanilla_row(
-    plan: &VanillaPlan<'_>,
-    query_type: &QueryType,
-    query: &NormalizedQuery,
-    db_row: &[DBResponseValue],
-) -> Result<IndexMap<String, DBResponsePrimitive>> {
+/// Convert DB response object to the vanilla output format. Keys are
+/// pre-hashed [`InternedKey`] values shared via [`Arc::clone`] from the plan,
+/// turning per-cell hashing/key allocation into an atomic refcount inc. The
+/// plan also carries the column slice directly, so the per-row loop does one
+/// bounds check (`column.column.get(row_idx)`) per cell instead of the
+/// `db_data.data.get(col).and_then(...)` double lookup.
+pub fn get_vanilla_row(plan: &VanillaPlan<'_>, row_idx: usize) -> Result<VanillaRow> {
     // +1 to cover the optional tail entry (compareDateRange / blending key).
-    let mut row = IndexMap::with_capacity(plan.columns.len() + 1);
+    let mut row = IndexMap::with_capacity_and_hasher(
+        plan.columns.len() + plan.minimal_granularity_extras.len() + 1,
+        PrehashedBuildHasher,
+    );
 
-    if plan.has_granularity_tracking {
-        // FIXME: For now custom granularities are not supported, only common ones.
-        // There is no granularity type/class implementation in rust yet.
-        let mut minimal_granularities: HashMap<&str, (u8, DBResponsePrimitive)> = HashMap::new();
+    for column in &plan.columns {
+        let transformed_value = transform_value(column.column[row_idx].clone(), column.member_type);
+        row.insert(Arc::clone(&column.key), transformed_value);
+    }
 
-        for column in &plan.columns {
-            if let Some(value) = db_row.get(column.column_index) {
-                let transformed_value = transform_value(value.clone(), column.member_type);
-                row.insert(column.member_name.to_string(), transformed_value.clone());
+    // Handle deprecated time dimensions without granularity. The candidate
+    // columns were collected at plan build time; pick the lowest-level one
+    // whose transformed value is actually present in this row
+    if !plan.minimal_granularity_extras.is_empty() {
+        for extra in &plan.minimal_granularity_extras {
+            let mut best: Option<(u8, &DBResponsePrimitive)> = None;
 
-                if let Some(track) = &column.granularity_track {
-                    match minimal_granularities.get(track.base_member) {
-                        Some((existing_level, _)) if *existing_level < track.level => {}
-                        _ => {
-                            minimal_granularities
-                                .insert(track.base_member, (track.level, transformed_value));
-                        }
-                    }
+            for (level, source_key) in &extra.candidates {
+                let Some(value) = row.get::<InternedKey>(source_key) else {
+                    continue;
+                };
+
+                match best {
+                    Some((best_level, _)) if best_level < *level => {}
+                    _ => best = Some((*level, value)),
                 }
             }
-        }
 
-        // Handle deprecated time dimensions without granularity
-        for (base_member, (_, value)) in minimal_granularities {
-            row.insert(base_member.to_string(), value);
-        }
-    } else {
-        // Fast path: no column needs granularity bookkeeping. Skip the HashMap
-        // entirely and move the transformed value straight into the row.
-        for column in &plan.columns {
-            if let Some(value) = db_row.get(column.column_index) {
-                let transformed_value = transform_value(value.clone(), column.member_type);
-                row.insert(column.member_name.to_string(), transformed_value);
+            if let Some((_, value)) = best {
+                row.insert(Arc::clone(&extra.base_key), value.clone());
             }
         }
     }
 
-    match query_type {
-        QueryType::CompareDateRangeQuery => {
-            let date_range_value = get_date_range_value(query.time_dimensions.as_ref())?;
-            row.insert("compareDateRange".to_string(), date_range_value);
+    match &plan.tail {
+        VanillaTail::None => {}
+        VanillaTail::CompareDateRange { key, value } => {
+            row.insert(Arc::clone(key), value.clone());
         }
-        QueryType::BlendingQuery => {
-            let blending_key = get_blending_query_key(query.time_dimensions.as_ref())?;
-            let response_key = get_blending_response_key(query.time_dimensions.as_ref())?;
-
-            if let Some(value) = row.get(&response_key) {
-                row.insert(blending_key, value.clone());
+        VanillaTail::Blending {
+            blending_key,
+            response_key,
+        } => {
+            if let Some(value) = row.get::<InternedKey>(response_key) {
+                row.insert(Arc::clone(blending_key), value.clone());
             }
         }
-        _ => {}
     }
 
     Ok(row)
@@ -811,9 +994,9 @@ pub enum TransformedData {
     },
     Columnar {
         members: Vec<String>,
-        columns: Vec<Vec<DBResponsePrimitive>>,
+        columns: Vec<ColumnarArray>,
     },
-    Vanilla(Vec<IndexMap<String, DBResponsePrimitive>>),
+    Vanilla(Vec<VanillaRow>),
 }
 
 impl TransformedData {
@@ -842,14 +1025,13 @@ impl TransformedData {
                     &members,
                     &members_to_alias_map,
                     annotation,
-                    &cube_store_result.columns_pos,
+                    cube_store_result,
                     query_type,
                     query.time_dimensions.as_ref(),
                 )?;
-                let dataset: Vec<_> = cube_store_result
-                    .rows
-                    .iter()
-                    .map(|row| get_compact_row(&plan, row))
+                let row_count = cube_store_result.row_count;
+                let dataset: Vec<_> = (0..row_count)
+                    .map(|row_idx| get_compact_row(&plan, row_idx))
                     .collect();
                 Ok(TransformedData::Compact { members, dataset })
             }
@@ -862,20 +1044,20 @@ impl TransformedData {
                     query_type,
                     query.time_dimensions.as_ref(),
                 )?;
-                let columns = build_columnar_columns(&plan, &cube_store_result.rows);
+                let columns = build_columnar_columns(&plan, cube_store_result);
                 Ok(TransformedData::Columnar { members, columns })
             }
             _ => {
                 let plan = build_vanilla_plan(
-                    &cube_store_result.columns_pos,
+                    cube_store_result,
                     alias_to_member_name_map,
                     annotation,
                     query,
+                    query_type,
                 )?;
-                let dataset: Vec<_> = cube_store_result
-                    .rows
-                    .iter()
-                    .map(|row| get_vanilla_row(&plan, query_type, query, row))
+                let row_count = cube_store_result.row_count;
+                let dataset: Vec<_> = (0..row_count)
+                    .map(|row_idx| get_vanilla_row(&plan, row_idx))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(TransformedData::Vanilla(dataset))
             }
@@ -970,7 +1152,7 @@ pub struct RequestResultArray {
     pub results: Vec<RequestResultData>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum DBResponsePrimitive {
     Null,
@@ -978,6 +1160,93 @@ pub enum DBResponsePrimitive {
     Number(f64),
     String(String),
     Uncommon(Value),
+}
+
+// Hand-written `Deserialize` that avoids serde's untagged-enum buffering.
+impl<'de> Deserialize<'de> for DBResponsePrimitive {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct DBResponsePrimitiveVisitor;
+
+        impl<'de> Visitor<'de> for DBResponsePrimitiveVisitor {
+            type Value = DBResponsePrimitive;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a JSON primitive (null, bool, number, string) or container")
+            }
+
+            fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
+                Ok(DBResponsePrimitive::Boolean(v))
+            }
+
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+                Ok(DBResponsePrimitive::Number(v as f64))
+            }
+
+            fn visit_i128<E: de::Error>(self, v: i128) -> Result<Self::Value, E> {
+                Ok(DBResponsePrimitive::Number(v as f64))
+            }
+
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+                Ok(DBResponsePrimitive::Number(v as f64))
+            }
+
+            fn visit_u128<E: de::Error>(self, v: u128) -> Result<Self::Value, E> {
+                Ok(DBResponsePrimitive::Number(v as f64))
+            }
+
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+                Ok(DBResponsePrimitive::Number(v))
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(DBResponsePrimitive::String(v.to_owned()))
+            }
+
+            fn visit_borrowed_str<E: de::Error>(self, v: &'de str) -> Result<Self::Value, E> {
+                Ok(DBResponsePrimitive::String(v.to_owned()))
+            }
+
+            fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
+                Ok(DBResponsePrimitive::String(v))
+            }
+
+            fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(DBResponsePrimitive::Null)
+            }
+
+            fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(DBResponsePrimitive::Null)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Deserialize::deserialize(deserializer)
+            }
+
+            fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let value = Value::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
+                Ok(DBResponsePrimitive::Uncommon(value))
+            }
+
+            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let value = Value::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                Ok(DBResponsePrimitive::Uncommon(value))
+            }
+        }
+
+        deserializer.deserialize_any(DBResponsePrimitiveVisitor)
+    }
 }
 
 impl Display for DBResponsePrimitive {
@@ -995,22 +1264,53 @@ impl Display for DBResponsePrimitive {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub enum DBResponseValue {
-    DateTime(DateTime<Utc>),
-    Primitive(DBResponsePrimitive),
-    // TODO: Is this variant still used?
-    Object { value: DBResponsePrimitive },
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(transparent)]
+pub struct ColumnarArray(pub Vec<DBResponsePrimitive>);
+
+impl ColumnarArray {
+    #[inline]
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    #[inline]
+    pub fn with_capacity(cap: usize) -> Self {
+        Self(Vec::with_capacity(cap))
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[DBResponsePrimitive] {
+        &self.0
+    }
 }
 
-impl Display for DBResponseValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let str = match self {
-            DBResponseValue::DateTime(dt) => dt.to_rfc3339(),
-            DBResponseValue::Primitive(p) => p.to_string(),
-            DBResponseValue::Object { value } => value.to_string(),
-        };
-        write!(f, "{}", str)
+impl From<Vec<DBResponsePrimitive>> for ColumnarArray {
+    #[inline]
+    fn from(v: Vec<DBResponsePrimitive>) -> Self {
+        Self(v)
+    }
+}
+
+impl From<ColumnarArray> for Vec<DBResponsePrimitive> {
+    #[inline]
+    fn from(c: ColumnarArray) -> Self {
+        c.0
+    }
+}
+
+impl std::ops::Deref for ColumnarArray {
+    type Target = Vec<DBResponsePrimitive>;
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ColumnarArray {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -1019,7 +1319,6 @@ mod tests {
     use super::*;
     use crate::transport::JsRawColumnarData;
     use anyhow::Result;
-    use chrono::{TimeZone, Timelike, Utc};
     use serde_json::from_str;
     use std::{fmt, sync::LazyLock};
 
@@ -1974,42 +2273,8 @@ mod tests {
     }
 
     #[test]
-    fn test_transform_value_datetime_to_time() {
-        let dt = Utc
-            .with_ymd_and_hms(2024, 1, 1, 12, 30, 15)
-            .unwrap()
-            .with_nanosecond(123_000_000)
-            .unwrap();
-        let value = DBResponseValue::DateTime(dt);
-        let result = transform_value(value, "time");
-
-        assert_eq!(
-            result,
-            DBResponsePrimitive::String("2024-01-01T12:30:15.123".to_string())
-        );
-    }
-
-    #[test]
-    fn test_transform_value_datetime_empty_type() {
-        let dt = Utc
-            .with_ymd_and_hms(2024, 1, 1, 12, 30, 15)
-            .unwrap()
-            .with_nanosecond(123_000_000)
-            .unwrap();
-        let value = DBResponseValue::DateTime(dt);
-        let result = transform_value(value, "");
-
-        assert_eq!(
-            result,
-            DBResponsePrimitive::String("2024-01-01T12:30:15.123".to_string())
-        );
-    }
-
-    #[test]
     fn test_transform_value_string_to_time_valid_rfc3339() {
-        let value = DBResponseValue::Primitive(DBResponsePrimitive::String(
-            "2024-01-01T12:30:15.123".to_string(),
-        ));
+        let value = DBResponsePrimitive::String("2024-01-01T12:30:15.123".to_string());
         let result = transform_value(value, "time");
 
         assert_eq!(
@@ -2020,9 +2285,7 @@ mod tests {
 
     #[test]
     fn test_transform_value_string_wo_t_to_time_valid_rfc3339() {
-        let value = DBResponseValue::Primitive(DBResponsePrimitive::String(
-            "2024-01-01 12:30:15.123".to_string(),
-        ));
+        let value = DBResponsePrimitive::String("2024-01-01 12:30:15.123".to_string());
         let result = transform_value(value, "time");
 
         assert_eq!(
@@ -2033,9 +2296,7 @@ mod tests {
 
     #[test]
     fn test_transform_value_string_wo_mssec_to_time_valid_rfc3339() {
-        let value = DBResponseValue::Primitive(DBResponsePrimitive::String(
-            "2024-01-01 12:30:15".to_string(),
-        ));
+        let value = DBResponsePrimitive::String("2024-01-01 12:30:15".to_string());
         let result = transform_value(value, "time");
 
         assert_eq!(
@@ -2046,9 +2307,7 @@ mod tests {
 
     #[test]
     fn test_transform_value_string_wo_mssec_w_t_to_time_valid_rfc3339() {
-        let value = DBResponseValue::Primitive(DBResponsePrimitive::String(
-            "2024-01-01T12:30:15".to_string(),
-        ));
+        let value = DBResponsePrimitive::String("2024-01-01T12:30:15".to_string());
         let result = transform_value(value, "time");
 
         assert_eq!(
@@ -2059,9 +2318,7 @@ mod tests {
 
     #[test]
     fn test_transform_value_string_with_tz_offset_to_time_valid_rfc3339() {
-        let value = DBResponseValue::Primitive(DBResponsePrimitive::String(
-            "2024-01-01 12:30:15.123 +00:00".to_string(),
-        ));
+        let value = DBResponsePrimitive::String("2024-01-01 12:30:15.123 +00:00".to_string());
         let result = transform_value(value, "time");
 
         assert_eq!(
@@ -2072,9 +2329,7 @@ mod tests {
 
     #[test]
     fn test_transform_value_string_with_tz_to_time_valid_rfc3339() {
-        let value = DBResponseValue::Primitive(DBResponsePrimitive::String(
-            "2024-01-01 12:30:15.123 UTC".to_string(),
-        ));
+        let value = DBResponsePrimitive::String("2024-01-01 12:30:15.123 UTC".to_string());
         let result = transform_value(value, "time");
 
         assert_eq!(
@@ -2085,8 +2340,7 @@ mod tests {
 
     #[test]
     fn test_transform_value_string_to_time_invalid_rfc3339() {
-        let value =
-            DBResponseValue::Primitive(DBResponsePrimitive::String("invalid-date".to_string()));
+        let value = DBResponsePrimitive::String("invalid-date".to_string());
         let result = transform_value(value, "time");
 
         assert_eq!(
@@ -2097,33 +2351,13 @@ mod tests {
 
     #[test]
     fn test_transform_value_primitive_string_type_not_time() {
-        let value =
-            DBResponseValue::Primitive(DBResponsePrimitive::String("some-string".to_string()));
+        let value = DBResponsePrimitive::String("some-string".to_string());
         let result = transform_value(value, "other");
 
         assert_eq!(
             result,
             DBResponsePrimitive::String("some-string".to_string())
         );
-    }
-
-    #[test]
-    fn test_transform_value_object() {
-        let obj_value = DBResponsePrimitive::String("object-value".to_string());
-        let value = DBResponseValue::Object {
-            value: obj_value.clone(),
-        };
-        let result = transform_value(value, "time");
-
-        assert_eq!(result, obj_value);
-    }
-
-    #[test]
-    fn test_transform_value_fallback_to_null() {
-        let value = DBResponseValue::DateTime(Utc::now());
-        let result = transform_value(value, "unknown");
-
-        assert_eq!(result, DBResponsePrimitive::Null);
     }
 
     #[test]
@@ -2574,11 +2808,7 @@ mod tests {
         let (members_to_alias_map, members) = get_members(
             query_type,
             query,
-            &QueryResult {
-                members: vec![],
-                rows: vec![],
-                columns_pos: IndexMap::new(),
-            },
+            &QueryResult::empty(),
             alias_to_member_name_map,
             annotation,
         )?;
@@ -2616,11 +2846,7 @@ mod tests {
         match get_members(
             query_type,
             query,
-            &QueryResult {
-                members: vec![],
-                rows: vec![],
-                columns_pos: IndexMap::new(),
-            },
+            &QueryResult::empty(),
             alias_to_member_name_map,
             annotation,
         ) {
@@ -2664,11 +2890,7 @@ mod tests {
         let result = get_members(
             query_type,
             query,
-            &QueryResult {
-                members: vec![],
-                rows: vec![],
-                columns_pos: IndexMap::new(),
-            },
+            &QueryResult::empty(),
             alias_to_member_name_map,
             annotation,
         );
@@ -2728,11 +2950,7 @@ mod tests {
         let (members_to_alias_map, members) = get_members(
             query_type,
             query,
-            &QueryResult {
-                members: vec![],
-                rows: vec![],
-                columns_pos: IndexMap::new(),
-            },
+            &QueryResult::empty(),
             alias_to_member_name_map,
             annotation,
         )?;
@@ -2800,11 +3018,7 @@ mod tests {
         let (members_to_alias_map, members) = get_members(
             query_type,
             query,
-            &QueryResult {
-                members: vec![],
-                rows: vec![],
-                columns_pos: IndexMap::new(),
-            },
+            &QueryResult::empty(),
             alias_to_member_name_map,
             annotation,
         )?;
@@ -2882,11 +3096,11 @@ mod tests {
             &members,
             &members_to_alias_map,
             annotation,
-            &raw_data.columns_pos,
+            &raw_data,
             query_type,
             Some(time_dimensions),
         )?;
-        let res = get_compact_row(&plan, &raw_data.rows[0]);
+        let res = get_compact_row(&plan, 0);
 
         let members_map_expected = HashMap::from([
             (
@@ -2931,11 +3145,11 @@ mod tests {
             &members,
             &members_to_alias_map,
             annotation,
-            &raw_data.columns_pos,
+            &raw_data,
             query_type,
             Some(time_dimensions),
         )?;
-        let res = get_compact_row(&plan, &raw_data.rows[0]);
+        let res = get_compact_row(&plan, 0);
 
         let members_map_expected = HashMap::from([
             (
@@ -2980,11 +3194,11 @@ mod tests {
             &members,
             &members_to_alias_map,
             annotation,
-            &raw_data.columns_pos,
+            &raw_data,
             query_type,
             Some(time_dimensions),
         )?;
-        let res = get_compact_row(&plan, &raw_data.rows[0]);
+        let res = get_compact_row(&plan, 0);
 
         let members_map_expected = HashMap::from([
             (
@@ -3012,7 +3226,7 @@ mod tests {
             assert_eq!(res[i], members_map_expected.get(val).unwrap().clone());
         }
 
-        let res = get_compact_row(&plan, &raw_data.rows[1]);
+        let res = get_compact_row(&plan, 1);
 
         let members_map_expected = HashMap::from([
             (
@@ -3070,11 +3284,11 @@ mod tests {
             &members,
             &members_to_alias_map,
             annotation,
-            &raw_data.columns_pos,
+            &raw_data,
             query_type,
             Some(time_dimensions),
         )?;
-        let res = get_compact_row(&plan, &raw_data.rows[0]);
+        let res = get_compact_row(&plan, 0);
 
         let members_map_expected = HashMap::from([
             (
@@ -3115,22 +3329,23 @@ mod tests {
         let query_type = &test_data.request.query_type.clone().unwrap_or_default();
 
         let plan = build_vanilla_plan(
-            &raw_data.columns_pos,
+            &raw_data,
             alias_to_member_name_map,
             annotation,
             &query,
+            query_type,
         )?;
-        let res = get_vanilla_row(&plan, query_type, &query, &raw_data.rows[0])?;
-        let expected = IndexMap::from([
-            (
-                "ECommerceRecordsUs2021.city".to_string(),
-                DBResponsePrimitive::String("Missouri City".to_string()),
-            ),
-            (
-                "ECommerceRecordsUs2021.avg_discount".to_string(),
-                DBResponsePrimitive::String("0.80000000000000000000".to_string()),
-            ),
-        ]);
+        let res = get_vanilla_row(&plan, 0)?;
+
+        let mut expected: VanillaRow = empty_vanilla_row(2);
+        expected.insert(
+            Arc::new(InternedKey::new("ECommerceRecordsUs2021.city")),
+            DBResponsePrimitive::String("Missouri City".to_string()),
+        );
+        expected.insert(
+            Arc::new(InternedKey::new("ECommerceRecordsUs2021.avg_discount")),
+            DBResponsePrimitive::String("0.80000000000000000000".to_string()),
+        );
         assert_eq!(res, expected);
         Ok(())
     }
@@ -3149,12 +3364,14 @@ mod tests {
         let alias_to_member_name_map = &test_data.request.alias_to_member_name_map;
         let annotation = &test_data.request.annotation;
         let query = test_data.request.query.clone();
+        let query_type = &test_data.request.query_type.clone().unwrap_or_default();
 
         match build_vanilla_plan(
-            &raw_data.columns_pos,
+            &raw_data,
             alias_to_member_name_map,
             annotation,
             &query,
+            query_type,
         ) {
             Ok(_) => Err(TestError("build_vanilla_plan() should fail ".to_string()).into()),
             Err(err) => {
@@ -3178,12 +3395,14 @@ mod tests {
         let alias_to_member_name_map = &test_data.request.alias_to_member_name_map;
         let annotation = &test_data.request.annotation;
         let query = test_data.request.query.clone();
+        let query_type = &test_data.request.query_type.clone().unwrap_or_default();
 
         match build_vanilla_plan(
-            &raw_data.columns_pos,
+            &raw_data,
             alias_to_member_name_map,
             annotation,
             &query,
+            query_type,
         ) {
             Ok(_) => Err(TestError("build_vanilla_plan() should fail ".to_string()).into()),
             Err(err) => {
@@ -3344,5 +3563,65 @@ mod tests {
         let track = compute_vanilla_granularity_track("Cube.orderDate.day", &q)
             .expect("should produce a track");
         assert_eq!(track.base_member, "Cube.orderDate");
+    }
+
+    fn make_config_item(member_type: &str) -> ConfigItem {
+        ConfigItem {
+            title: None,
+            short_title: None,
+            description: None,
+            member_type: Some(member_type.to_string()),
+            format: None,
+            currency: None,
+            meta: None,
+            drill_members: None,
+            drill_members_grouped: None,
+            granularities: None,
+            granularity: None,
+        }
+    }
+
+    /// When all candidates are present, the bare key picks the finest level.
+    #[test]
+    fn test_get_vanilla_row_minimal_granularity_picks_finest_when_all_present() -> Result<()> {
+        let mut alias_to_member_name_map: HashMap<String, String> = HashMap::new();
+        alias_to_member_name_map.insert("t_day".to_string(), "Cube.t.day".to_string());
+        alias_to_member_name_map.insert("t_month".to_string(), "Cube.t.month".to_string());
+
+        let mut annotation: HashMap<String, ConfigItem> = HashMap::new();
+        annotation.insert("Cube.t.day".to_string(), make_config_item("time"));
+        annotation.insert("Cube.t.month".to_string(), make_config_item("time"));
+
+        let query = make_query_with_dims(None);
+        let raw_data = QueryResult::try_new(
+            vec!["t_day".to_string(), "t_month".to_string()],
+            vec![
+                ColumnarArray::from(vec![DBResponsePrimitive::String(
+                    "2024-06-15T00:00:00.000".to_string(),
+                )]),
+                ColumnarArray::from(vec![DBResponsePrimitive::String(
+                    "2024-06-01T00:00:00.000".to_string(),
+                )]),
+            ],
+        )?;
+        let plan = build_vanilla_plan(
+            &raw_data,
+            &alias_to_member_name_map,
+            &annotation,
+            &query,
+            &QueryType::RegularQuery,
+        )?;
+        let res = get_vanilla_row(&plan, 0)?;
+
+        let day_transformed = transform_value(
+            DBResponsePrimitive::String("2024-06-15T00:00:00.000".to_string()),
+            "time",
+        );
+        assert_eq!(
+            res.get(&InternedKey::new("Cube.t")),
+            Some(&day_transformed),
+            "bare base key must use the finest (day) candidate, not month"
+        );
+        Ok(())
     }
 }

@@ -311,6 +311,36 @@ const MaskSchema = Joi.alternatives([
   Joi.string(),
 ]);
 
+const LinkItemSchema = Joi.object().keys({
+  name: identifier.required(),
+  label: Joi.string().required(),
+  url: Joi.func(),
+  dashboard: Joi.string(),
+  icon: Joi.string(),
+  target: Joi.string().valid('blank', 'self'),
+  primary: Joi.boolean().strict(),
+  params: Joi.array().items(Joi.object().keys({
+    key: Joi.string().required(),
+    value: Joi.func().required(),
+  })),
+}).oxor('url', 'dashboard');
+
+const LinksSchema = Joi.array().items(LinkItemSchema).custom((value, helpers) => {
+  const names = value.map((link: any) => (typeof link.name === 'function' ? link.name() : link.name));
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (seen.has(name)) {
+      return helpers.error('any.custom', { message: `Duplicate link name '${name}'` });
+    }
+    seen.add(name);
+  }
+  const primaryCount = value.filter((link: any) => link.primary === true).length;
+  if (primaryCount > 1) {
+    return helpers.error('any.custom', { message: 'Only one link can be marked as primary' });
+  }
+  return value;
+});
+
 const BaseDimensionWithoutSubQuery = {
   aliases: Joi.array().items(Joi.string()),
   type: Joi.any().valid('string', 'number', 'boolean', 'time', 'geo').required(),
@@ -324,6 +354,7 @@ const BaseDimensionWithoutSubQuery = {
   dynamicSql: Joi.func(),
   suggestFilterValues: Joi.boolean().strict(),
   enableSuggestions: Joi.boolean().strict(),
+  links: LinksSchema,
   mask: MaskSchema,
   format: Joi.when('type', {
     switch: [
@@ -848,6 +879,69 @@ const timeShiftItemOptional = Joi.object({
   .xor('name', 'interval')
   .and('interval', 'type');
 
+// Top-level predicate inside `filter.include`: same shape as a query-time
+// filter. `member` and `values` are plain string/array only — neither
+// `filter.include[*].member` nor `filter.include[*].values` is covered by
+// `CubePropContextTranspiler.transpiledFieldsPatterns`, so a function form
+// here would never receive the `CUBE`/`SECURITY_CONTEXT` arguments and would
+// fail at runtime. Use the existing `accessPolicy.rowLevel.filters` if you
+// need dynamic predicates resolved against the security context.
+const MultiStageIncludeMemberFilterSchema = Joi.object().keys({
+  member: Joi.string().required(),
+  operator: Joi.any().valid(
+    'equals',
+    'notEquals',
+    'contains',
+    'notContains',
+    'startsWith',
+    'notStartsWith',
+    'endsWith',
+    'notEndsWith',
+    'in',
+    'notIn',
+    'gt',
+    'gte',
+    'lt',
+    'lte',
+    'set',
+    'notSet',
+    'inDateRange',
+    'notInDateRange',
+    'onTheDate',
+    'beforeDate',
+    'beforeOrOnDate',
+    'afterDate',
+    'afterOrOnDate',
+    'measureFilter',
+  ).required(),
+  values: Joi.when('operator', {
+    is: Joi.valid('set', 'notSet'),
+    then: Joi.array().optional(),
+    otherwise: Joi.array().required()
+  })
+});
+
+const MultiStageIncludeConditionSchema = Joi.object().keys({
+  or: Joi.array().items(MultiStageIncludeMemberFilterSchema, Joi.link('...').description('Multi-stage include condition')),
+  and: Joi.array().items(MultiStageIncludeMemberFilterSchema, Joi.link('...').description('Multi-stage include condition')),
+}).xor('or', 'and');
+
+const MultiStageFilter = Joi.object().keys({
+  mode: Joi.string().valid('relative', 'fixed'),
+  exclude: Joi.func(),
+  keepOnly: Joi.func(),
+  include: Joi.array().items(
+    MultiStageIncludeMemberFilterSchema,
+    MultiStageIncludeConditionSchema
+  ),
+}).nand('exclude', 'keepOnly');
+
+const MultiStageGrain = Joi.object().keys({
+  exclude: Joi.func(),
+  keepOnly: Joi.func(),
+  include: Joi.func(),
+}).nand('exclude', 'keepOnly');
+
 const CaseSchema = Joi.object().keys({
   when: Joi.array().items(Joi.object().keys({
     sql: Joi.func().required(),
@@ -896,6 +990,8 @@ const MeasuresSchema = Joi.object().pattern(identifierRegex, Joi.alternatives().
       reduceBy: Joi.func(),
       addGroupBy: Joi.func(),
       filteredDimensions: Joi.func(),
+      filter: MultiStageFilter,
+      grain: MultiStageGrain,
       timeShift: Joi.alternatives().conditional(Joi.array().length(1), {
         then: Joi.array().items(timeShiftItemOptional),
         otherwise: Joi.array().items(timeShiftItemRequired)
@@ -979,6 +1075,7 @@ const DimensionsSchema = Joi.object().pattern(identifierRegex, Joi.alternatives(
       sql: Joi.func().required(),
       addGroupBy: Joi.func(),
       filteredDimensions: Joi.func(),
+      filter: MultiStageFilter,
     }),
     // TODO should be valid only for calendar cubes, but this requires significant refactoring
     // of all schemas. Left for the future when we'll switch to zod.
@@ -1169,6 +1266,41 @@ const folderSchema = Joi.object().keys({
   ]).required(),
 }).id('folderSchema');
 
+const ViewDefaultFilterSchema = Joi.object().keys({
+  member: Joi.func().required(),
+  operator: Joi.any().valid(
+    'equals',
+    'notEquals',
+    'contains',
+    'notContains',
+    'startsWith',
+    'notStartsWith',
+    'endsWith',
+    'notEndsWith',
+    'in',
+    'notIn',
+    'gt',
+    'gte',
+    'lt',
+    'lte',
+    'set',
+    'notSet',
+    'inDateRange',
+    'notInDateRange',
+    'onTheDate',
+    'beforeDate',
+    'beforeOrOnDate',
+    'afterDate',
+    'afterOrOnDate',
+  ).required(),
+  values: Joi.when('operator', {
+    is: Joi.valid('set', 'notSet'),
+    then: Joi.func().optional(),
+    otherwise: Joi.func().required()
+  }),
+  unless: Joi.func(),
+});
+
 const viewSchema = inherit(baseSchema, {
   isView: Joi.boolean().strict(),
   viewGroup: Joi.alternatives([Joi.string(), Joi.func()]),
@@ -1199,6 +1331,7 @@ const viewSchema = inherit(baseSchema, {
     })
   ),
   folders: Joi.array().items(folderSchema),
+  defaultFilters: Joi.array().items(ViewDefaultFilterSchema),
 });
 
 function formatErrorMessageFromDetails(explain, d) {

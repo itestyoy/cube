@@ -219,11 +219,14 @@ version.
 <Warning>
 
 Rollup join is designed to join data across different data sources.
-To join data within the same data source you can list members from different cubes within a regular rollup.
-Rollup join can be used only to join two tables, and one can't contain more than
-one partition so that the join can operate correctly. It means that at least one
-table should be less than 1M of rows. There's work in progress to remove those
-limitations.
+To join data within the same data source you can list members from different
+cubes within a regular rollup. Rollup join can be used only to join two
+rollups.
+
+The rollup on the right side of the join is bounded by the number of physical
+Cube Store partitions it can have, which depends on your Cube Store compute
+tier. Note that these are Cube Store physical partitions — not Cube logical
+partitions.
 
 </Warning>
 
@@ -1571,9 +1574,8 @@ cube(`orders`, {
 
 </CodeGroup>
 
-In the case that you want to reference the time dimension in the index,
-the column name as a string in the following format can be used:
-`<cube name>__<time dimension name>_<granularity>`:
+To reference a time dimension column with its granularity in the index,
+use the `CUBE.<time_dimension>.<granularity>` syntax:
 
 <CodeGroup>
 
@@ -1594,8 +1596,7 @@ cubes:
           - name: category_created_at_index
             columns:
               - CUBE.category
-              # special syntax needed
-              - "{'orders__created_at_day'}"
+              - CUBE.created_at.day
     # ...
 ```
 
@@ -1613,6 +1614,53 @@ cube(`orders`, {
       ],
       time_dimension: CUBE.created_at,
       granularity: `day`,
+      indexes: {
+        category_created_at_index: {
+          columns: [
+            CUBE.category,
+            CUBE.created_at.day
+          ]
+        }
+      }
+    }
+  },
+
+  // ...
+})
+```
+
+</CodeGroup>
+
+Alternatively, you can reference the time dimension column as a string
+using the `<cube_name>__<time_dimension_name>_<granularity>` format:
+
+<CodeGroup>
+
+```yaml title="YAML"
+cubes:
+  - name: orders
+    # ...
+
+    pre_aggregations:
+      - name: category_and_date
+        # ...
+
+        indexes:
+          - name: category_created_at_index
+            columns:
+              - CUBE.category
+              - "{'orders__created_at_day'}"
+    # ...
+```
+
+```javascript title="JavaScript"
+cube(`orders`, {
+  // ...
+
+  pre_aggregations: {
+    category_and_date: {
+      // ...
+
       indexes: {
         category_created_at_index: {
           columns: [
@@ -1681,6 +1729,17 @@ Please [track this issue](https://github.com/cube-js/cube/issues/7420).
 This option is used to define [aggregating indexes][ref-aggregating-indexes]
 that contain **only** dimensions and pre-aggregated measures from the
 pre-aggregation definition.
+
+<Note>
+
+A query can only target an aggregating index when every measure it uses is
+[additive](/docs/pre-aggregations/getting-started-pre-aggregations#additivity)
+(e.g. built on `sum`, `count`, `min`, `max`, or `countDistinctApprox`), and every
+dimension and filter in the query is one of the index's `columns`. Non-additive
+measures, such as `avg` or exact `countDistinct`, cannot use an aggregating index.
+Queries that don't qualify automatically fall back to a regular index.
+
+</Note>
 
 Here's how you can define an aggregating index:
 
