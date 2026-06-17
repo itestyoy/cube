@@ -478,12 +478,18 @@ const BaseMeasure = {
       Joi.alternatives().try(
         Joi.string(),
         Joi.array().items(
+          // dimension or [leftDimension, rightDimension]
           Joi.alternatives().try(
             Joi.string(),
             Joi.array().items(Joi.string().required(), Joi.string()).min(1).max(2)
           ).required(),
+          // operator
           Joi.string(),
-          Joi.string()
+          // optional compareWith substitute column: 'col' or [leftCol, rightCol]
+          Joi.alternatives().try(
+            Joi.string(),
+            Joi.array().items(Joi.string().required(), Joi.string()).min(1).max(2)
+          )
         ).min(1).max(3)
       )
     ),

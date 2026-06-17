@@ -65,8 +65,17 @@ export type MeasureDefinition = {
   sql(): string;
   dynamicSql?: (...args: Array<unknown>) => () => string;
   correlatedQuery?: {
-    // Each entry: [leftDimension, operator?] or just leftDimension string
-    allowedDimensions?: (string | [string, string?] | [[string, string?], string?])[];
+    // Each entry: a dimension string, or a tuple [dimensionOrPair, operator?, compareWith?]
+    //  - dimensionOrPair: 'dim' | [leftDim, rightDim?]
+    //  - operator: comparison operator (default '=')
+    //  - compareWith: optional substitute column used ONLY in the WHERE/JOIN comparison,
+    //    while the original dimension is still presented/grouped. 'col' | [leftCol, rightCol?]
+    allowedDimensions?: (
+      | string
+      | [string, string?]
+      | [[string, string?], string?]
+      | [string | [string, string?], string?, (string | [string, string?])?]
+    )[];
     calculateMeasures?: string[];
     optionOverrides?: Record<string, any>;
     subQueryAlias?: string;

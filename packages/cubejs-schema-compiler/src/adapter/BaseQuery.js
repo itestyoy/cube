@@ -5262,22 +5262,46 @@ export class BaseQuery {
      * - ['dimension', '>'] -> { left: 'dimension', right: 'dimension', operator: '>' }
      * - [['left', 'right']] -> { left: 'left', right: 'right', operator: '=' }
      * - [['left', 'right'], '>'] -> { left: 'left', right: 'right', operator: '>' }
+     *
+     * Optional 3rd element: a "compareWith" substitute column used ONLY in the
+     * correlated WHERE/JOIN comparison, while the original (left/right) dimension
+     * is what's actually presented/grouped in the queries. Useful when the
+     * presented dimension can't be compared with the chosen operator
+     * (e.g. a textual bucket label '[0-1]') but a companion column can
+     * (e.g. a numeric interval-start). Forms:
+     * - ['label', '<=', 'start']                           -> shorthand: same as [['label','label'], '<=', 'start']
+     * - [['label','label'], '<=', 'start']                 -> compare on 'start' on both sides
+     * - [['label','label'], '<=', ['leftStart','rightStart']] -> compare on different names per side
      */
-    const normalizeAllowedDimensions = (dims) => 
+    const normalizeAllowedDimensions = (dims) =>
       (Array.isArray(dims) ? dims : [])
         .map((item) => {
           if (!Array.isArray(item)) {
-            return { leftDimension: item, rightDimension: item, operator: '=' };
+            return { leftDimension: item, rightDimension: item, operator: '=', compareLeftDimension: null, compareRightDimension: null };
           }
-          
-          const [first, operator = '='] = item;
-          
+
+          const [first, operator = '=', compareWith] = item;
+
+          // Parse optional compareWith substitute pair
+          let compareLeftDimension = null;
+          let compareRightDimension = null;
+          if (compareWith != null) {
+            if (Array.isArray(compareWith)) {
+              const [cl, cr = cl] = compareWith;
+              compareLeftDimension = cl;
+              compareRightDimension = cr;
+            } else {
+              compareLeftDimension = compareWith;
+              compareRightDimension = compareWith;
+            }
+          }
+
           if (Array.isArray(first)) {
             const [leftDimension, rightDimension = leftDimension] = first;
-            return { leftDimension, rightDimension, operator };
+            return { leftDimension, rightDimension, operator, compareLeftDimension, compareRightDimension };
           }
-          
-          return { leftDimension: first, rightDimension: first, operator };
+
+          return { leftDimension: first, rightDimension: first, operator, compareLeftDimension, compareRightDimension };
         })
         .filter(d => d.leftDimension && d.rightDimension);
 
@@ -5613,26 +5637,41 @@ export class BaseQuery {
      * Result: Array of validated dimension mappings with metadata
      */
     let validatedAllowedDimensions = allowedDimensions
-      .map(({ leftDimension, rightDimension, operator }) => {
+      .map(({ leftDimension, rightDimension, operator, compareLeftDimension, compareRightDimension }) => {
         const normalizedLeftDimension = normalizeDimensionPath(leftDimension);
         if (!normalizedLeftDimension) return null;
-        
+
         const normalizedRightDimension = normalizeDimensionPath(rightDimension);
         if (!normalizedRightDimension) return null;
+
+        // Normalize optional compareWith substitute columns.
+        // The two sides are independent: the main-query side is just a plain WHERE column
+        // reference, while the subquery side must be artificially projected so it survives
+        // aggregation and stays referenceable in the join/where. If only one side is given,
+        // mirror it to the other (same column name on both sides).
+        let normalizedCompareLeftDimension = compareLeftDimension ? normalizeDimensionPath(compareLeftDimension) : null;
+        let normalizedCompareRightDimension = compareRightDimension ? normalizeDimensionPath(compareRightDimension) : null;
+        if (normalizedCompareLeftDimension && !normalizedCompareRightDimension) {
+          normalizedCompareRightDimension = normalizedCompareLeftDimension;
+        } else if (normalizedCompareRightDimension && !normalizedCompareLeftDimension) {
+          normalizedCompareLeftDimension = normalizedCompareRightDimension;
+        }
 
         // Check if rightDimension is expression dimension by name
         // const expressionMetadata = findExpressionDimensionByName(normalizedLeftDimension);
 
         // Validate existence
-        const existsInMainQuery = 
-          mainQueryContext.dimensions.set.has(normalizedLeftDimension) || 
+        const existsInMainQuery =
+          mainQueryContext.dimensions.set.has(normalizedLeftDimension) ||
           mainQueryContext.timeDimensions.set.has(normalizedLeftDimension);
-     
+
         const dimensionType = getDimensionType(leftDimension);
 
         return {
           leftDimension: normalizedLeftDimension,
           rightDimension: normalizedRightDimension,
+          compareLeftDimension: normalizedCompareLeftDimension,
+          compareRightDimension: normalizedCompareRightDimension,
           operator,
           type: dimensionType,
           isExpressionDimension: false,
@@ -5641,9 +5680,9 @@ export class BaseQuery {
         };
       })
       .filter(Boolean)
-      .filter(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata }) => {
+      .filter(({ leftDimension, rightDimension, compareLeftDimension, compareRightDimension }) => {
 
-        // Validate type compatibility
+        // Validate type compatibility of the presented dimensions
         const leftDimensionType = getDimensionType(leftDimension);
         const rightDimensionType = getDimensionType(rightDimension);
 
@@ -5652,6 +5691,23 @@ export class BaseQuery {
             `Correlated dimensions '${leftDimension}' and '${rightDimension}' ` +
             `must have the same type but are '${leftDimensionType}' and '${rightDimensionType}'.`
           );
+        }
+
+        // compareWith substitute columns are NOT required to be symmetric: a single column
+        // is mirrored to both sides upstream, so we never force "both sides". Type
+        // compatibility is only checked when both sides resolve to a known dimension type —
+        // a substitute may be a plain column without a registered dimension type (it's just
+        // a WHERE reference on the main side), and we intentionally don't block that.
+        if (compareLeftDimension && compareRightDimension) {
+          const compareLeftType = getDimensionType(compareLeftDimension);
+          const compareRightType = getDimensionType(compareRightDimension);
+
+          if (compareLeftType && compareRightType && compareLeftType !== compareRightType) {
+            throw new UserError(
+              `Correlated compareWith dimensions '${compareLeftDimension}' and '${compareRightDimension}' ` +
+              `must have the same type but are '${compareLeftType}' and '${compareRightType}'.`
+            );
+          }
         }
 
         return true;
@@ -5902,12 +5958,12 @@ export class BaseQuery {
        * Add dimension to subQuery
        * Prefers regular dimensions over expression dependencies when both exist
        */
-      const addDimension = (leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata = null) => {
+      const addDimension = (leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata = null, compareRightDimension = null, compareMainOriginal = null) => {
         if (processed.dimensions.has(leftDimension)) return;
 
         if (expressionMetadata && expressionMetadata?.original && isExpressionDimension) {
           subQueryDimensions.push(createExpressionDimension(expressionMetadata));
-          subOriginalDimensionsMetadata.push({metadata: expressionMetadata, dimension: expressionMetadata.original?.expressionName, operator: operator});
+          subOriginalDimensionsMetadata.push({metadata: expressionMetadata, dimension: expressionMetadata.original?.expressionName, operator: operator, compareDimension: null, compareMainOriginal: null});
         } else {
           // Regular dimension - find original metadata from mainQueryContext (same as addTimeDimension)
           const leftDimItems = mainQueryContext.dimensions.map.get(leftDimension) || [];
@@ -5915,7 +5971,14 @@ export class BaseQuery {
 
           if (!isExpressionDimension && originalMetadata) {
             subQueryDimensions.push(rightDimension);
-            subOriginalDimensionsMetadata.push({metadata: originalMetadata, dimension: rightDimension, operator: operator});
+
+            // Project the compareWith substitute column into the subQuery so it can be
+            // referenced in the correlated WHERE/JOIN clause (it must be selectable/grouped).
+            if (compareRightDimension && compareRightDimension !== rightDimension && !subQueryDimensions.includes(compareRightDimension)) {
+              subQueryDimensions.push(compareRightDimension);
+            }
+
+            subOriginalDimensionsMetadata.push({metadata: originalMetadata, dimension: rightDimension, operator: operator, compareDimension: compareRightDimension, compareMainOriginal});
           } else {
             return;
           }
@@ -5926,19 +5989,44 @@ export class BaseQuery {
       };
 
       // Process all validated allowed dimensions
-      validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata, isPresented, operator, type}) => {
+      validatedAllowedDimensions.forEach(({ leftDimension, rightDimension, isExpressionDimension, expressionMetadata, isPresented, operator, type, compareLeftDimension, compareRightDimension}) => {
         if (isPresented) {
           const isTimeDimension = type === 'time';
-          
+
           if (isTimeDimension) {
+            // compareWith substitution is only supported for regular dimensions
             addTimeDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
           } else {
-            addDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata);
+            // Build a main-query BaseDimension for the substitute comparison column (if any),
+            // so its SQL can be emitted on the main-query side of the comparison.
+            let compareMainOriginal = null;
+            if (compareLeftDimension) {
+              try {
+                compareMainOriginal = this.newDimension(compareLeftDimension);
+              } catch (e) {
+                compareMainOriginal = null;
+              }
+              if (!compareMainOriginal) {
+                throw new UserError(
+                  `Correlated compareWith column '${compareLeftDimension}' could not be resolved ` +
+                  `for main query side of '${leftDimension}'.`
+                );
+              }
+            }
+            addDimension(leftDimension, rightDimension, isExpressionDimension, operator, expressionMetadata, compareRightDimension, compareMainOriginal);
           }
         }
       });
 
-      subQueryOptions.dimensions = subQueryDimensions;
+      // Deduplicate string dimensions (a compareWith substitute column may collide with an
+      // independently presented dimension). Expression-dimension objects are kept as-is.
+      const seenSubDimensions = new Set();
+      subQueryOptions.dimensions = subQueryDimensions.filter((d) => {
+        if (typeof d !== 'string') return true;
+        if (seenSubDimensions.has(d)) return false;
+        seenSubDimensions.add(d);
+        return true;
+      });
       subQueryOptions.timeDimensions = subQueryTimeDimensions;
     }
 
@@ -6252,9 +6340,23 @@ export class BaseQuery {
      * Build correlated clause entries (reused for onClause and joinOnClause)
      * Format: subquery.column_alias <operator> main_query.dimension_sql
      */
-    const buildClauseEntries = (forceEqualOperator) =>
-      subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
-        .map(({ metadata, dimension, operator }) => {
+    const buildClauseEntries = (forceEqualOperator) => {
+      const clauseEntries = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
+        .map(({ metadata, dimension, operator, compareDimension, compareMainOriginal }) => {
+
+          // compareWith substitution: present/group by `dimension`, but compare on the
+          // substitute column (`compareDimension` in the subquery, `compareMainOriginal`
+          // SQL in the main query). Lets e.g. a textual bucket be compared via its
+          // numeric companion column.
+          if (compareDimension && compareMainOriginal) {
+            const compareAlias = subQuery ? subQuery.aliasName(compareDimension) : null;
+            if (!compareAlias) return null;
+            const compareSubColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(compareAlias)}`;
+            const compareMainSql = getMainQueryDimensionSql(compareMainOriginal);
+            if (!compareMainSql) return null;
+            const compareOperator = forceEqualOperator ? '=' : operator;
+            return `${compareSubColumn} ${compareOperator} ${compareMainSql}`;
+          }
 
           const dimensionAlias = getSubQueryColumnName(metadata, dimension);
           if (!dimensionAlias) return null;
@@ -6286,19 +6388,28 @@ export class BaseQuery {
           const effectiveOperator = forceEqualOperator ? '=' : operator;
           return `${subQueryColumn} ${effectiveOperator} ${mainQuerySql}`;
         })
-        .filter(Boolean)
-        .join(' AND ') || 'true';
+        .filter(Boolean);
+
+      // Deduplicate identical conditions. Dedup is by the full rendered condition string,
+      // so a compareWith column that is ALSO listed explicitly collapses only when truly
+      // identical (same operator + columns); a different operator yields a distinct condition.
+      return [...new Set(clauseEntries)].join(' AND ') || 'true';
+    };
 
     const onClause = buildClauseEntries(false);
     const joinOnClause = buildClauseEntries(true);
 
     // Raw entries for rebuilding JOIN ON in pre-aggregation context
     const joinOnEntries = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
-      .map(({ metadata, dimension }) => {
-        const dimensionAlias = getSubQueryColumnName(metadata, dimension);
+      .map(({ metadata, dimension, compareDimension }) => {
+        // When a compareWith substitute is configured, the comparison column is the substitute
+        const effectiveDimension = compareDimension || dimension;
+        const dimensionAlias = compareDimension
+          ? (subQuery ? subQuery.aliasName(compareDimension) : null)
+          : getSubQueryColumnName(metadata, dimension);
         if (!dimensionAlias) return null;
         const subQueryColumn = `${escapedSubQueryAlias}.${this.escapeColumnName(dimensionAlias)}`;
-        return { subQueryColumn, dimension, original: metadata?.original };
+        return { subQueryColumn, dimension: effectiveDimension, original: metadata?.original };
       })
       .filter(Boolean);
 
@@ -6306,25 +6417,38 @@ export class BaseQuery {
     // STEP 16: Return result
     // ============================================================================
 
-    const usedDimensions = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
-      .map(({ metadata, dimension }) => {
-        const col = getSubQueryColumnName(metadata, dimension);
-        return col ? `${escapedSubQueryAlias}.${this.escapeColumnName(col)}` : null;
-      })
-      .filter(Boolean);
+    const usedDimensions = [...new Set(
+      subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
+        .flatMap(({ metadata, dimension, compareDimension }) => {
+          const cols = [];
+          const col = getSubQueryColumnName(metadata, dimension);
+          if (col) cols.push(`${escapedSubQueryAlias}.${this.escapeColumnName(col)}`);
+          // Include the compareWith substitute column too — it's projected by the subquery
+          if (compareDimension && subQuery) {
+            const compareCol = subQuery.aliasName(compareDimension);
+            if (compareCol) cols.push(`${escapedSubQueryAlias}.${this.escapeColumnName(compareCol)}`);
+          }
+          return cols;
+        })
+        .filter(Boolean)
+    )];
 
     const effectiveMainAlias = mainQueryAlias || this.cubeAlias(cubeName);
 
     // correlatedJoinClause: mainAlias.col <operator> subQueryAlias.col (both column names from subquery)
-    const correlatedJoinClause = subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
-      .map(({ metadata, dimension, operator }) => {
-        const dimensionAlias = getSubQueryColumnName(metadata, dimension);
-        if (!dimensionAlias) return null;
-        const escapedCol = this.escapeColumnName(dimensionAlias);
-        return `${effectiveMainAlias}.${escapedCol} ${operator} ${escapedSubQueryAlias}.${escapedCol}`;
-      })
-      .filter(Boolean)
-      .join(' AND ') || 'true';
+    const correlatedJoinClause = [...new Set(
+      subOriginalTimeDimensionsMetadata.concat(subOriginalDimensionsMetadata)
+        .map(({ metadata, dimension, operator, compareDimension }) => {
+          // compareWith substitution: join on the substitute column on both sides
+          const dimensionAlias = compareDimension
+            ? (subQuery ? subQuery.aliasName(compareDimension) : null)
+            : getSubQueryColumnName(metadata, dimension);
+          if (!dimensionAlias) return null;
+          const escapedCol = this.escapeColumnName(dimensionAlias);
+          return `${effectiveMainAlias}.${escapedCol} ${operator} ${escapedSubQueryAlias}.${escapedCol}`;
+        })
+        .filter(Boolean)
+    )].join(' AND ') || 'true';
 
     // Build joinSql from joinSubQuery template if provided, otherwise fall back to subQuery sql
     const rawSubQuerySql = `(${subQuerySql})`;
