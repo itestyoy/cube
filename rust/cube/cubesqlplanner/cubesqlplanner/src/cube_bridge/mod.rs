@@ -33,6 +33,7 @@ pub mod member_definition;
 pub mod member_expression;
 pub mod member_order_by;
 pub mod member_sql;
+pub mod multi_stage_accumulate;
 pub mod multi_stage_filter;
 pub mod multi_stage_grain;
 pub mod options_member;

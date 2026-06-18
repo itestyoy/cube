@@ -1,3 +1,4 @@
+mod accumulate;
 mod add_group_by;
 mod bucketing;
 mod calculated;

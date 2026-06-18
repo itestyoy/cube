@@ -1,7 +1,8 @@
 use super::{
     AutoPrefixSqlNode, CaseSqlNode, EvaluateSqlNode, FinalMeasureSqlNode,
     FinalPreAggregationMeasureSqlNode, GeoDimensionSqlNode, MaskedSqlNode, MeasureFilterSqlNode,
-    MultiStageRankNode, MultiStageWindowNode, ParenthesizeSqlNode, RenderReferencesSqlNode,
+    MultiStageAccumulateNode, MultiStageRankNode, MultiStageWindowNode, ParenthesizeSqlNode,
+    RenderReferencesSqlNode,
     RenderReferencesType, RollingWindowNode, RootSqlNode, SegmentDimensionSqlNode, SqlNode,
     TimeDimensionNode, TimeShiftSqlNode, UngroupedMeasureSqlNode,
     UngroupedQueryFinalMeasureSqlNode,
@@ -32,6 +33,8 @@ pub struct SqlNodesFactory {
     cube_name_references: HashMap<String, String>,
     multi_stage_rank: Option<Vec<String>>,   //partition_by
     multi_stage_window: Option<Vec<String>>, //partition_by
+    // (partition_by, order_by, direction) for the `accumulate:` running window
+    multi_stage_accumulate: Option<(Vec<String>, Vec<String>, String)>,
     rolling_window: bool,
     dimensions_with_ignored_timezone: HashSet<String>,
     use_local_tz_in_date_range: bool,
@@ -123,6 +126,15 @@ impl SqlNodesFactory {
         self.multi_stage_window = Some(partition_by);
     }
 
+    pub fn set_multi_stage_accumulate(
+        &mut self,
+        partition_by: Vec<String>,
+        order_by: Vec<String>,
+        direction: String,
+    ) {
+        self.multi_stage_accumulate = Some((partition_by, order_by, direction));
+    }
+
     pub fn add_pre_aggregation_measure_reference<T: Into<RenderReferencesType>>(
         &mut self,
         name: String,
@@ -194,6 +206,10 @@ impl SqlNodesFactory {
         };
         let measure_processor = self
             .add_multi_stage_window_if_needed(measure_processor, measure_filter_processor.clone());
+        let measure_processor = self.add_multi_stage_accumulate_if_needed(
+            measure_processor,
+            measure_filter_processor.clone(),
+        );
         let measure_processor = self.add_multi_stage_rank_if_needed(measure_processor);
 
         let default_processor: Rc<dyn SqlNode> =
@@ -245,6 +261,24 @@ impl SqlNodesFactory {
     ) -> Rc<dyn SqlNode> {
         if let Some(partition_by) = &self.multi_stage_window {
             MultiStageWindowNode::new(multi_stage_input, default, partition_by.clone())
+        } else {
+            default
+        }
+    }
+
+    fn add_multi_stage_accumulate_if_needed(
+        &self,
+        default: Rc<dyn SqlNode>,
+        multi_stage_input: Rc<dyn SqlNode>,
+    ) -> Rc<dyn SqlNode> {
+        if let Some((partition_by, order_by, direction)) = &self.multi_stage_accumulate {
+            MultiStageAccumulateNode::new(
+                multi_stage_input,
+                default,
+                partition_by.clone(),
+                order_by.clone(),
+                direction.clone(),
+            )
         } else {
             default
         }

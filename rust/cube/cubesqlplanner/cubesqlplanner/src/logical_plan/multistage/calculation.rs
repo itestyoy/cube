@@ -31,6 +31,9 @@ impl ToString for MultiStageCalculationType {
 pub enum MultiStageCalculationWindowFunction {
     Rank,
     Window,
+    /// Running-window accumulation (`accumulate:` directive): a `Window`
+    /// aggregate plus an `ORDER BY` axis and an `UNBOUNDED PRECEDING` frame.
+    Accumulate,
     None,
 }
 
@@ -39,6 +42,7 @@ impl ToString for MultiStageCalculationWindowFunction {
         match self {
             MultiStageCalculationWindowFunction::Rank => "Rank".to_string(),
             MultiStageCalculationWindowFunction::Window => "Window".to_string(),
+            MultiStageCalculationWindowFunction::Accumulate => "Accumulate".to_string(),
             MultiStageCalculationWindowFunction::None => "None".to_string(),
         }
     }
@@ -57,6 +61,15 @@ pub struct MultiStageMeasureCalculation {
     window_function_to_use: MultiStageCalculationWindowFunction,
     #[builder(default)]
     order_by: Vec<OrderByItem>,
+    /// Dimensions forming the `ORDER BY` axis of an `Accumulate` running
+    /// window (the query dims that dropped out of `partition_by`). Empty for
+    /// every other window function.
+    #[builder(default)]
+    accumulate_order_by: Vec<Rc<MemberSymbol>>,
+    /// `ORDER BY` direction for the accumulate window: "asc" | "desc". Always
+    /// set by the planner on the Accumulate path; the default is unused there.
+    #[builder(default)]
+    accumulate_direction: String,
     source: Rc<FullKeyAggregate>,
 }
 
@@ -83,6 +96,14 @@ impl MultiStageMeasureCalculation {
 
     pub fn order_by(&self) -> &Vec<OrderByItem> {
         &self.order_by
+    }
+
+    pub fn accumulate_order_by(&self) -> &Vec<Rc<MemberSymbol>> {
+        &self.accumulate_order_by
+    }
+
+    pub fn accumulate_direction(&self) -> &String {
+        &self.accumulate_direction
     }
 
     pub fn source(&self) -> &Rc<FullKeyAggregate> {
@@ -163,6 +184,8 @@ impl LogicalNode for MultiStageMeasureCalculation {
                 .partition_by(self.partition_by().clone())
                 .window_function_to_use(self.window_function_to_use().clone())
                 .order_by(self.order_by().clone())
+                .accumulate_order_by(self.accumulate_order_by().clone())
+                .accumulate_direction(self.accumulate_direction().clone())
                 .source(source.clone().into_logical_node()?)
                 .build(),
         ))

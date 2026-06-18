@@ -236,6 +236,24 @@ impl MemberSymbol {
         false
     }
 
+    /// Like [`Self::has_member_in_reference_chain`], but granularity-agnostic
+    /// for time dimensions: a queried time dimension rolled to a granularity
+    /// (e.g. `activity_date` at `day`) also matches its base member. A bare
+    /// `TimeDimension` does not expose its base via `reference_member` when the
+    /// base is a concrete (non-reference) member, so the plain reference-chain
+    /// check misses it. Used by the `accumulate:` partition/axis matching so
+    /// `exclude: [activity_date]` recognises the time dimension regardless of
+    /// the selected granularity.
+    pub fn matches_grain_member(&self, member: &Rc<MemberSymbol>) -> bool {
+        if self.has_member_in_reference_chain(member) {
+            return true;
+        }
+        if let Self::TimeDimension(td) = self {
+            return td.base_symbol().has_member_in_reference_chain(member);
+        }
+        false
+    }
+
     /// Returns a copy of this symbol with the path reduced to just the owning cube,
     /// stripping any join chain prefix (e.g. from views or cross-cube references).
     pub fn with_stripped_join_prefix(&self) -> Rc<Self> {

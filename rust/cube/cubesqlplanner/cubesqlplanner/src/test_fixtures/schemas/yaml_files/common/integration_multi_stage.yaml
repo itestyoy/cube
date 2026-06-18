@@ -134,6 +134,10 @@ cubes:
             type: max
             sql: amount
 
+          - name: min_amount
+            type: min
+            sql: amount
+
           - name: max_sum_reduce_category
             type: sum
             sql: "{CUBE.max_amount}"
@@ -231,6 +235,161 @@ cubes:
             grain:
                 keep_only:
                     - orders.status
+
+          # accumulate: running total of amount over `id`, partitioned by the
+          # remaining query dims (id drops out of the partition → ORDER BY id).
+          - name: amount_accumulate_by_id
+            type: sum
+            sql: "{CUBE.total_amount}"
+            multi_stage: true
+            accumulate:
+                exclude:
+                    - orders.id
+                direction: asc
+
+          # accumulate: keep only `category` in the partition; accumulate over
+          # every other query dim.
+          - name: amount_accumulate_keep_category
+            type: sum
+            sql: "{CUBE.total_amount}"
+            multi_stage: true
+            accumulate:
+                keep_only:
+                    - orders.category
+                direction: desc
+
+          # accumulate over a TIME dimension — must work whether created_at is
+          # queried raw or rolled to a granularity (granularity-agnostic match).
+          - name: amount_accumulate_by_created_at
+            type: sum
+            sql: "{CUBE.total_amount}"
+            multi_stage: true
+            accumulate:
+                exclude:
+                    - orders.created_at
+                direction: asc
+
+          # accumulate type: max over a max inner → running maximum:
+          # max(max(x)) OVER (...). Inner aggregation MUST match the outer.
+          - name: max_amount_accumulate_by_id
+            type: max
+            sql: "{CUBE.max_amount}"
+            multi_stage: true
+            accumulate:
+                exclude:
+                    - orders.id
+                direction: asc
+
+          # accumulate type: min over a min inner → running minimum:
+          # min(min(x)) OVER (...).
+          - name: min_amount_accumulate_by_id
+            type: min
+            sql: "{CUBE.min_amount}"
+            multi_stage: true
+            accumulate:
+                exclude:
+                    - orders.id
+                direction: asc
+
+          # CROSS-TYPE: sum over a max inner → NOT implemented (faithful only for
+          # matching pairs sum/sum, max/max, min/min). Referencing it errors.
+          - name: sum_of_max_accumulate_by_id
+            type: sum
+            sql: "{CUBE.max_amount}"
+            multi_stage: true
+            accumulate:
+                exclude:
+                    - orders.id
+                direction: asc
+
+          # grain + accumulate on one measure → rejected (both reshape grain).
+          - name: grain_plus_accumulate_conflict
+            type: sum
+            sql: "{CUBE.total_amount}"
+            multi_stage: true
+            grain:
+                exclude:
+                    - orders.status
+            accumulate:
+                exclude:
+                    - orders.id
+                direction: asc
+
+          # filter + accumulate COMPOSE: running sum over rows kept by the inner
+          # filter (status = 'completed'), ordered by id. filter shapes the leaf
+          # WHERE; accumulate runs the window over the filtered result.
+          - name: completed_amount_accumulate_by_id
+            type: sum
+            sql: "{CUBE.total_amount}"
+            multi_stage: true
+            accumulate:
+                exclude:
+                    - orders.id
+                direction: asc
+            filter:
+                include:
+                    - member: orders.status
+                      operator: equals
+                      values:
+                          - completed
+
+          # time_shift + accumulate → not implemented (two multi-stage transforms).
+          - name: ts_plus_accumulate
+            type: sum
+            sql: "{CUBE.total_amount}"
+            multi_stage: true
+            time_shift:
+                - interval: "1 month"
+                  type: prior
+                  timeDimension: orders.created_at
+            accumulate:
+                exclude:
+                    - orders.id
+
+          # rolling_window + accumulate → not implemented (both are windows).
+          - name: rw_plus_accumulate
+            type: sum
+            sql: amount
+            multi_stage: true
+            rolling_window:
+                trailing: unbounded
+            accumulate:
+                exclude:
+                    - orders.id
+
+          # case (switch) + accumulate → not implemented.
+          - name: case_plus_accumulate
+            type: sum
+            multi_stage: true
+            case:
+                switch: "{CUBE.status}"
+                when:
+                    - value: "completed"
+                      sql: "{CUBE.total_amount}"
+                else:
+                    sql: "{CUBE.total_amount} * 0"
+            accumulate:
+                exclude:
+                    - orders.id
+
+          # accumulate on an unsupported aggregation (avg) → not-implemented error.
+          - name: avg_amount_accumulate_by_id
+            type: avg
+            sql: "{CUBE.avg_amount}"
+            multi_stage: true
+            accumulate:
+                exclude:
+                    - orders.id
+
+          # accumulate.include is intentionally NOT implemented — referencing
+          # this measure raises a `not implemented` error (see build_accumulate).
+          - name: amount_accumulate_include
+            type: sum
+            sql: "{CUBE.total_amount}"
+            multi_stage: true
+            accumulate:
+                include:
+                    - orders.id
 
           - name: amount_prev_month
             type: number

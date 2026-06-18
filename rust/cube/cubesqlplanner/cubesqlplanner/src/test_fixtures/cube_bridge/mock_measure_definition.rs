@@ -4,14 +4,15 @@ use crate::cube_bridge::measure_definition::{
 };
 use crate::cube_bridge::member_order_by::MemberOrderBy;
 use crate::cube_bridge::member_sql::MemberSql;
+use crate::cube_bridge::multi_stage_accumulate::MultiStageAccumulateReferences;
 use crate::cube_bridge::multi_stage_filter::MultiStageFilterReferences;
 use crate::cube_bridge::multi_stage_grain::MultiStageGrainReferences;
 use crate::cube_bridge::struct_with_sql_member::StructWithSqlMember;
 use crate::impl_static_data;
 use crate::test_fixtures::cube_bridge::yaml::measure::YamlMeasureDefinition;
 use crate::test_fixtures::cube_bridge::{
-    MockMemberOrderBy, MockMemberSql, MockMultiStageFilterReferences,
-    MockMultiStageGrainReferences, MockStructWithSqlMember,
+    MockMemberOrderBy, MockMemberSql, MockMultiStageAccumulateReferences,
+    MockMultiStageFilterReferences, MockMultiStageGrainReferences, MockStructWithSqlMember,
 };
 use cubenativeutils::CubeError;
 use std::any::Any;
@@ -48,6 +49,8 @@ pub struct MockMeasureDefinition {
     filter: Option<Rc<MockMultiStageFilterReferences>>,
     #[builder(default)]
     grain: Option<Rc<MockMultiStageGrainReferences>>,
+    #[builder(default)]
+    accumulate: Option<Rc<MockMultiStageAccumulateReferences>>,
     #[builder(default)]
     order_by: Option<Vec<Rc<MockMemberOrderBy>>>,
     #[builder(default, setter(strip_option(fallback = resolved_mask_sql_opt)))]
@@ -154,6 +157,17 @@ impl MeasureDefinition for MockMeasureDefinition {
             .grain
             .as_ref()
             .map(|g| g.clone() as Rc<dyn MultiStageGrainReferences>))
+    }
+
+    fn has_accumulate(&self) -> Result<bool, CubeError> {
+        Ok(self.accumulate.is_some())
+    }
+
+    fn accumulate(&self) -> Result<Option<Rc<dyn MultiStageAccumulateReferences>>, CubeError> {
+        Ok(self
+            .accumulate
+            .as_ref()
+            .map(|a| a.clone() as Rc<dyn MultiStageAccumulateReferences>))
     }
 
     fn has_order_by(&self) -> Result<bool, CubeError> {

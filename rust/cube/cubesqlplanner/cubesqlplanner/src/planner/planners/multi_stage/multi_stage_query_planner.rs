@@ -179,15 +179,54 @@ impl MultiStageQueryPlanner {
             // path. `include` extends the leaf grain, which the JOIN-model
             // is required for. Revisit if window-path expands to cases
             // where exclude/keep_only affect render correctness.
+            // Window-path eligibility intentionally checks only `include`:
+            // `exclude` / `keep_only` are realised through the window's
+            // PARTITION BY at render time, so they don't disqualify the path.
+            // `include` extends the leaf grain, which the JOIN-model requires.
             let has_include = grain.include.as_ref().is_some_and(|v| !v.is_empty());
+
+            // `accumulate:` rides the same window-path assembly as a plain
+            // window Aggregate (single input CTE, broadcast via the window
+            // expression). It is restricted to faithful running aggregates
+            // (`is_accumulate_eligible`: sum-over-sum/count, max-over-max,
+            // min-over-min); any other combination is an explicit
+            // not-implemented error rather than a silent fall-back. This
+            // eligibility is consulted ONLY for accumulate measures; grain/rank
+            // keep the sum-rollup-specific `is_window_path_eligible` unchanged.
+            let accumulate = measure.multi_stage().and_then(|ms| ms.accumulate.clone());
+            // The accumulate window relies on the outer query grouping by the
+            // query grain (one row per group → inner agg is identity). An
+            // ungrouped query has no GROUP BY, so the double-aggregate window is
+            // undefined — reject it explicitly.
+            if accumulate.is_some() && self.query_properties.ungrouped() {
+                return Err(CubeError::user(
+                    "Multi-stage `accumulate` is not implemented for ungrouped queries."
+                        .to_string(),
+                ));
+            }
+            let accumulate_eligible =
+                accumulate.is_some() && Self::is_accumulate_eligible(&base_member);
+            if accumulate.is_some() && !accumulate_eligible {
+                return Err(CubeError::user(
+                    "Multi-stage `accumulate` is only implemented for faithful running \
+                     aggregates: `sum` over a sum/count measure, `max` over a max measure, \
+                     or `min` over a min measure. Cross-type or non-additive combinations \
+                     (e.g. sum over avg/max, max over sum, sum over count_distinct) are not \
+                     implemented."
+                        .to_string(),
+                ));
+            }
+
             let use_window_path = matches!(member_type, MultiStageInodeMemberType::Aggregate)
                 && !has_include
-                && Self::is_window_path_eligible(&base_member);
-            (
-                MultiStageInodeMember::new(member_type, grain, time_shift)
-                    .with_use_window_path(use_window_path),
-                is_ungrupped,
-            )
+                && (Self::is_window_path_eligible(&base_member) || accumulate_eligible);
+            let inode = MultiStageInodeMember::new(member_type, grain, time_shift)
+                .with_use_window_path(use_window_path);
+            let inode = match accumulate {
+                Some(accum) => inode.with_accumulate(accum),
+                None => inode,
+            };
+            (inode, is_ungrupped)
         } else {
             let grain = base_member
                 .as_dimension()
@@ -277,6 +316,48 @@ impl MultiStageQueryPlanner {
             MeasureKind::Aggregated(a) => a.agg_type() == AggregationType::Sum,
             _ => false,
         }
+    }
+
+    /// Accumulate-only window eligibility. Validity is decided by the OUTER
+    /// aggregation (`sum` / `max` / `min`) — the running aggregates that are
+    /// faithful over a window. The INNER expression (the measure's `sql`) is the
+    /// user's business and is intentionally NOT constrained: the window renders
+    /// `agg(agg(value)) OVER (…)`, and at query grain the inner `agg` is over a
+    /// single row (identity), so it collapses to `agg(value) OVER (…)` whatever
+    /// `value` aggregates — `sum(max(x))`, `max(sum(x))`, `sum(avg(x))` are all
+    /// well-defined running aggregates of the user's value. The only structural
+    /// requirement is a single measure dependency, so the window-path assembly
+    /// has one input CTE. Kept separate from `is_window_path_eligible` (which is
+    /// sum-rollup-specific and stays in use for grain/rank) so their eligibility
+    /// is unchanged.
+    fn is_accumulate_eligible(base_member: &Rc<MemberSymbol>) -> bool {
+        // `sum` over sum/count — additive rollup (count rolls up as sum). Shared
+        // with grain/rank via `is_window_path_eligible`.
+        if Self::is_window_path_eligible(base_member) {
+            return true;
+        }
+        // `max` over `max` / `min` over `min` — idempotent rollup, so `max(max)`
+        // / `min(min)` is faithful. The inner aggregation MUST match the outer;
+        // cross-type (max-over-sum, etc.) is rejected. Single measure dep so the
+        // window-path assembly has one input CTE.
+        let Ok(outer) = base_member.as_measure() else {
+            return false;
+        };
+        let outer_agg = match outer.kind() {
+            MeasureKind::Aggregated(a) => a.agg_type(),
+            _ => return false,
+        };
+        if !matches!(outer_agg, AggregationType::Max | AggregationType::Min) {
+            return false;
+        }
+        let deps = base_member.get_dependencies();
+        let [dep] = deps.as_slice() else {
+            return false;
+        };
+        let Ok(inner) = dep.clone().resolve_reference_chain().as_measure() else {
+            return false;
+        };
+        matches!(inner.kind(), MeasureKind::Aggregated(a) if a.agg_type() == outer_agg)
     }
 
     /// Applies the partition-shaping part of `grain` to a parent-state

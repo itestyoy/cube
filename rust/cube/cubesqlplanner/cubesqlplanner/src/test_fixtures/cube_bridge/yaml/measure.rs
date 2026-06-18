@@ -4,8 +4,8 @@ use crate::cube_bridge::measure_definition::{RollingWindow, TimeShiftReference};
 use crate::test_fixtures::cube_bridge::yaml::case::YamlCaseVariant;
 use crate::test_fixtures::cube_bridge::yaml::mask::YamlMask;
 use crate::test_fixtures::cube_bridge::{
-    MockMeasureDefinition, MockMemberOrderBy, MockMultiStageFilterReferences,
-    MockMultiStageGrainReferences, MockStructWithSqlMember,
+    MockMeasureDefinition, MockMemberOrderBy, MockMultiStageAccumulateReferences,
+    MockMultiStageFilterReferences, MockMultiStageGrainReferences, MockStructWithSqlMember,
 };
 use serde::Deserialize;
 use std::rc::Rc;
@@ -30,6 +30,8 @@ pub struct YamlMeasureDefinition {
     filter: Option<YamlMultiStageFilter>,
     #[serde(default)]
     grain: Option<YamlMultiStageGrain>,
+    #[serde(default)]
+    accumulate: Option<YamlMultiStageAccumulate>,
     #[serde(default)]
     sql: Option<String>,
     #[serde(default)]
@@ -147,6 +149,31 @@ impl YamlMultiStageGrain {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct YamlMultiStageAccumulate {
+    #[serde(default)]
+    exclude: Option<Vec<String>>,
+    #[serde(default)]
+    keep_only: Option<Vec<String>>,
+    #[serde(default)]
+    include: Option<Vec<String>>,
+    #[serde(default)]
+    direction: Option<String>,
+}
+
+impl YamlMultiStageAccumulate {
+    pub(super) fn build(self, cube_name: Option<&str>) -> Rc<MockMultiStageAccumulateReferences> {
+        Rc::new(
+            MockMultiStageAccumulateReferences::builder()
+                .exclude(qualify_references(self.exclude, cube_name))
+                .keep_only(qualify_references(self.keep_only, cube_name))
+                .include(qualify_references(self.include, cube_name))
+                .direction(self.direction)
+                .build(),
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct YamlFilter {
     sql: String,
 }
@@ -222,6 +249,7 @@ impl YamlMeasureDefinition {
 
         let filter = self.filter.map(|f| f.build(cube_name));
         let grain = self.grain.map(|g| g.build(cube_name));
+        let accumulate = self.accumulate.map(|a| a.build(cube_name));
 
         Rc::new(
             MockMeasureDefinition::builder()
@@ -241,6 +269,7 @@ impl YamlMeasureDefinition {
                 .drill_filters(drill_filters)
                 .filter(filter)
                 .grain(grain)
+                .accumulate(accumulate)
                 .order_by(order_by)
                 .resolved_mask_sql_opt(self.mask.map(|m| m.to_sql_string()))
                 .build(),

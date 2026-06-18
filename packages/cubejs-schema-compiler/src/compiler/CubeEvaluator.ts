@@ -64,6 +64,21 @@ export type MultiStageGrainDirective = {
   includeReferences?: string[];
 };
 
+// `accumulate:` directive — a running-window accumulation over an arbitrary
+// axis. Shares the grain partition sets (exclude/keepOnly/include) and adds a
+// window ORDER BY `direction`. The native bridge reads the resolved
+// `*References` fields (not the function forms).
+export type MultiStageAccumulateDirective = {
+  exclude?: (...args: Array<unknown>) => Array<ToString>;
+  keepOnly?: (...args: Array<unknown>) => Array<ToString>;
+  include?: (...args: Array<unknown>) => Array<ToString>;
+  direction?: 'asc' | 'desc';
+  // Resolved sibling fields populated by `evaluateMultiStageReferences`.
+  excludeReferences?: string[];
+  keepOnlyReferences?: string[];
+  includeReferences?: string[];
+};
+
 export type LinkDefinition = {
   name: string;
   label: string;
@@ -146,6 +161,7 @@ export type MeasureDefinition = {
   addGroupBy?: (...args: Array<unknown>) => Array<ToString>;
   filteredDimensions?: (...args: Array<unknown>) => Array<ToString>;
   grain?: MultiStageGrainDirective;
+  accumulate?: MultiStageAccumulateDirective;
   timeShift?: TimeShiftDefinition[];
   groupByReferences?: string[];
   reduceByReferences?: string[];
@@ -687,6 +703,17 @@ export class CubeEvaluator extends CubeSymbols {
           }
           if (typeof member.grain.include === 'function') {
             member.grain.includeReferences = this.evaluateReferences(cubeName, member.grain.include);
+          }
+        }
+        if (member.accumulate) {
+          if (typeof member.accumulate.exclude === 'function') {
+            member.accumulate.excludeReferences = this.evaluateReferences(cubeName, member.accumulate.exclude);
+          }
+          if (typeof member.accumulate.keepOnly === 'function') {
+            member.accumulate.keepOnlyReferences = this.evaluateReferences(cubeName, member.accumulate.keepOnly);
+          }
+          if (typeof member.accumulate.include === 'function') {
+            member.accumulate.includeReferences = this.evaluateReferences(cubeName, member.accumulate.include);
           }
         }
       }

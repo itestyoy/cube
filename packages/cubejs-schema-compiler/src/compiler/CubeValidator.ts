@@ -942,6 +942,17 @@ const MultiStageGrain = Joi.object().keys({
   include: Joi.func(),
 }).nand('exclude', 'keepOnly');
 
+// `accumulate:` — running-window accumulation over an arbitrary axis. The
+// partition is shaped by the same exclude/keepOnly/include grain sets; the
+// dimensions that drop out of the partition become the window ORDER BY axis.
+// `direction` chooses the order along that axis (default asc).
+const MultiStageAccumulate = Joi.object().keys({
+  exclude: Joi.func(),
+  keepOnly: Joi.func(),
+  include: Joi.func(),
+  direction: Joi.string().valid('asc', 'desc'),
+}).nand('exclude', 'keepOnly');
+
 const CaseSchema = Joi.object().keys({
   when: Joi.array().items(Joi.object().keys({
     sql: Joi.func().required(),
@@ -992,6 +1003,7 @@ const MeasuresSchema = Joi.object().pattern(identifierRegex, Joi.alternatives().
       filteredDimensions: Joi.func(),
       filter: MultiStageFilter,
       grain: MultiStageGrain,
+      accumulate: MultiStageAccumulate,
       timeShift: Joi.alternatives().conditional(Joi.array().length(1), {
         then: Joi.array().items(timeShiftItemOptional),
         otherwise: Joi.array().items(timeShiftItemRequired)
@@ -1001,7 +1013,7 @@ const MeasuresSchema = Joi.object().pattern(identifierRegex, Joi.alternatives().
         sql: Joi.func().required(),
         dir: Joi.string().valid('asc', 'desc')
       })),
-    })
+    }).nand('grain', 'accumulate')
   }
 ]).conditional(
   Joi.ref('.type'), [

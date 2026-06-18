@@ -69,6 +69,10 @@ use cubesqlplanner::cube_bridge::{
     member_sql::{
         FilterGroupItem, FilterParamsItem, MemberSql, NativeMemberSql, SqlTemplate, SqlTemplateArgs,
     },
+    multi_stage_accumulate::{
+        multi_stage_accumulate_references_bridge_fields_meta,
+        NativeMultiStageAccumulateReferences,
+    },
     multi_stage_filter::{
         multi_stage_filter_references_bridge_fields_meta, NativeMultiStageFilterReferences,
     },
@@ -440,6 +444,7 @@ bridge_registry! {
     "memberDefinition"            => NativeMemberDefinition,            member_definition_bridge_fields_meta,            invoke_member_definition;
     "memberExpressionDefinition"  => NativeMemberExpressionDefinition,  member_expression_definition_bridge_fields_meta, invoke_member_expression_definition;
     "memberOrderBy"               => NativeMemberOrderBy,               member_order_by_bridge_fields_meta,              invoke_member_order_by;
+    "multiStageAccumulate"        => NativeMultiStageAccumulateReferences, multi_stage_accumulate_references_bridge_fields_meta, invoke_multi_stage_accumulate;
     "multiStageFilter"            => NativeMultiStageFilterReferences,  multi_stage_filter_references_bridge_fields_meta, invoke_multi_stage_filter;
     "multiStageGrain"             => NativeMultiStageGrainReferences,   multi_stage_grain_references_bridge_fields_meta,  invoke_multi_stage_grain;
     "preAggregationDescription"   => NativePreAggregationDescription,   pre_aggregation_description_bridge_fields_meta,  invoke_pre_aggregation_description;
@@ -761,6 +766,13 @@ fn invoke_multi_stage_grain<IT: InnerTypes>(
     _b: &NativeMultiStageGrainReferences<IT>,
 ) -> InvokeResult {
     // Static-only bridge — same shape as `invoke_multi_stage_filter`.
+    InvokeResult::new()
+}
+
+fn invoke_multi_stage_accumulate<IT: InnerTypes>(
+    _b: &NativeMultiStageAccumulateReferences<IT>,
+) -> InvokeResult {
+    // Static-only bridge — same shape as `invoke_multi_stage_grain`.
     InvokeResult::new()
 }
 

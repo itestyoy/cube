@@ -199,6 +199,10 @@ const BRIDGES: BridgeSpec[] = [
   },
   { name: 'memberOrderBy', expected: ['dir', 'sql'] },
   {
+    name: 'multiStageAccumulate',
+    expected: ['direction', 'exclude', 'include', 'keep_only'],
+  },
+  {
     name: 'multiStageFilter',
     expected: ['exclude', 'include', 'keep_only', 'mode'],
   },

@@ -1,4 +1,4 @@
-use crate::planner::{MeasureTimeShifts, MemberSymbol, MultiStageGrain};
+use crate::planner::{MeasureTimeShifts, MemberSymbol, MultiStageAccumulate, MultiStageGrain};
 use std::rc::Rc;
 
 /// Description of the time-series CTE driving a rolling-window
@@ -126,6 +126,12 @@ pub struct MultiStageInodeMember {
     /// the JOIN-model and `member_query_planner` emits a window function.
     /// Default `false`.
     use_window_path: bool,
+    /// Present when the measure carries an `accumulate:` directive. Reuses
+    /// `MultiStageGrain` for partition shaping; the dimensions that drop out
+    /// of the partition become the running window's `ORDER BY` axis. When
+    /// set, `member_query_planner` renders an accumulate window instead of a
+    /// plain `Window`/`Aggregate`. Default `None`.
+    accumulate: Option<MultiStageAccumulate>,
 }
 
 impl MultiStageInodeMember {
@@ -139,6 +145,7 @@ impl MultiStageInodeMember {
             grain,
             time_shift,
             use_window_path: false,
+            accumulate: None,
         }
     }
 
@@ -149,6 +156,15 @@ impl MultiStageInodeMember {
 
     pub fn use_window_path(&self) -> bool {
         self.use_window_path
+    }
+
+    pub fn with_accumulate(mut self, value: MultiStageAccumulate) -> Self {
+        self.accumulate = Some(value);
+        self
+    }
+
+    pub fn accumulate(&self) -> &Option<MultiStageAccumulate> {
+        &self.accumulate
     }
 
     pub fn inode_type(&self) -> &MultiStageInodeMemberType {

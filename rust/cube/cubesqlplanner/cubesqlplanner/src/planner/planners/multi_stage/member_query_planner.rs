@@ -210,16 +210,54 @@ impl MultiStageMemberQueryPlanner {
         &self,
         multi_stage_member: &MultiStageInodeMember,
     ) -> Result<Rc<LogicalMultiStageMember>, CubeError> {
-        let partition_by = self.member_partition_by_logical(multi_stage_member.grain());
+        // `accumulate:` shapes the partition with its own grain
+        // (exclude / keep_only); every other inode uses its own grain.
+        let accumulate = multi_stage_member.accumulate();
+        let partition_by = match accumulate {
+            // Granularity-agnostic matching so the axis works whether the time
+            // dimension is queried raw or rolled to a granularity (day/week/…).
+            Some(accum) => self.accumulate_partition_by(&accum.grain),
+            None => self.member_partition_by_logical(multi_stage_member.grain()),
+        };
+
+        // The running window's ORDER BY axis is the set of query dimensions
+        // that dropped out of the partition. Empty when nothing dropped out
+        // (the accumulate then falls back to a plain aggregate below).
+        let accumulate_order_by = if accumulate.is_some() {
+            self.all_dimensions()
+                .into_iter()
+                .filter(|d| {
+                    let name = d.clone().resolve_reference_chain().full_name();
+                    !partition_by
+                        .iter()
+                        .any(|p| p.clone().resolve_reference_chain().full_name() == name)
+                })
+                .collect_vec()
+        } else {
+            vec![]
+        };
+        let accumulate_direction = accumulate
+            .as_ref()
+            .map(|a| a.direction.clone())
+            .unwrap_or_else(|| "asc".to_string());
 
         // Rank always uses a window function. Aggregate inodes are
         // routed through `FullKeyAggregate` by default; only the narrow
         // optimisation-eligible subset (planner sets `use_window_path`)
         // is emitted as a Window expression and additionally requires
         // partition_by to be a strict subset of all dimensions —
-        // otherwise the window collapses into a plain group-by.
+        // otherwise the window collapses into a plain group-by. An
+        // `accumulate:` measure on that same window-path emits a running
+        // window instead, as long as it has a non-empty ORDER BY axis.
         let window_function_to_use = match multi_stage_member.inode_type() {
             MultiStageInodeMemberType::Rank => MultiStageCalculationWindowFunction::Rank,
+            MultiStageInodeMemberType::Aggregate
+                if accumulate.is_some()
+                    && multi_stage_member.use_window_path()
+                    && !accumulate_order_by.is_empty() =>
+            {
+                MultiStageCalculationWindowFunction::Accumulate
+            }
             MultiStageInodeMemberType::Aggregate
                 if multi_stage_member.use_window_path()
                     && partition_by.len() != self.all_dimensions().len() =>
@@ -301,6 +339,8 @@ impl MultiStageMemberQueryPlanner {
             .partition_by(partition_by)
             .window_function_to_use(window_function_to_use)
             .order_by(self.query_order_by()?)
+            .accumulate_order_by(accumulate_order_by)
+            .accumulate_direction(accumulate_direction)
             .source(Rc::new(
                 FullKeyAggregate::builder()
                     .schema(full_key_aggregate_schema)
@@ -551,6 +591,33 @@ impl MultiStageMemberQueryPlanner {
             dimensions
                 .into_iter()
                 .filter(|d| keep_only.iter().any(|m| d.has_member_in_reference_chain(m)))
+                .collect_vec()
+        } else {
+            dimensions
+        };
+        dimensions
+    }
+
+    /// Partition for an `accumulate:` window. Same shape as
+    /// `member_partition_by_logical`, but matches members granularity-agnostically
+    /// (`matches_grain_member`) so a queried time dimension at any granularity is
+    /// recognised by an `exclude` / `keep_only` referencing the base time
+    /// dimension. Kept separate so grain/rank matching stays byte-for-byte
+    /// unchanged.
+    fn accumulate_partition_by(&self, grain: &MultiStageGrain) -> Vec<Rc<MemberSymbol>> {
+        let dimensions = self.all_dimensions();
+        let dimensions = if let Some(exclude) = &grain.exclude {
+            dimensions
+                .into_iter()
+                .filter(|d| !exclude.iter().any(|m| d.matches_grain_member(m)))
+                .collect_vec()
+        } else {
+            dimensions
+        };
+        let dimensions = if let Some(keep_only) = &grain.keep_only {
+            dimensions
+                .into_iter()
+                .filter(|d| keep_only.iter().any(|m| d.matches_grain_member(m)))
                 .collect_vec()
         } else {
             dimensions

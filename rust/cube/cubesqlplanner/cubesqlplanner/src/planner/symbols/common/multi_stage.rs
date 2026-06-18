@@ -2,6 +2,7 @@ use super::super::measure_symbol::MeasureTimeShifts;
 use super::super::MemberSymbol;
 use crate::cube_bridge::dimension_definition::DimensionDefinition;
 use crate::cube_bridge::measure_definition::{MeasureDefinition, MeasureDefinitionStatic};
+use crate::cube_bridge::multi_stage_accumulate::MultiStageAccumulateReferences;
 use crate::cube_bridge::multi_stage_grain::MultiStageGrainReferences;
 use crate::planner::filter::compiler::FilterCompiler;
 use crate::planner::filter::FilterItem;
@@ -63,11 +64,26 @@ pub struct MultiStageGrain {
     pub include: Option<Vec<Rc<MemberSymbol>>>,
 }
 
+/// Compiled multi-stage `accumulate:` directive — a running-window
+/// accumulation over an arbitrary axis.
+///
+/// The partition is shaped by the same exclude / keep_only / include grain
+/// rules as `grain:` (we reuse `MultiStageGrain` verbatim). The dimensions
+/// that drop out of the partition become the `ORDER BY` axis of the running
+/// window; `direction` chooses the order along that axis.
+#[derive(Clone)]
+pub struct MultiStageAccumulate {
+    pub grain: MultiStageGrain,
+    /// "asc" | "desc" — normalized at construction; default "asc".
+    pub direction: String,
+}
+
 #[derive(Clone)]
 pub struct MultiStageProperties {
     pub grain: MultiStageGrain,
     pub filter: Option<MultiStageFilter>,
     pub time_shift: Option<MeasureTimeShifts>,
+    pub accumulate: Option<MultiStageAccumulate>,
 }
 
 impl MultiStageProperties {
@@ -88,10 +104,62 @@ impl MultiStageProperties {
 
         let filter = build_filter(cube_name, definition.filter()?, compiler)?;
 
+        let accumulate = build_accumulate(definition.accumulate()?, compiler)?;
+        if accumulate.is_some() {
+            // `accumulate` renders a running window aggregate `agg(agg(x)) OVER`.
+            // Only idempotent/associative aggregations produce a faithful running
+            // value: `sum`, `max`, `min`. Anything else (avg, count, number/…) is
+            // an explicit not-implemented error rather than a silent fall-back to a
+            // plain aggregate. (For a running count use `type: sum` over a count.)
+            let measure_type = &definition.static_data().measure_type;
+            if !matches!(measure_type.as_str(), "sum" | "max" | "min") {
+                return Err(CubeError::user(format!(
+                    "Multi-stage `accumulate` is not implemented for measure type `{}` — supported types are `sum`, `max`, `min`. For a running count, use `type: sum` over a count measure.",
+                    measure_type
+                )));
+            }
+
+            // `accumulate` and `grain` both reshape the inner grain / partition;
+            // combining them on one measure is ambiguous (they'd silently
+            // override or disable each other), so it's rejected. `grain` here is
+            // built from the `grain:` directive OR the legacy
+            // `reduce_by`/`group_by`/`add_group_by`, so this covers both forms.
+            if grain.exclude.is_some() || grain.keep_only.is_some() || grain.include.is_some() {
+                return Err(CubeError::user(
+                    "Multi-stage `accumulate` cannot be combined with `grain` (or the legacy `reduce_by` / `group_by` / `add_group_by`) on the same measure — both reshape the inner grain/partition and the combination is ambiguous. Use one or the other.".to_string(),
+                ));
+            }
+
+            // `accumulate` is a window over the leaf result; combining it with
+            // another multi-stage transform on the same measure is unsupported
+            // (they'd silently override each other or produce undefined SQL):
+            //  - `rolling_window` / `runningTotal`: `rolling_window` is planned
+            //    first and would silently win, dropping the accumulate window.
+            //  - `time_shift`: the accumulate axis vs the shifted time grain is
+            //    ambiguous.
+            //  - `case` (CASE-SWITCH): not a single-aggregate measure.
+            if time_shift.is_some() {
+                return Err(CubeError::user(
+                    "Multi-stage `accumulate` cannot be combined with `time_shift` on the same measure — not implemented.".to_string(),
+                ));
+            }
+            if definition.static_data().rolling_window.is_some() {
+                return Err(CubeError::user(
+                    "Multi-stage `accumulate` cannot be combined with `rolling_window` / `runningTotal` on the same measure — both are windows; not implemented.".to_string(),
+                ));
+            }
+            if definition.case()?.is_some() {
+                return Err(CubeError::user(
+                    "Multi-stage `accumulate` cannot be combined with a `case` (switch) measure — not implemented.".to_string(),
+                ));
+            }
+        }
+
         Ok(Some(Self {
             grain,
             filter,
             time_shift,
+            accumulate,
         }))
     }
 
@@ -115,6 +183,7 @@ impl MultiStageProperties {
             },
             filter,
             time_shift: None,
+            accumulate: None,
         }))
     }
 
@@ -150,10 +219,23 @@ impl MultiStageProperties {
             include: map_refs(&self.grain.include)?,
         };
 
+        let accumulate = match &self.accumulate {
+            Some(a) => Some(MultiStageAccumulate {
+                grain: MultiStageGrain {
+                    exclude: map_refs(&a.grain.exclude)?,
+                    keep_only: map_refs(&a.grain.keep_only)?,
+                    include: map_refs(&a.grain.include)?,
+                },
+                direction: a.direction.clone(),
+            }),
+            None => None,
+        };
+
         Ok(Self {
             grain,
             filter,
             time_shift: self.time_shift.clone(),
+            accumulate,
         })
     }
 }
@@ -200,6 +282,58 @@ fn build_grain_from_legacy(
         keep_only: resolve_reference_paths(&static_data.group_by_references, compiler)?,
         include: resolve_reference_paths(&static_data.add_group_by_references, compiler)?,
     })
+}
+
+fn build_accumulate(
+    accumulate: Option<Rc<dyn MultiStageAccumulateReferences>>,
+    compiler: &mut Compiler,
+) -> Result<Option<MultiStageAccumulate>, CubeError> {
+    let accumulate = match accumulate {
+        Some(a) => a,
+        None => return Ok(None),
+    };
+
+    let static_data = accumulate.static_data();
+    if static_data.exclude.is_some() && static_data.keep_only.is_some() {
+        return Err(CubeError::user(
+            "Multi-stage accumulate cannot specify both `exclude` and `keepOnly` — they are mutually exclusive ways of restricting the inherited context.".to_string(),
+        ));
+    }
+    // `accumulate.include` is intentionally NOT implemented: unlike
+    // `grain.include` (JOIN-model broadcast), accumulating over an axis that is
+    // not in the query is degenerate with the window render (it collapses to a
+    // plain SUM), and `include` would also disable the window path. Accepted by
+    // the schema for forward-compatibility, but surfaced as an explicit error
+    // when actually used rather than silently ignored.
+    if static_data
+        .include
+        .as_ref()
+        .is_some_and(|v| !v.is_empty())
+    {
+        return Err(CubeError::user(
+            "Multi-stage `accumulate.include` is not implemented yet — use `exclude` or `keepOnly` to choose the accumulation axis. (Accumulating over an axis absent from the query is degenerate with the window render.)".to_string(),
+        ));
+    }
+
+    let direction = match static_data.direction.as_deref() {
+        Some("asc") | None => "asc".to_string(),
+        Some("desc") => "desc".to_string(),
+        Some(other) => {
+            return Err(CubeError::user(format!(
+                "Unknown multi-stage accumulate direction '{}', expected 'asc' or 'desc'",
+                other
+            )))
+        }
+    };
+
+    Ok(Some(MultiStageAccumulate {
+        grain: MultiStageGrain {
+            exclude: resolve_reference_paths(&static_data.exclude, compiler)?,
+            keep_only: resolve_reference_paths(&static_data.keep_only, compiler)?,
+            include: resolve_reference_paths(&static_data.include, compiler)?,
+        },
+        direction,
+    }))
 }
 
 fn build_filter(

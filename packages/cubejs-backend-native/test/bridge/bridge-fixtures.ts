@@ -94,6 +94,15 @@ export const multiStageGrainFixture = (): unknown => ({
   includeReferences: ['orders.category'],
 });
 
+// MultiStageAccumulateReferences mirrors the grain bridge (same
+// exclude/keep_only/include partition sets) plus a `direction` for the
+// running-window ORDER BY. Static-only; the `.nand` on exclude/keepOnly lives
+// on the JS Joi validator.
+export const multiStageAccumulateFixture = (): unknown => ({
+  excludeReferences: ['orders.session_number'],
+  direction: 'asc',
+});
+
 export const memberDefinitionFixture = (): unknown => ({
   type: 'dimension',
   // sql is optional
@@ -292,6 +301,7 @@ export const FIXTURES: Record<string, BridgeFixtureFactory> = {
   memberDefinition: memberDefinitionFixture,
   memberExpressionDefinition: memberExpressionDefinitionFixture,
   memberOrderBy: memberOrderByFixture,
+  multiStageAccumulate: multiStageAccumulateFixture,
   multiStageFilter: multiStageFilterFixture,
   multiStageGrain: multiStageGrainFixture,
   preAggregationDescription: preAggregationDescriptionFixture,

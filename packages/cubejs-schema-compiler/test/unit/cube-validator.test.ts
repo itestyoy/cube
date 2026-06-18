@@ -910,6 +910,128 @@ describe('Cube Validation', () => {
       expect(validationResult.error).toBeTruthy();
     });
 
+    it('multi-stage accumulate — full directive accepted', async () => {
+      const cubeValidator = new CubeValidator(new CubeSymbols());
+      const cube = {
+        name: 'name',
+        sql: () => '',
+        fileName: 'fileName',
+        measures: {
+          running_total: {
+            multiStage: true,
+            type: 'sum',
+            sql: () => '',
+            accumulate: {
+              exclude: () => [],
+              direction: 'asc',
+            }
+          },
+          keep_only_variant: {
+            multiStage: true,
+            type: 'sum',
+            sql: () => '',
+            accumulate: {
+              keepOnly: () => [],
+              direction: 'desc',
+            }
+          },
+        }
+      };
+
+      const validationResult = cubeValidator.validate(cube, {
+        error: (message: any, _e: any) => {
+          console.log(message);
+        }
+      } as any);
+
+      expect(validationResult.error).toBeFalsy();
+    });
+
+    it('multi-stage accumulate — exclude and keepOnly are mutually exclusive', async () => {
+      const cubeValidator = new CubeValidator(new CubeSymbols());
+      const cube = {
+        name: 'name',
+        sql: () => '',
+        fileName: 'fileName',
+        measures: {
+          both_set: {
+            multiStage: true,
+            type: 'sum',
+            sql: () => '',
+            accumulate: {
+              exclude: () => [],
+              keepOnly: () => [],
+            }
+          }
+        }
+      };
+
+      const validationResult = cubeValidator.validate(cube, {
+        error: (message: any, _e: any) => {
+          console.log(message);
+          expect(message).toContain('exclude');
+          expect(message).toContain('keepOnly');
+        }
+      } as any);
+
+      expect(validationResult.error).toBeTruthy();
+    });
+
+    it('multi-stage accumulate — direction must be asc or desc', async () => {
+      const cubeValidator = new CubeValidator(new CubeSymbols());
+      const cube = {
+        name: 'name',
+        sql: () => '',
+        fileName: 'fileName',
+        measures: {
+          bad_direction: {
+            multiStage: true,
+            type: 'sum',
+            sql: () => '',
+            accumulate: {
+              exclude: () => [],
+              direction: 'sideways',
+            }
+          }
+        }
+      };
+
+      const validationResult = cubeValidator.validate(cube, {
+        error: (message: any, _e: any) => {
+          console.log(message);
+          expect(message).toContain('direction');
+        }
+      } as any);
+
+      expect(validationResult.error).toBeTruthy();
+    });
+
+    it('multi-stage accumulate — cannot be combined with grain', async () => {
+      const cubeValidator = new CubeValidator(new CubeSymbols());
+      const cube = {
+        name: 'name',
+        sql: () => '',
+        fileName: 'fileName',
+        measures: {
+          grain_and_accumulate: {
+            multiStage: true,
+            type: 'sum',
+            sql: () => '',
+            grain: { exclude: () => [] },
+            accumulate: { exclude: () => [] },
+          }
+        }
+      };
+
+      const validationResult = cubeValidator.validate(cube, {
+        error: (message: any, _e: any) => {
+          console.log(message);
+        }
+      } as any);
+
+      expect(validationResult.error).toBeTruthy();
+    });
+
     it('multi-stage grain — rejected on multi-stage dimension', async () => {
       const cubeValidator = new CubeValidator(new CubeSymbols());
       const cube = {

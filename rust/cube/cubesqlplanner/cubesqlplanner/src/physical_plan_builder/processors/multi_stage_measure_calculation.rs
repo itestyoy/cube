@@ -4,6 +4,7 @@ use crate::logical_plan::{MultiStageCalculationWindowFunction, MultiStageMeasure
 use crate::physical_plan::ReferencesBuilder;
 use crate::physical_plan::{Expr, MemberExpression, QueryPlan, SelectBuilder};
 use crate::physical_plan_builder::PhysicalPlanBuilder;
+use crate::planner::MemberSymbol;
 use cubenativeutils::CubeError;
 use itertools::Itertools;
 use std::rc::Rc;
@@ -72,35 +73,58 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
             );
         }
 
-        let partition_by = measure_calculation
-            .partition_by()
-            .iter()
-            .map(|dim| -> Result<_, CubeError> {
-                if let Some(reference) = references_builder.find_reference_for_member(&dim, &None) {
-                    let table_ref = if let Some(table_name) = reference.source() {
-                        format!("{}.", templates.quote_identifier(table_name)?)
+        // Resolves a list of dimension members to their rendered SQL column
+        // references (`"table"."col"`), reusing the references already built
+        // for this select. Shared by partition_by and the accumulate ORDER BY.
+        let resolve_dimension_refs = |members: &[Rc<MemberSymbol>],
+                                      role: &str|
+         -> Result<Vec<String>, CubeError> {
+            members
+                .iter()
+                .map(|dim| -> Result<_, CubeError> {
+                    if let Some(reference) =
+                        references_builder.find_reference_for_member(dim, &None)
+                    {
+                        let table_ref = if let Some(table_name) = reference.source() {
+                            format!("{}.", templates.quote_identifier(table_name)?)
+                        } else {
+                            format!("")
+                        };
+                        Ok(format!(
+                            "{}{}",
+                            table_ref,
+                            templates.quote_identifier(&reference.name())?
+                        ))
                     } else {
-                        format!("")
-                    };
-                    Ok(format!(
-                        "{}{}",
-                        table_ref,
-                        templates.quote_identifier(&reference.name())?
-                    ))
-                } else {
-                    Err(CubeError::internal(format!(
-                        "Alias not found for partition_by dimension {}",
-                        dim.full_name()
-                    )))
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                        Err(CubeError::internal(format!(
+                            "Alias not found for {} dimension {}",
+                            role,
+                            dim.full_name()
+                        )))
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+
+        let partition_by =
+            resolve_dimension_refs(measure_calculation.partition_by().as_slice(), "partition_by")?;
         match measure_calculation.window_function_to_use() {
             MultiStageCalculationWindowFunction::Rank => {
                 context_factory.set_multi_stage_rank(partition_by)
             }
             MultiStageCalculationWindowFunction::Window => {
                 context_factory.set_multi_stage_window(partition_by)
+            }
+            MultiStageCalculationWindowFunction::Accumulate => {
+                let order_by = resolve_dimension_refs(
+                    measure_calculation.accumulate_order_by().as_slice(),
+                    "accumulate order_by",
+                )?;
+                context_factory.set_multi_stage_accumulate(
+                    partition_by,
+                    order_by,
+                    measure_calculation.accumulate_direction().clone(),
+                )
             }
             MultiStageCalculationWindowFunction::None => {}
         }
