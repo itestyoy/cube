@@ -80,6 +80,7 @@ export const memberOrderByFixture = (): unknown => ({
 export const multiStageFilterFixture = (): unknown => ({
   mode: 'relative',
   excludeReferences: ['orders.status'],
+  qualify: true,
   include: [{ member: 'orders.amount', operator: 'gt', values: ['0'] }],
 });
 

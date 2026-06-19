@@ -893,6 +893,9 @@ const MultiStageFilter = Joi.object().keys({
   mode: Joi.string().valid('relative', 'fixed'),
   exclude: Joi.func(),
   keepOnly: Joi.func(),
+  // Re-apply the `exclude`d predicates as a post-computation CTE step so the
+  // metric ignores them but the output rows stay bounded. Default false.
+  qualify: Joi.boolean(),
   include: Joi.array().items(
     MultiStageIncludeMemberFilterSchema,
     MultiStageIncludeConditionSchema

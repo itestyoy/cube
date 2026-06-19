@@ -15,6 +15,11 @@ pub struct MultiStageFilterReferencesStatic {
     #[serde(rename = "keepOnlyReferences")]
     pub keep_only: Option<Vec<String>>,
     pub include: Option<Vec<NativeFilterItem>>,
+    // When true, the predicates dropped by `exclude` are re-applied as a
+    // post-computation filter (a wrapping subquery `WHERE`) on the measure's
+    // CTE — the metric is computed ignoring them, but the output rows stay
+    // bounded by them. Portable (no SQL `QUALIFY`). Default false.
+    pub qualify: Option<bool>,
 }
 
 #[nativebridge::native_bridge(MultiStageFilterReferencesStatic, with_static_meta)]

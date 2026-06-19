@@ -201,7 +201,7 @@ const BRIDGES: BridgeSpec[] = [
   { name: 'memberOrderBy', expected: ['dir', 'sql'] },
   {
     name: 'multiStageFilter',
-    expected: ['exclude', 'include', 'keep_only', 'mode'],
+    expected: ['exclude', 'include', 'keep_only', 'mode', 'qualify'],
   },
   {
     name: 'multiStageGrain',
