@@ -1,0 +1,236 @@
+diff --git a/packages/cubejs-schema-compiler/src/compiler/CubeEvaluator.ts b/packages/cubejs-schema-compiler/src/compiler/CubeEvaluator.ts
+index 4b2fa3540..b1a26fda1 100644
+--- a/packages/cubejs-schema-compiler/src/compiler/CubeEvaluator.ts
++++ b/packages/cubejs-schema-compiler/src/compiler/CubeEvaluator.ts
+@@ -64,6 +64,21 @@ export type MultiStageGrainDirective = {
+   includeReferences?: string[];
+ };
+ 
++// `accumulate:` directive — a running-window accumulation over an arbitrary
++// axis. Shares the grain partition sets (exclude/keepOnly/include) and adds a
++// window ORDER BY `direction`. The native bridge reads the resolved
++// `*References` fields (not the function forms).
++export type MultiStageAccumulateDirective = {
++  exclude?: (...args: Array<unknown>) => Array<ToString>;
++  keepOnly?: (...args: Array<unknown>) => Array<ToString>;
++  include?: (...args: Array<unknown>) => Array<ToString>;
++  direction?: 'asc' | 'desc';
++  // Resolved sibling fields populated by `evaluateMultiStageReferences`.
++  excludeReferences?: string[];
++  keepOnlyReferences?: string[];
++  includeReferences?: string[];
++};
++
+ export type LinkDefinition = {
+   name: string;
+   label: string;
+@@ -121,6 +136,7 @@ export type MeasureDefinition = {
+   reduceBy?: (...args: Array<unknown>) => Array<ToString>;
+   addGroupBy?: (...args: Array<unknown>) => Array<ToString>;
+   grain?: MultiStageGrainDirective;
++  accumulate?: MultiStageAccumulateDirective;
+   timeShift?: TimeShiftDefinition[];
+   groupByReferences?: string[];
+   reduceByReferences?: string[];
+@@ -660,6 +676,17 @@ export class CubeEvaluator extends CubeSymbols {
+             member.grain.includeReferences = this.evaluateReferences(cubeName, member.grain.include);
+           }
+         }
++        if (member.accumulate) {
++          if (typeof member.accumulate.exclude === 'function') {
++            member.accumulate.excludeReferences = this.evaluateReferences(cubeName, member.accumulate.exclude);
++          }
++          if (typeof member.accumulate.keepOnly === 'function') {
++            member.accumulate.keepOnlyReferences = this.evaluateReferences(cubeName, member.accumulate.keepOnly);
++          }
++          if (typeof member.accumulate.include === 'function') {
++            member.accumulate.includeReferences = this.evaluateReferences(cubeName, member.accumulate.include);
++          }
++        }
+       }
+     }
+   }
+diff --git a/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts b/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts
+index 9003936fc..1dd16f8aa 100644
+--- a/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts
++++ b/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts
+@@ -905,6 +905,17 @@ const MultiStageGrain = Joi.object().keys({
+   include: Joi.func(),
+ }).nand('exclude', 'keepOnly');
+ 
++// `accumulate:` — running-window accumulation over an arbitrary axis. The
++// partition is shaped by the same exclude/keepOnly/include grain sets; the
++// dimensions that drop out of the partition become the window ORDER BY axis.
++// `direction` chooses the order along that axis (default asc).
++const MultiStageAccumulate = Joi.object().keys({
++  exclude: Joi.func(),
++  keepOnly: Joi.func(),
++  include: Joi.func(),
++  direction: Joi.string().valid('asc', 'desc'),
++}).nand('exclude', 'keepOnly');
++
+ const CaseSchema = Joi.object().keys({
+   when: Joi.array().items(Joi.object().keys({
+     sql: Joi.func().required(),
+@@ -954,6 +965,7 @@ const MeasuresSchema = Joi.object().pattern(identifierRegex, Joi.alternatives().
+       addGroupBy: Joi.func(),
+       filter: MultiStageFilter,
+       grain: MultiStageGrain,
++      accumulate: MultiStageAccumulate,
+       timeShift: Joi.alternatives().conditional(Joi.array().length(1), {
+         then: Joi.array().items(timeShiftItemOptional),
+         otherwise: Joi.array().items(timeShiftItemRequired)
+@@ -963,7 +975,7 @@ const MeasuresSchema = Joi.object().pattern(identifierRegex, Joi.alternatives().
+         sql: Joi.func().required(),
+         dir: Joi.string().valid('asc', 'desc')
+       })),
+-    })
++    }).nand('grain', 'accumulate')
+   }
+ ]).conditional(
+   Joi.ref('.type'), [
+diff --git a/packages/cubejs-schema-compiler/src/compiler/transpilers/CubePropContextTranspiler.ts b/packages/cubejs-schema-compiler/src/compiler/transpilers/CubePropContextTranspiler.ts
+index b703780f0..41fc6f5bd 100644
+--- a/packages/cubejs-schema-compiler/src/compiler/transpilers/CubePropContextTranspiler.ts
++++ b/packages/cubejs-schema-compiler/src/compiler/transpilers/CubePropContextTranspiler.ts
+@@ -21,6 +21,7 @@ export const transpiledFieldsPatterns: Array<RegExp> = [
+   /^measures\.[_a-zA-Z][_a-zA-Z0-9]*\.(reduceBy|reduce_by|groupBy|group_by|addGroupBy|add_group_by)$/,
+   /^(measures|dimensions)\.[_a-zA-Z][_a-zA-Z0-9]*\.filter\.(exclude|keepOnly|keep_only)$/,
+   /^measures\.[_a-zA-Z][_a-zA-Z0-9]*\.grain\.(exclude|keepOnly|keep_only|include)$/,
++  /^measures\.[_a-zA-Z][_a-zA-Z0-9]*\.accumulate\.(exclude|keepOnly|keep_only|include)$/,
+   /^(measures|dimensions)\.[_a-zA-Z][_a-zA-Z0-9]*\.case\.switch$/,
+   /^dimensions\.[_a-zA-Z][_a-zA-Z0-9]*\.(reduceBy|reduce_by|groupBy|group_by|addGroupBy|add_group_by|key)$/,
+   /^(preAggregations|pre_aggregations)\.[_a-zA-Z][_a-zA-Z0-9]*\.indexes\.[_a-zA-Z][_a-zA-Z0-9]*\.columns$/,
+diff --git a/packages/cubejs-schema-compiler/test/unit/cube-validator.test.ts b/packages/cubejs-schema-compiler/test/unit/cube-validator.test.ts
+index 183b44abe..3030440ba 100644
+--- a/packages/cubejs-schema-compiler/test/unit/cube-validator.test.ts
++++ b/packages/cubejs-schema-compiler/test/unit/cube-validator.test.ts
+@@ -910,6 +910,128 @@ describe('Cube Validation', () => {
+       expect(validationResult.error).toBeTruthy();
+     });
+ 
++    it('multi-stage accumulate — full directive accepted', async () => {
++      const cubeValidator = new CubeValidator(new CubeSymbols());
++      const cube = {
++        name: 'name',
++        sql: () => '',
++        fileName: 'fileName',
++        measures: {
++          running_total: {
++            multiStage: true,
++            type: 'sum',
++            sql: () => '',
++            accumulate: {
++              exclude: () => [],
++              direction: 'asc',
++            }
++          },
++          keep_only_variant: {
++            multiStage: true,
++            type: 'sum',
++            sql: () => '',
++            accumulate: {
++              keepOnly: () => [],
++              direction: 'desc',
++            }
++          },
++        }
++      };
++
++      const validationResult = cubeValidator.validate(cube, {
++        error: (message: any, _e: any) => {
++          console.log(message);
++        }
++      } as any);
++
++      expect(validationResult.error).toBeFalsy();
++    });
++
++    it('multi-stage accumulate — exclude and keepOnly are mutually exclusive', async () => {
++      const cubeValidator = new CubeValidator(new CubeSymbols());
++      const cube = {
++        name: 'name',
++        sql: () => '',
++        fileName: 'fileName',
++        measures: {
++          both_set: {
++            multiStage: true,
++            type: 'sum',
++            sql: () => '',
++            accumulate: {
++              exclude: () => [],
++              keepOnly: () => [],
++            }
++          }
++        }
++      };
++
++      const validationResult = cubeValidator.validate(cube, {
++        error: (message: any, _e: any) => {
++          console.log(message);
++          expect(message).toContain('exclude');
++          expect(message).toContain('keepOnly');
++        }
++      } as any);
++
++      expect(validationResult.error).toBeTruthy();
++    });
++
++    it('multi-stage accumulate — direction must be asc or desc', async () => {
++      const cubeValidator = new CubeValidator(new CubeSymbols());
++      const cube = {
++        name: 'name',
++        sql: () => '',
++        fileName: 'fileName',
++        measures: {
++          bad_direction: {
++            multiStage: true,
++            type: 'sum',
++            sql: () => '',
++            accumulate: {
++              exclude: () => [],
++              direction: 'sideways',
++            }
++          }
++        }
++      };
++
++      const validationResult = cubeValidator.validate(cube, {
++        error: (message: any, _e: any) => {
++          console.log(message);
++          expect(message).toContain('direction');
++        }
++      } as any);
++
++      expect(validationResult.error).toBeTruthy();
++    });
++
++    it('multi-stage accumulate — cannot be combined with grain', async () => {
++      const cubeValidator = new CubeValidator(new CubeSymbols());
++      const cube = {
++        name: 'name',
++        sql: () => '',
++        fileName: 'fileName',
++        measures: {
++          grain_and_accumulate: {
++            multiStage: true,
++            type: 'sum',
++            sql: () => '',
++            grain: { exclude: () => [] },
++            accumulate: { exclude: () => [] },
++          }
++        }
++      };
++
++      const validationResult = cubeValidator.validate(cube, {
++        error: (message: any, _e: any) => {
++          console.log(message);
++        }
++      } as any);
++
++      expect(validationResult.error).toBeTruthy();
++    });
++
+     it('multi-stage grain — rejected on multi-stage dimension', async () => {
+       const cubeValidator = new CubeValidator(new CubeSymbols());
+       const cube = {

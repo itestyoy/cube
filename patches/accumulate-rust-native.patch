@@ -1,0 +1,1749 @@
+diff --git a/packages/cubejs-backend-native/src/bridge_test_exports.rs b/packages/cubejs-backend-native/src/bridge_test_exports.rs
+index 44fe1ab5a..be2f8a137 100644
+--- a/packages/cubejs-backend-native/src/bridge_test_exports.rs
++++ b/packages/cubejs-backend-native/src/bridge_test_exports.rs
+@@ -62,6 +62,10 @@ use cubesqlplanner::cube_bridge::{
+         NativeMemberExpressionDefinition,
+     },
+     member_order_by::{member_order_by_bridge_fields_meta, MemberOrderBy, NativeMemberOrderBy},
++    multi_stage_accumulate::{
++        multi_stage_accumulate_references_bridge_fields_meta,
++        NativeMultiStageAccumulateReferences,
++    },
+     multi_stage_filter::{
+         multi_stage_filter_references_bridge_fields_meta, NativeMultiStageFilterReferences,
+     },
+@@ -265,6 +269,7 @@ bridge_registry! {
+     "memberDefinition"            => NativeMemberDefinition,            member_definition_bridge_fields_meta,            invoke_member_definition;
+     "memberExpressionDefinition"  => NativeMemberExpressionDefinition,  member_expression_definition_bridge_fields_meta, invoke_member_expression_definition;
+     "memberOrderBy"               => NativeMemberOrderBy,               member_order_by_bridge_fields_meta,              invoke_member_order_by;
++    "multiStageAccumulate"        => NativeMultiStageAccumulateReferences, multi_stage_accumulate_references_bridge_fields_meta, invoke_multi_stage_accumulate;
+     "multiStageFilter"            => NativeMultiStageFilterReferences,  multi_stage_filter_references_bridge_fields_meta, invoke_multi_stage_filter;
+     "multiStageGrain"             => NativeMultiStageGrainReferences,   multi_stage_grain_references_bridge_fields_meta,  invoke_multi_stage_grain;
+     "preAggregationDescription"   => NativePreAggregationDescription,   pre_aggregation_description_bridge_fields_meta,  invoke_pre_aggregation_description;
+@@ -589,6 +594,13 @@ fn invoke_multi_stage_grain<IT: InnerTypes>(
+     InvokeResult::new()
+ }
+ 
++fn invoke_multi_stage_accumulate<IT: InnerTypes>(
++    _b: &NativeMultiStageAccumulateReferences<IT>,
++) -> InvokeResult {
++    // Static-only bridge — same shape as `invoke_multi_stage_grain`.
++    InvokeResult::new()
++}
++
+ fn invoke_expression_struct<IT: InnerTypes>(b: &NativeExpressionStruct<IT>) -> InvokeResult {
+     let mut r = InvokeResult::new();
+     r.record("add_filters", b.add_filters());
+diff --git a/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts b/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts
+index 3828f518d..574cf8d85 100644
+--- a/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts
++++ b/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts
+@@ -94,6 +94,15 @@ export const multiStageGrainFixture = (): unknown => ({
+   includeReferences: ['orders.category'],
+ });
+ 
++// MultiStageAccumulateReferences mirrors the grain bridge (same
++// exclude/keep_only/include partition sets) plus a `direction` for the
++// running-window ORDER BY. Static-only; the `.nand` on exclude/keepOnly lives
++// on the JS Joi validator.
++export const multiStageAccumulateFixture = (): unknown => ({
++  excludeReferences: ['orders.session_number'],
++  direction: 'asc',
++});
++
+ export const memberDefinitionFixture = (): unknown => ({
+   type: 'dimension',
+   // sql is optional
+@@ -299,6 +308,7 @@ export const FIXTURES: Record<string, BridgeFixtureFactory> = {
+   memberDefinition: memberDefinitionFixture,
+   memberExpressionDefinition: memberExpressionDefinitionFixture,
+   memberOrderBy: memberOrderByFixture,
++  multiStageAccumulate: multiStageAccumulateFixture,
+   multiStageFilter: multiStageFilterFixture,
+   multiStageGrain: multiStageGrainFixture,
+   preAggregationDescription: preAggregationDescriptionFixture,
+diff --git a/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts b/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts
+index ea902c565..873b0d67d 100644
+--- a/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts
++++ b/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts
+@@ -199,6 +199,10 @@ const BRIDGES: BridgeSpec[] = [
+     expected: ['cube_name', 'definition', 'expression', 'expression_name', 'name'],
+   },
+   { name: 'memberOrderBy', expected: ['dir', 'sql'] },
++  {
++    name: 'multiStageAccumulate',
++    expected: ['direction', 'exclude', 'include', 'keep_only'],
++  },
+   {
+     name: 'multiStageFilter',
+     expected: ['exclude', 'include', 'keep_only', 'mode'],
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/measure_definition.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/measure_definition.rs
+index b9b54f3b5..59f7b7021 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/measure_definition.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/measure_definition.rs
+@@ -1,6 +1,9 @@
+ use super::case_variant::CaseVariant;
+ use super::member_order_by::{MemberOrderBy, NativeMemberOrderBy};
+ use super::member_sql::{MemberSql, NativeMemberSql};
++use super::multi_stage_accumulate::{
++    MultiStageAccumulateReferences, NativeMultiStageAccumulateReferences,
++};
+ use super::multi_stage_filter::{MultiStageFilterReferences, NativeMultiStageFilterReferences};
+ use super::multi_stage_grain::{MultiStageGrainReferences, NativeMultiStageGrainReferences};
+ use super::struct_with_sql_member::{NativeStructWithSqlMember, StructWithSqlMember};
+@@ -72,6 +75,9 @@ pub trait MeasureDefinition {
+     #[nbridge(field, optional)]
+     fn grain(&self) -> Result<Option<Rc<dyn MultiStageGrainReferences>>, CubeError>;
+ 
++    #[nbridge(field, optional)]
++    fn accumulate(&self) -> Result<Option<Rc<dyn MultiStageAccumulateReferences>>, CubeError>;
++
+     #[nbridge(field, optional, vec)]
+     fn drill_filters(&self) -> Result<Option<Vec<Rc<dyn StructWithSqlMember>>>, CubeError>;
+ 
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/mod.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/mod.rs
+index 19759f179..3ee0bef0d 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/mod.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/mod.rs
+@@ -33,6 +33,7 @@ pub mod member_definition;
+ pub mod member_expression;
+ pub mod member_order_by;
+ pub mod member_sql;
++pub mod multi_stage_accumulate;
+ pub mod multi_stage_filter;
+ pub mod multi_stage_grain;
+ pub mod options_member;
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/multi_stage_accumulate.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/multi_stage_accumulate.rs
+new file mode 100644
+index 000000000..c98570685
+--- /dev/null
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/multi_stage_accumulate.rs
+@@ -0,0 +1,25 @@
++use cubenativeutils::wrappers::serializer::{NativeDeserialize, NativeSerialize};
++use cubenativeutils::wrappers::NativeContextHolder;
++use cubenativeutils::wrappers::NativeObjectHandle;
++use cubenativeutils::CubeError;
++use serde::{Deserialize, Serialize};
++use std::any::Any;
++use std::rc::Rc;
++
++/// Static shape of the multi-stage `accumulate:` directive coming from the
++/// schema compiler. Mirrors `MultiStageGrainReferencesStatic` (the partition
++/// is shaped by the same exclude/keep_only/include sets) and adds `direction`
++/// for the running-window `ORDER BY`.
++#[derive(Serialize, Deserialize, Debug, Clone, nativebridge::NativeBridgeStatic)]
++pub struct MultiStageAccumulateReferencesStatic {
++    #[serde(rename = "excludeReferences")]
++    pub exclude: Option<Vec<String>>,
++    #[serde(rename = "keepOnlyReferences")]
++    pub keep_only: Option<Vec<String>>,
++    #[serde(rename = "includeReferences")]
++    pub include: Option<Vec<String>>,
++    pub direction: Option<String>,
++}
++
++#[nativebridge::native_bridge(MultiStageAccumulateReferencesStatic, with_static_meta)]
++pub trait MultiStageAccumulateReferences {}
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs
+index 50d2f477a..87c873bf4 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs
+@@ -31,6 +31,9 @@ impl ToString for MultiStageCalculationType {
+ pub enum MultiStageCalculationWindowFunction {
+     Rank,
+     Window,
++    /// Running-window accumulation (`accumulate:` directive): a `Window`
++    /// aggregate plus an `ORDER BY` axis and an `UNBOUNDED PRECEDING` frame.
++    Accumulate,
+     None,
+ }
+ 
+@@ -39,6 +42,7 @@ impl ToString for MultiStageCalculationWindowFunction {
+         match self {
+             MultiStageCalculationWindowFunction::Rank => "Rank".to_string(),
+             MultiStageCalculationWindowFunction::Window => "Window".to_string(),
++            MultiStageCalculationWindowFunction::Accumulate => "Accumulate".to_string(),
+             MultiStageCalculationWindowFunction::None => "None".to_string(),
+         }
+     }
+@@ -57,6 +61,15 @@ pub struct MultiStageMeasureCalculation {
+     window_function_to_use: MultiStageCalculationWindowFunction,
+     #[builder(default)]
+     order_by: Vec<OrderByItem>,
++    /// Dimensions forming the `ORDER BY` axis of an `Accumulate` running
++    /// window (the query dims that dropped out of `partition_by`). Empty for
++    /// every other window function.
++    #[builder(default)]
++    accumulate_order_by: Vec<Rc<MemberSymbol>>,
++    /// `ORDER BY` direction for the accumulate window: "asc" | "desc". Always
++    /// set by the planner on the Accumulate path; the default is unused there.
++    #[builder(default)]
++    accumulate_direction: String,
+     source: Rc<FullKeyAggregate>,
+ }
+ 
+@@ -85,6 +98,14 @@ impl MultiStageMeasureCalculation {
+         &self.order_by
+     }
+ 
++    pub fn accumulate_order_by(&self) -> &Vec<Rc<MemberSymbol>> {
++        &self.accumulate_order_by
++    }
++
++    pub fn accumulate_direction(&self) -> &String {
++        &self.accumulate_direction
++    }
++
+     pub fn source(&self) -> &Rc<FullKeyAggregate> {
+         &self.source
+     }
+@@ -163,6 +184,8 @@ impl LogicalNode for MultiStageMeasureCalculation {
+                 .partition_by(self.partition_by().clone())
+                 .window_function_to_use(self.window_function_to_use().clone())
+                 .order_by(self.order_by().clone())
++                .accumulate_order_by(self.accumulate_order_by().clone())
++                .accumulate_direction(self.accumulate_direction().clone())
+                 .source(source.clone().into_logical_node()?)
+                 .build(),
+         ))
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/factory.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/factory.rs
+index 24c9fd7fc..7a139cc1e 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/factory.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/factory.rs
+@@ -1,7 +1,8 @@
+ use super::{
+     AutoPrefixSqlNode, CaseSqlNode, EvaluateSqlNode, FinalMeasureSqlNode,
+     FinalPreAggregationMeasureSqlNode, GeoDimensionSqlNode, MaskedSqlNode, MeasureFilterSqlNode,
+-    MultiStageRankNode, MultiStageWindowNode, ParenthesizeSqlNode, RenderReferencesSqlNode,
++    MultiStageAccumulateNode, MultiStageRankNode, MultiStageWindowNode, ParenthesizeSqlNode,
++    RenderReferencesSqlNode,
+     RenderReferencesType, RollingWindowNode, RootSqlNode, SegmentDimensionSqlNode, SqlNode,
+     TimeDimensionNode, TimeShiftSqlNode, UngroupedMeasureSqlNode,
+     UngroupedQueryFinalMeasureSqlNode,
+@@ -32,6 +33,8 @@ pub struct SqlNodesFactory {
+     cube_name_references: HashMap<String, String>,
+     multi_stage_rank: Option<Vec<String>>,   //partition_by
+     multi_stage_window: Option<Vec<String>>, //partition_by
++    // (partition_by, order_by, direction) for the `accumulate:` running window
++    multi_stage_accumulate: Option<(Vec<String>, Vec<String>, String)>,
+     rolling_window: bool,
+     dimensions_with_ignored_timezone: HashSet<String>,
+     use_local_tz_in_date_range: bool,
+@@ -123,6 +126,15 @@ impl SqlNodesFactory {
+         self.multi_stage_window = Some(partition_by);
+     }
+ 
++    pub fn set_multi_stage_accumulate(
++        &mut self,
++        partition_by: Vec<String>,
++        order_by: Vec<String>,
++        direction: String,
++    ) {
++        self.multi_stage_accumulate = Some((partition_by, order_by, direction));
++    }
++
+     pub fn add_pre_aggregation_measure_reference<T: Into<RenderReferencesType>>(
+         &mut self,
+         name: String,
+@@ -194,6 +206,10 @@ impl SqlNodesFactory {
+         };
+         let measure_processor = self
+             .add_multi_stage_window_if_needed(measure_processor, measure_filter_processor.clone());
++        let measure_processor = self.add_multi_stage_accumulate_if_needed(
++            measure_processor,
++            measure_filter_processor.clone(),
++        );
+         let measure_processor = self.add_multi_stage_rank_if_needed(measure_processor);
+ 
+         let default_processor: Rc<dyn SqlNode> =
+@@ -250,6 +266,24 @@ impl SqlNodesFactory {
+         }
+     }
+ 
++    fn add_multi_stage_accumulate_if_needed(
++        &self,
++        default: Rc<dyn SqlNode>,
++        multi_stage_input: Rc<dyn SqlNode>,
++    ) -> Rc<dyn SqlNode> {
++        if let Some((partition_by, order_by, direction)) = &self.multi_stage_accumulate {
++            MultiStageAccumulateNode::new(
++                multi_stage_input,
++                default,
++                partition_by.clone(),
++                order_by.clone(),
++                direction.clone(),
++            )
++        } else {
++            default
++        }
++    }
++
+     fn final_measure_node_processor(&self, input: Rc<dyn SqlNode>) -> Rc<dyn SqlNode> {
+         if self.ungrouped_measure {
+             UngroupedMeasureSqlNode::new(input)
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/mod.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/mod.rs
+index 4620ad8c6..fff363588 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/mod.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/mod.rs
+@@ -17,6 +17,7 @@ pub mod final_pre_aggregation_measure;
+ pub mod geo_dimension;
+ pub mod masked;
+ pub mod measure_filter;
++pub mod multi_stage_accumulate;
+ pub mod multi_stage_rank;
+ pub mod multi_stage_window;
+ pub mod parenthesize;
+@@ -40,6 +41,7 @@ pub use final_pre_aggregation_measure::FinalPreAggregationMeasureSqlNode;
+ pub use geo_dimension::GeoDimensionSqlNode;
+ pub use masked::MaskedSqlNode;
+ pub use measure_filter::MeasureFilterSqlNode;
++pub use multi_stage_accumulate::MultiStageAccumulateNode;
+ pub use multi_stage_rank::MultiStageRankNode;
+ pub use multi_stage_window::MultiStageWindowNode;
+ pub use parenthesize::ParenthesizeSqlNode;
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/multi_stage_accumulate.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/multi_stage_accumulate.rs
+new file mode 100644
+index 000000000..b4cf97695
+--- /dev/null
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/multi_stage_accumulate.rs
+@@ -0,0 +1,149 @@
++use super::SqlNode;
++use crate::physical_plan::SqlEvaluatorVisitor;
++use crate::planner::query_tools::QueryTools;
++use crate::planner::sql_templates::PlanSqlTemplates;
++use crate::planner::MemberSymbol;
++use cubenativeutils::CubeError;
++use std::any::Any;
++use std::rc::Rc;
++
++/// Renders a measure as a running-window accumulation (the `accumulate:`
++/// directive):
++///
++/// ```sql
++/// SUM(SUM(x)) OVER (PARTITION BY <partition> ORDER BY <order_by> <dir>
++///                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
++/// ```
++///
++/// Structurally this is [`MultiStageWindowNode`](super::MultiStageWindowNode)
++/// plus an `ORDER BY` axis and an `UNBOUNDED PRECEDING` frame. The partition
++/// is the query grain minus the accumulation axis; the axis itself is the
++/// `order_by`. Non-window measures go through `else_processor`.
++pub struct MultiStageAccumulateNode {
++    input: Rc<dyn SqlNode>,
++    else_processor: Rc<dyn SqlNode>,
++    partition: Vec<String>,
++    order_by: Vec<String>,
++    /// "asc" | "desc" — rendered uppercased on every order column.
++    direction: String,
++}
++
++impl MultiStageAccumulateNode {
++    pub fn new(
++        input: Rc<dyn SqlNode>,
++        else_processor: Rc<dyn SqlNode>,
++        partition: Vec<String>,
++        order_by: Vec<String>,
++        direction: String,
++    ) -> Rc<Self> {
++        Rc::new(Self {
++            input,
++            else_processor,
++            partition,
++            order_by,
++            direction,
++        })
++    }
++
++    pub fn input(&self) -> &Rc<dyn SqlNode> {
++        &self.input
++    }
++
++    pub fn else_processor(&self) -> &Rc<dyn SqlNode> {
++        &self.else_processor
++    }
++
++    pub fn partition(&self) -> &Vec<String> {
++        &self.partition
++    }
++
++    pub fn order_by(&self) -> &Vec<String> {
++        &self.order_by
++    }
++}
++
++impl SqlNode for MultiStageAccumulateNode {
++    fn to_sql(
++        &self,
++        visitor: &SqlEvaluatorVisitor,
++        node: &Rc<MemberSymbol>,
++        query_tools: Rc<QueryTools>,
++        node_processor: Rc<dyn SqlNode>,
++        templates: &PlanSqlTemplates,
++    ) -> Result<String, CubeError> {
++        let res = match node.as_ref() {
++            MemberSymbol::Measure(m) => {
++                if m.is_multi_stage() && !m.is_calculated() {
++                    let inner_visitor = visitor.with_arg_needs_paren_safe(false);
++                    let input_sql = self.input.to_sql(
++                        &inner_visitor,
++                        node,
++                        query_tools.clone(),
++                        node_processor.clone(),
++                        templates,
++                    )?;
++
++                    let partition_by = if self.partition.is_empty() {
++                        "".to_string()
++                    } else {
++                        format!("PARTITION BY {} ", self.partition.join(", "))
++                    };
++
++                    let dir = if self.direction.eq_ignore_ascii_case("desc") {
++                        "DESC"
++                    } else {
++                        "ASC"
++                    };
++                    let order_by = if self.order_by.is_empty() {
++                        "".to_string()
++                    } else {
++                        let cols = self
++                            .order_by
++                            .iter()
++                            .map(|c| format!("{c} {dir}"))
++                            .collect::<Vec<_>>()
++                            .join(", ");
++                        format!("ORDER BY {cols} ")
++                    };
++
++                    // Running total: from the start of the partition up to the
++                    // current axis value, in `order_by` order. `RANGE` (not
++                    // `ROWS`) so that, should two rows ever share the same axis
++                    // value, they get the same cumulative value rather than a
++                    // physical-order-dependent partial. (For accumulate the
++                    // partition+axis spans the full query grain, so the axis is
++                    // unique per row and RANGE == ROWS in practice — RANGE is the
++                    // defensively-correct choice for the cumulative semantic.)
++                    let frame = "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW";
++
++                    let measure_type = m.measure_type();
++                    format!(
++                        "{measure_type}({measure_type}({input_sql})) OVER ({partition_by}{order_by}{frame})"
++                    )
++                } else {
++                    self.else_processor.to_sql(
++                        visitor,
++                        node,
++                        query_tools.clone(),
++                        node_processor.clone(),
++                        templates,
++                    )?
++                }
++            }
++            _ => {
++                return Err(CubeError::internal(format!(
++                    "Unexpected evaluation node type for MultiStageAccumulateNode"
++                )));
++            }
++        };
++        Ok(res)
++    }
++
++    fn as_any(self: Rc<Self>) -> Rc<dyn Any> {
++        self.clone()
++    }
++
++    fn childs(&self) -> Vec<Rc<dyn SqlNode>> {
++        vec![self.input.clone(), self.else_processor.clone()]
++    }
++}
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs
+index 7a4f2a2ed..1c53565ce 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs
+@@ -4,6 +4,7 @@ use crate::logical_plan::{MultiStageCalculationWindowFunction, MultiStageMeasure
+ use crate::physical_plan::ReferencesBuilder;
+ use crate::physical_plan::{Expr, MemberExpression, QueryPlan, SelectBuilder};
+ use crate::physical_plan_builder::PhysicalPlanBuilder;
++use crate::planner::MemberSymbol;
+ use cubenativeutils::CubeError;
+ use itertools::Itertools;
+ use std::rc::Rc;
+@@ -72,29 +73,41 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
+             );
+         }
+ 
+-        let partition_by = measure_calculation
+-            .partition_by()
+-            .iter()
+-            .map(|dim| -> Result<_, CubeError> {
+-                if let Some(reference) = references_builder.find_reference_for_member(&dim, &None) {
+-                    let table_ref = if let Some(table_name) = reference.source() {
+-                        format!("{}.", templates.quote_identifier(table_name)?)
++        // Resolves a list of dimension members to their rendered SQL column
++        // references (`"table"."col"`), reusing the references already built
++        // for this select. Shared by partition_by and the accumulate ORDER BY.
++        let resolve_dimension_refs = |members: &[Rc<MemberSymbol>],
++                                      role: &str|
++         -> Result<Vec<String>, CubeError> {
++            members
++                .iter()
++                .map(|dim| -> Result<_, CubeError> {
++                    if let Some(reference) =
++                        references_builder.find_reference_for_member(dim, &None)
++                    {
++                        let table_ref = if let Some(table_name) = reference.source() {
++                            format!("{}.", templates.quote_identifier(table_name)?)
++                        } else {
++                            format!("")
++                        };
++                        Ok(format!(
++                            "{}{}",
++                            table_ref,
++                            templates.quote_identifier(&reference.name())?
++                        ))
+                     } else {
+-                        format!("")
+-                    };
+-                    Ok(format!(
+-                        "{}{}",
+-                        table_ref,
+-                        templates.quote_identifier(&reference.name())?
+-                    ))
+-                } else {
+-                    Err(CubeError::internal(format!(
+-                        "Alias not found for partition_by dimension {}",
+-                        dim.full_name()
+-                    )))
+-                }
+-            })
+-            .collect::<Result<Vec<_>, _>>()?;
++                        Err(CubeError::internal(format!(
++                            "Alias not found for {} dimension {}",
++                            role,
++                            dim.full_name()
++                        )))
++                    }
++                })
++                .collect::<Result<Vec<_>, _>>()
++        };
++
++        let partition_by =
++            resolve_dimension_refs(measure_calculation.partition_by().as_slice(), "partition_by")?;
+         match measure_calculation.window_function_to_use() {
+             MultiStageCalculationWindowFunction::Rank => {
+                 context_factory.set_multi_stage_rank(partition_by)
+@@ -102,6 +115,17 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
+             MultiStageCalculationWindowFunction::Window => {
+                 context_factory.set_multi_stage_window(partition_by)
+             }
++            MultiStageCalculationWindowFunction::Accumulate => {
++                let order_by = resolve_dimension_refs(
++                    measure_calculation.accumulate_order_by().as_slice(),
++                    "accumulate order_by",
++                )?;
++                context_factory.set_multi_stage_accumulate(
++                    partition_by,
++                    order_by,
++                    measure_calculation.accumulate_direction().clone(),
++                )
++            }
+             MultiStageCalculationWindowFunction::None => {}
+         }
+         let select = Rc::new(select_builder.build(query_tools.clone(), context_factory));
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member.rs
+index 9a429eecd..e9fe44e85 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member.rs
+@@ -1,4 +1,4 @@
+-use crate::planner::{MeasureTimeShifts, MemberSymbol, MultiStageGrain};
++use crate::planner::{MeasureTimeShifts, MemberSymbol, MultiStageAccumulate, MultiStageGrain};
+ use std::rc::Rc;
+ 
+ /// Description of the time-series CTE driving a rolling-window
+@@ -126,6 +126,12 @@ pub struct MultiStageInodeMember {
+     /// the JOIN-model and `member_query_planner` emits a window function.
+     /// Default `false`.
+     use_window_path: bool,
++    /// Present when the measure carries an `accumulate:` directive. Reuses
++    /// `MultiStageGrain` for partition shaping; the dimensions that drop out
++    /// of the partition become the running window's `ORDER BY` axis. When
++    /// set, `member_query_planner` renders an accumulate window instead of a
++    /// plain `Window`/`Aggregate`. Default `None`.
++    accumulate: Option<MultiStageAccumulate>,
+ }
+ 
+ impl MultiStageInodeMember {
+@@ -139,6 +145,7 @@ impl MultiStageInodeMember {
+             grain,
+             time_shift,
+             use_window_path: false,
++            accumulate: None,
+         }
+     }
+ 
+@@ -151,6 +158,15 @@ impl MultiStageInodeMember {
+         self.use_window_path
+     }
+ 
++    pub fn with_accumulate(mut self, value: MultiStageAccumulate) -> Self {
++        self.accumulate = Some(value);
++        self
++    }
++
++    pub fn accumulate(&self) -> &Option<MultiStageAccumulate> {
++        &self.accumulate
++    }
++
+     pub fn inode_type(&self) -> &MultiStageInodeMemberType {
+         &self.inode_type
+     }
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
+index 689d4fc95..ee6d3fcde 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
+@@ -210,16 +210,54 @@ impl MultiStageMemberQueryPlanner {
+         &self,
+         multi_stage_member: &MultiStageInodeMember,
+     ) -> Result<Rc<LogicalMultiStageMember>, CubeError> {
+-        let partition_by = self.member_partition_by_logical(multi_stage_member.grain());
++        // `accumulate:` shapes the partition with its own grain
++        // (exclude / keep_only); every other inode uses its own grain.
++        let accumulate = multi_stage_member.accumulate();
++        let partition_by = match accumulate {
++            // Granularity-agnostic matching so the axis works whether the time
++            // dimension is queried raw or rolled to a granularity (day/week/…).
++            Some(accum) => self.accumulate_partition_by(&accum.grain),
++            None => self.member_partition_by_logical(multi_stage_member.grain()),
++        };
++
++        // The running window's ORDER BY axis is the set of query dimensions
++        // that dropped out of the partition. Empty when nothing dropped out
++        // (the accumulate then falls back to a plain aggregate below).
++        let accumulate_order_by = if accumulate.is_some() {
++            self.all_dimensions()
++                .into_iter()
++                .filter(|d| {
++                    let name = d.clone().resolve_reference_chain().full_name();
++                    !partition_by
++                        .iter()
++                        .any(|p| p.clone().resolve_reference_chain().full_name() == name)
++                })
++                .collect_vec()
++        } else {
++            vec![]
++        };
++        let accumulate_direction = accumulate
++            .as_ref()
++            .map(|a| a.direction.clone())
++            .unwrap_or_else(|| "asc".to_string());
+ 
+         // Rank always uses a window function. Aggregate inodes are
+         // routed through `FullKeyAggregate` by default; only the narrow
+         // optimisation-eligible subset (planner sets `use_window_path`)
+         // is emitted as a Window expression and additionally requires
+         // partition_by to be a strict subset of all dimensions —
+-        // otherwise the window collapses into a plain group-by.
++        // otherwise the window collapses into a plain group-by. An
++        // `accumulate:` measure on that same window-path emits a running
++        // window instead, as long as it has a non-empty ORDER BY axis.
+         let window_function_to_use = match multi_stage_member.inode_type() {
+             MultiStageInodeMemberType::Rank => MultiStageCalculationWindowFunction::Rank,
++            MultiStageInodeMemberType::Aggregate
++                if accumulate.is_some()
++                    && multi_stage_member.use_window_path()
++                    && !accumulate_order_by.is_empty() =>
++            {
++                MultiStageCalculationWindowFunction::Accumulate
++            }
+             MultiStageInodeMemberType::Aggregate
+                 if multi_stage_member.use_window_path()
+                     && partition_by.len() != self.all_dimensions().len() =>
+@@ -301,6 +339,8 @@ impl MultiStageMemberQueryPlanner {
+             .partition_by(partition_by)
+             .window_function_to_use(window_function_to_use)
+             .order_by(self.query_order_by()?)
++            .accumulate_order_by(accumulate_order_by)
++            .accumulate_direction(accumulate_direction)
+             .source(Rc::new(
+                 FullKeyAggregate::builder()
+                     .schema(full_key_aggregate_schema)
+@@ -558,6 +598,33 @@ impl MultiStageMemberQueryPlanner {
+         dimensions
+     }
+ 
++    /// Partition for an `accumulate:` window. Same shape as
++    /// `member_partition_by_logical`, but matches members granularity-agnostically
++    /// (`matches_grain_member`) so a queried time dimension at any granularity is
++    /// recognised by an `exclude` / `keep_only` referencing the base time
++    /// dimension. Kept separate so grain/rank matching stays byte-for-byte
++    /// unchanged.
++    fn accumulate_partition_by(&self, grain: &MultiStageGrain) -> Vec<Rc<MemberSymbol>> {
++        let dimensions = self.all_dimensions();
++        let dimensions = if let Some(exclude) = &grain.exclude {
++            dimensions
++                .into_iter()
++                .filter(|d| !exclude.iter().any(|m| d.matches_grain_member(m)))
++                .collect_vec()
++        } else {
++            dimensions
++        };
++        let dimensions = if let Some(keep_only) = &grain.keep_only {
++            dimensions
++                .into_iter()
++                .filter(|d| keep_only.iter().any(|m| d.matches_grain_member(m)))
++                .collect_vec()
++        } else {
++            dimensions
++        };
++        dimensions
++    }
++
+     fn query_order_by(&self) -> Result<Vec<OrderByItem>, CubeError> {
+         let member_node = self.description.member_node();
+         let measures = if member_node.as_measure().is_ok() {
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
+index 5dfa0b066..57731aa1f 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
+@@ -179,15 +179,54 @@ impl MultiStageQueryPlanner {
+             // path. `include` extends the leaf grain, which the JOIN-model
+             // is required for. Revisit if window-path expands to cases
+             // where exclude/keep_only affect render correctness.
++            // Window-path eligibility intentionally checks only `include`:
++            // `exclude` / `keep_only` are realised through the window's
++            // PARTITION BY at render time, so they don't disqualify the path.
++            // `include` extends the leaf grain, which the JOIN-model requires.
+             let has_include = grain.include.as_ref().is_some_and(|v| !v.is_empty());
++
++            // `accumulate:` rides the same window-path assembly as a plain
++            // window Aggregate (single input CTE, broadcast via the window
++            // expression). It is restricted to faithful running aggregates
++            // (`is_accumulate_eligible`: sum-over-sum/count, max-over-max,
++            // min-over-min); any other combination is an explicit
++            // not-implemented error rather than a silent fall-back. This
++            // eligibility is consulted ONLY for accumulate measures; grain/rank
++            // keep the sum-rollup-specific `is_window_path_eligible` unchanged.
++            let accumulate = measure.multi_stage().and_then(|ms| ms.accumulate.clone());
++            // The accumulate window relies on the outer query grouping by the
++            // query grain (one row per group → inner agg is identity). An
++            // ungrouped query has no GROUP BY, so the double-aggregate window is
++            // undefined — reject it explicitly.
++            if accumulate.is_some() && self.query_properties.ungrouped() {
++                return Err(CubeError::user(
++                    "Multi-stage `accumulate` is not implemented for ungrouped queries."
++                        .to_string(),
++                ));
++            }
++            let accumulate_eligible =
++                accumulate.is_some() && Self::is_accumulate_eligible(&base_member);
++            if accumulate.is_some() && !accumulate_eligible {
++                return Err(CubeError::user(
++                    "Multi-stage `accumulate` is only implemented for faithful running \
++                     aggregates: `sum` over a sum/count measure, `max` over a max measure, \
++                     or `min` over a min measure. Cross-type or non-additive combinations \
++                     (e.g. sum over avg/max, max over sum, sum over count_distinct) are not \
++                     implemented."
++                        .to_string(),
++                ));
++            }
++
+             let use_window_path = matches!(member_type, MultiStageInodeMemberType::Aggregate)
+                 && !has_include
+-                && Self::is_window_path_eligible(&base_member);
+-            (
+-                MultiStageInodeMember::new(member_type, grain, time_shift)
+-                    .with_use_window_path(use_window_path),
+-                is_ungrupped,
+-            )
++                && (Self::is_window_path_eligible(&base_member) || accumulate_eligible);
++            let inode = MultiStageInodeMember::new(member_type, grain, time_shift)
++                .with_use_window_path(use_window_path);
++            let inode = match accumulate {
++                Some(accum) => inode.with_accumulate(accum),
++                None => inode,
++            };
++            (inode, is_ungrupped)
+         } else {
+             let grain = base_member
+                 .as_dimension()
+@@ -279,6 +318,48 @@ impl MultiStageQueryPlanner {
+         }
+     }
+ 
++    /// Accumulate-only window eligibility. Validity is decided by the OUTER
++    /// aggregation (`sum` / `max` / `min`) — the running aggregates that are
++    /// faithful over a window. The INNER expression (the measure's `sql`) is the
++    /// user's business and is intentionally NOT constrained: the window renders
++    /// `agg(agg(value)) OVER (…)`, and at query grain the inner `agg` is over a
++    /// single row (identity), so it collapses to `agg(value) OVER (…)` whatever
++    /// `value` aggregates — `sum(max(x))`, `max(sum(x))`, `sum(avg(x))` are all
++    /// well-defined running aggregates of the user's value. The only structural
++    /// requirement is a single measure dependency, so the window-path assembly
++    /// has one input CTE. Kept separate from `is_window_path_eligible` (which is
++    /// sum-rollup-specific and stays in use for grain/rank) so their eligibility
++    /// is unchanged.
++    fn is_accumulate_eligible(base_member: &Rc<MemberSymbol>) -> bool {
++        // `sum` over sum/count — additive rollup (count rolls up as sum). Shared
++        // with grain/rank via `is_window_path_eligible`.
++        if Self::is_window_path_eligible(base_member) {
++            return true;
++        }
++        // `max` over `max` / `min` over `min` — idempotent rollup, so `max(max)`
++        // / `min(min)` is faithful. The inner aggregation MUST match the outer;
++        // cross-type (max-over-sum, etc.) is rejected. Single measure dep so the
++        // window-path assembly has one input CTE.
++        let Ok(outer) = base_member.as_measure() else {
++            return false;
++        };
++        let outer_agg = match outer.kind() {
++            MeasureKind::Aggregated(a) => a.agg_type(),
++            _ => return false,
++        };
++        if !matches!(outer_agg, AggregationType::Max | AggregationType::Min) {
++            return false;
++        }
++        let deps = base_member.get_dependencies();
++        let [dep] = deps.as_slice() else {
++            return false;
++        };
++        let Ok(inner) = dep.clone().resolve_reference_chain().as_measure() else {
++            return false;
++        };
++        matches!(inner.kind(), MeasureKind::Aggregated(a) if a.agg_type() == outer_agg)
++    }
++
+     /// Applies the partition-shaping part of `grain` to a parent-state
+     /// dimension list: `exclude` removes matching dims, then `keep_only`
+     /// intersects what's left. `include` is appended outside this helper
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
+index 4f64597c1..1157d19e9 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
+@@ -2,6 +2,7 @@ use super::super::measure_symbol::MeasureTimeShifts;
+ use super::super::MemberSymbol;
+ use crate::cube_bridge::dimension_definition::DimensionDefinition;
+ use crate::cube_bridge::measure_definition::{MeasureDefinition, MeasureDefinitionStatic};
++use crate::cube_bridge::multi_stage_accumulate::MultiStageAccumulateReferences;
+ use crate::cube_bridge::multi_stage_grain::MultiStageGrainReferences;
+ use crate::planner::filter::compiler::FilterCompiler;
+ use crate::planner::filter::FilterItem;
+@@ -63,11 +64,26 @@ pub struct MultiStageGrain {
+     pub include: Option<Vec<Rc<MemberSymbol>>>,
+ }
+ 
++/// Compiled multi-stage `accumulate:` directive — a running-window
++/// accumulation over an arbitrary axis.
++///
++/// The partition is shaped by the same exclude / keep_only / include grain
++/// rules as `grain:` (we reuse `MultiStageGrain` verbatim). The dimensions
++/// that drop out of the partition become the `ORDER BY` axis of the running
++/// window; `direction` chooses the order along that axis.
++#[derive(Clone)]
++pub struct MultiStageAccumulate {
++    pub grain: MultiStageGrain,
++    /// "asc" | "desc" — normalized at construction; default "asc".
++    pub direction: String,
++}
++
+ #[derive(Clone)]
+ pub struct MultiStageProperties {
+     pub grain: MultiStageGrain,
+     pub filter: Option<MultiStageFilter>,
+     pub time_shift: Option<MeasureTimeShifts>,
++    pub accumulate: Option<MultiStageAccumulate>,
+ }
+ 
+ impl MultiStageProperties {
+@@ -88,10 +104,62 @@ impl MultiStageProperties {
+ 
+         let filter = build_filter(cube_name, definition.filter()?, compiler)?;
+ 
++        let accumulate = build_accumulate(definition.accumulate()?, compiler)?;
++        if accumulate.is_some() {
++            // `accumulate` renders a running window aggregate `agg(agg(x)) OVER`.
++            // Only idempotent/associative aggregations produce a faithful running
++            // value: `sum`, `max`, `min`. Anything else (avg, count, number/…) is
++            // an explicit not-implemented error rather than a silent fall-back to a
++            // plain aggregate. (For a running count use `type: sum` over a count.)
++            let measure_type = &definition.static_data().measure_type;
++            if !matches!(measure_type.as_str(), "sum" | "max" | "min") {
++                return Err(CubeError::user(format!(
++                    "Multi-stage `accumulate` is not implemented for measure type `{}` — supported types are `sum`, `max`, `min`. For a running count, use `type: sum` over a count measure.",
++                    measure_type
++                )));
++            }
++
++            // `accumulate` and `grain` both reshape the inner grain / partition;
++            // combining them on one measure is ambiguous (they'd silently
++            // override or disable each other), so it's rejected. `grain` here is
++            // built from the `grain:` directive OR the legacy
++            // `reduce_by`/`group_by`/`add_group_by`, so this covers both forms.
++            if grain.exclude.is_some() || grain.keep_only.is_some() || grain.include.is_some() {
++                return Err(CubeError::user(
++                    "Multi-stage `accumulate` cannot be combined with `grain` (or the legacy `reduce_by` / `group_by` / `add_group_by`) on the same measure — both reshape the inner grain/partition and the combination is ambiguous. Use one or the other.".to_string(),
++                ));
++            }
++
++            // `accumulate` is a window over the leaf result; combining it with
++            // another multi-stage transform on the same measure is unsupported
++            // (they'd silently override each other or produce undefined SQL):
++            //  - `rolling_window` / `runningTotal`: `rolling_window` is planned
++            //    first and would silently win, dropping the accumulate window.
++            //  - `time_shift`: the accumulate axis vs the shifted time grain is
++            //    ambiguous.
++            //  - `case` (CASE-SWITCH): not a single-aggregate measure.
++            if time_shift.is_some() {
++                return Err(CubeError::user(
++                    "Multi-stage `accumulate` cannot be combined with `time_shift` on the same measure — not implemented.".to_string(),
++                ));
++            }
++            if definition.static_data().rolling_window.is_some() {
++                return Err(CubeError::user(
++                    "Multi-stage `accumulate` cannot be combined with `rolling_window` / `runningTotal` on the same measure — both are windows; not implemented.".to_string(),
++                ));
++            }
++            if definition.case()?.is_some() {
++                return Err(CubeError::user(
++                    "Multi-stage `accumulate` cannot be combined with a `case` (switch) measure — not implemented.".to_string(),
++                ));
++            }
++        }
++
+         Ok(Some(Self {
+             grain,
+             filter,
+             time_shift,
++            accumulate,
+         }))
+     }
+ 
+@@ -115,6 +183,7 @@ impl MultiStageProperties {
+             },
+             filter,
+             time_shift: None,
++            accumulate: None,
+         }))
+     }
+ 
+@@ -150,10 +219,23 @@ impl MultiStageProperties {
+             include: map_refs(&self.grain.include)?,
+         };
+ 
++        let accumulate = match &self.accumulate {
++            Some(a) => Some(MultiStageAccumulate {
++                grain: MultiStageGrain {
++                    exclude: map_refs(&a.grain.exclude)?,
++                    keep_only: map_refs(&a.grain.keep_only)?,
++                    include: map_refs(&a.grain.include)?,
++                },
++                direction: a.direction.clone(),
++            }),
++            None => None,
++        };
++
+         Ok(Self {
+             grain,
+             filter,
+             time_shift: self.time_shift.clone(),
++            accumulate,
+         })
+     }
+ }
+@@ -202,6 +284,58 @@ fn build_grain_from_legacy(
+     })
+ }
+ 
++fn build_accumulate(
++    accumulate: Option<Rc<dyn MultiStageAccumulateReferences>>,
++    compiler: &mut Compiler,
++) -> Result<Option<MultiStageAccumulate>, CubeError> {
++    let accumulate = match accumulate {
++        Some(a) => a,
++        None => return Ok(None),
++    };
++
++    let static_data = accumulate.static_data();
++    if static_data.exclude.is_some() && static_data.keep_only.is_some() {
++        return Err(CubeError::user(
++            "Multi-stage accumulate cannot specify both `exclude` and `keepOnly` — they are mutually exclusive ways of restricting the inherited context.".to_string(),
++        ));
++    }
++    // `accumulate.include` is intentionally NOT implemented: unlike
++    // `grain.include` (JOIN-model broadcast), accumulating over an axis that is
++    // not in the query is degenerate with the window render (it collapses to a
++    // plain SUM), and `include` would also disable the window path. Accepted by
++    // the schema for forward-compatibility, but surfaced as an explicit error
++    // when actually used rather than silently ignored.
++    if static_data
++        .include
++        .as_ref()
++        .is_some_and(|v| !v.is_empty())
++    {
++        return Err(CubeError::user(
++            "Multi-stage `accumulate.include` is not implemented yet — use `exclude` or `keepOnly` to choose the accumulation axis. (Accumulating over an axis absent from the query is degenerate with the window render.)".to_string(),
++        ));
++    }
++
++    let direction = match static_data.direction.as_deref() {
++        Some("asc") | None => "asc".to_string(),
++        Some("desc") => "desc".to_string(),
++        Some(other) => {
++            return Err(CubeError::user(format!(
++                "Unknown multi-stage accumulate direction '{}', expected 'asc' or 'desc'",
++                other
++            )))
++        }
++    };
++
++    Ok(Some(MultiStageAccumulate {
++        grain: MultiStageGrain {
++            exclude: resolve_reference_paths(&static_data.exclude, compiler)?,
++            keep_only: resolve_reference_paths(&static_data.keep_only, compiler)?,
++            include: resolve_reference_paths(&static_data.include, compiler)?,
++        },
++        direction,
++    }))
++}
++
+ fn build_filter(
+     _cube_name: &String,
+     filter: Option<Rc<dyn crate::cube_bridge::multi_stage_filter::MultiStageFilterReferences>>,
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/member_symbol.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/member_symbol.rs
+index 7e043285d..fac98ffd0 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/member_symbol.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/member_symbol.rs
+@@ -236,6 +236,24 @@ impl MemberSymbol {
+         false
+     }
+ 
++    /// Like [`Self::has_member_in_reference_chain`], but granularity-agnostic
++    /// for time dimensions: a queried time dimension rolled to a granularity
++    /// (e.g. `activity_date` at `day`) also matches its base member. A bare
++    /// `TimeDimension` does not expose its base via `reference_member` when the
++    /// base is a concrete (non-reference) member, so the plain reference-chain
++    /// check misses it. Used by the `accumulate:` partition/axis matching so
++    /// `exclude: [activity_date]` recognises the time dimension regardless of
++    /// the selected granularity.
++    pub fn matches_grain_member(&self, member: &Rc<MemberSymbol>) -> bool {
++        if self.has_member_in_reference_chain(member) {
++            return true;
++        }
++        if let Self::TimeDimension(td) = self {
++            return td.base_symbol().has_member_in_reference_chain(member);
++        }
++        false
++    }
++
+     /// Returns a copy of this symbol with the path reduced to just the owning cube,
+     /// stripping any join chain prefix (e.g. from views or cross-cube references).
+     pub fn with_stripped_join_prefix(&self) -> Rc<Self> {
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mock_measure_definition.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mock_measure_definition.rs
+index 5e9ef880c..fd42d16f6 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mock_measure_definition.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mock_measure_definition.rs
+@@ -4,14 +4,15 @@ use crate::cube_bridge::measure_definition::{
+ };
+ use crate::cube_bridge::member_order_by::MemberOrderBy;
+ use crate::cube_bridge::member_sql::MemberSql;
++use crate::cube_bridge::multi_stage_accumulate::MultiStageAccumulateReferences;
+ use crate::cube_bridge::multi_stage_filter::MultiStageFilterReferences;
+ use crate::cube_bridge::multi_stage_grain::MultiStageGrainReferences;
+ use crate::cube_bridge::struct_with_sql_member::StructWithSqlMember;
+ use crate::impl_static_data;
+ use crate::test_fixtures::cube_bridge::yaml::measure::YamlMeasureDefinition;
+ use crate::test_fixtures::cube_bridge::{
+-    MockMemberOrderBy, MockMemberSql, MockMultiStageFilterReferences,
+-    MockMultiStageGrainReferences, MockStructWithSqlMember,
++    MockMemberOrderBy, MockMemberSql, MockMultiStageAccumulateReferences,
++    MockMultiStageFilterReferences, MockMultiStageGrainReferences, MockStructWithSqlMember,
+ };
+ use cubenativeutils::CubeError;
+ use std::any::Any;
+@@ -49,6 +50,8 @@ pub struct MockMeasureDefinition {
+     #[builder(default)]
+     grain: Option<Rc<MockMultiStageGrainReferences>>,
+     #[builder(default)]
++    accumulate: Option<Rc<MockMultiStageAccumulateReferences>>,
++    #[builder(default)]
+     order_by: Option<Vec<Rc<MockMemberOrderBy>>>,
+     #[builder(default, setter(strip_option(fallback = resolved_mask_sql_opt)))]
+     resolved_mask_sql: Option<String>,
+@@ -156,6 +159,17 @@ impl MeasureDefinition for MockMeasureDefinition {
+             .map(|g| g.clone() as Rc<dyn MultiStageGrainReferences>))
+     }
+ 
++    fn has_accumulate(&self) -> Result<bool, CubeError> {
++        Ok(self.accumulate.is_some())
++    }
++
++    fn accumulate(&self) -> Result<Option<Rc<dyn MultiStageAccumulateReferences>>, CubeError> {
++        Ok(self
++            .accumulate
++            .as_ref()
++            .map(|a| a.clone() as Rc<dyn MultiStageAccumulateReferences>))
++    }
++
+     fn has_order_by(&self) -> Result<bool, CubeError> {
+         Ok(self.order_by.is_some())
+     }
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mock_multi_stage_accumulate.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mock_multi_stage_accumulate.rs
+new file mode 100644
+index 000000000..0a3e0f8d7
+--- /dev/null
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mock_multi_stage_accumulate.rs
+@@ -0,0 +1,36 @@
++use crate::cube_bridge::multi_stage_accumulate::{
++    MultiStageAccumulateReferences, MultiStageAccumulateReferencesStatic,
++};
++use crate::impl_static_data;
++use std::any::Any;
++use std::rc::Rc;
++use typed_builder::TypedBuilder;
++
++#[derive(TypedBuilder)]
++pub struct MockMultiStageAccumulateReferences {
++    #[builder(default)]
++    exclude: Option<Vec<String>>,
++    #[builder(default)]
++    keep_only: Option<Vec<String>>,
++    #[builder(default)]
++    include: Option<Vec<String>>,
++    #[builder(default)]
++    direction: Option<String>,
++}
++
++impl_static_data!(
++    MockMultiStageAccumulateReferences,
++    MultiStageAccumulateReferencesStatic,
++    exclude,
++    keep_only,
++    include,
++    direction
++);
++
++impl MultiStageAccumulateReferences for MockMultiStageAccumulateReferences {
++    crate::impl_static_data_method!(MultiStageAccumulateReferencesStatic);
++
++    fn as_any(self: Rc<Self>) -> Rc<dyn Any> {
++        self
++    }
++}
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mod.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mod.rs
+index d201c77b6..2fe9b56d9 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mod.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mod.rs
+@@ -26,6 +26,7 @@ mod mock_measure_definition;
+ mod mock_member_expression_definition;
+ mod mock_member_order_by;
+ mod mock_member_sql;
++mod mock_multi_stage_accumulate;
+ mod mock_multi_stage_filter;
+ mod mock_multi_stage_grain;
+ mod mock_pre_aggregation_description;
+@@ -63,6 +64,7 @@ pub use mock_measure_definition::MockMeasureDefinition;
+ pub use mock_member_expression_definition::MockMemberExpressionDefinition;
+ pub use mock_member_order_by::MockMemberOrderBy;
+ pub use mock_member_sql::{mock_compiled, MockMemberSql};
++pub use mock_multi_stage_accumulate::MockMultiStageAccumulateReferences;
+ pub use mock_multi_stage_filter::MockMultiStageFilterReferences;
+ pub use mock_multi_stage_grain::MockMultiStageGrainReferences;
+ pub use mock_pre_aggregation_description::MockPreAggregationDescription;
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/yaml/measure.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/yaml/measure.rs
+index 428dc4716..e59181de8 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/yaml/measure.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/yaml/measure.rs
+@@ -4,8 +4,8 @@ use crate::cube_bridge::measure_definition::{RollingWindow, TimeShiftReference};
+ use crate::test_fixtures::cube_bridge::yaml::case::YamlCaseVariant;
+ use crate::test_fixtures::cube_bridge::yaml::mask::YamlMask;
+ use crate::test_fixtures::cube_bridge::{
+-    MockMeasureDefinition, MockMemberOrderBy, MockMultiStageFilterReferences,
+-    MockMultiStageGrainReferences, MockStructWithSqlMember,
++    MockMeasureDefinition, MockMemberOrderBy, MockMultiStageAccumulateReferences,
++    MockMultiStageFilterReferences, MockMultiStageGrainReferences, MockStructWithSqlMember,
+ };
+ use serde::Deserialize;
+ use std::rc::Rc;
+@@ -31,6 +31,8 @@ pub struct YamlMeasureDefinition {
+     #[serde(default)]
+     grain: Option<YamlMultiStageGrain>,
+     #[serde(default)]
++    accumulate: Option<YamlMultiStageAccumulate>,
++    #[serde(default)]
+     sql: Option<String>,
+     #[serde(default)]
+     case: Option<YamlCaseVariant>,
+@@ -146,6 +148,31 @@ impl YamlMultiStageGrain {
+     }
+ }
+ 
++#[derive(Debug, Deserialize)]
++pub struct YamlMultiStageAccumulate {
++    #[serde(default)]
++    exclude: Option<Vec<String>>,
++    #[serde(default)]
++    keep_only: Option<Vec<String>>,
++    #[serde(default)]
++    include: Option<Vec<String>>,
++    #[serde(default)]
++    direction: Option<String>,
++}
++
++impl YamlMultiStageAccumulate {
++    pub(super) fn build(self, cube_name: Option<&str>) -> Rc<MockMultiStageAccumulateReferences> {
++        Rc::new(
++            MockMultiStageAccumulateReferences::builder()
++                .exclude(qualify_references(self.exclude, cube_name))
++                .keep_only(qualify_references(self.keep_only, cube_name))
++                .include(qualify_references(self.include, cube_name))
++                .direction(self.direction)
++                .build(),
++        )
++    }
++}
++
+ #[derive(Debug, Deserialize)]
+ struct YamlFilter {
+     sql: String,
+@@ -222,6 +249,7 @@ impl YamlMeasureDefinition {
+ 
+         let filter = self.filter.map(|f| f.build(cube_name));
+         let grain = self.grain.map(|g| g.build(cube_name));
++        let accumulate = self.accumulate.map(|a| a.build(cube_name));
+ 
+         Rc::new(
+             MockMeasureDefinition::builder()
+@@ -241,6 +269,7 @@ impl YamlMeasureDefinition {
+                 .drill_filters(drill_filters)
+                 .filter(filter)
+                 .grain(grain)
++                .accumulate(accumulate)
+                 .order_by(order_by)
+                 .resolved_mask_sql_opt(self.mask.map(|m| m.to_sql_string()))
+                 .build(),
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/schemas/yaml_files/common/integration_multi_stage.yaml b/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/schemas/yaml_files/common/integration_multi_stage.yaml
+index 30f379ae9..032b91d67 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/schemas/yaml_files/common/integration_multi_stage.yaml
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/schemas/yaml_files/common/integration_multi_stage.yaml
+@@ -134,6 +134,10 @@ cubes:
+             type: max
+             sql: amount
+ 
++          - name: min_amount
++            type: min
++            sql: amount
++
+           - name: max_sum_reduce_category
+             type: sum
+             sql: "{CUBE.max_amount}"
+@@ -232,6 +236,161 @@ cubes:
+                 keep_only:
+                     - orders.status
+ 
++          # accumulate: running total of amount over `id`, partitioned by the
++          # remaining query dims (id drops out of the partition → ORDER BY id).
++          - name: amount_accumulate_by_id
++            type: sum
++            sql: "{CUBE.total_amount}"
++            multi_stage: true
++            accumulate:
++                exclude:
++                    - orders.id
++                direction: asc
++
++          # accumulate: keep only `category` in the partition; accumulate over
++          # every other query dim.
++          - name: amount_accumulate_keep_category
++            type: sum
++            sql: "{CUBE.total_amount}"
++            multi_stage: true
++            accumulate:
++                keep_only:
++                    - orders.category
++                direction: desc
++
++          # accumulate over a TIME dimension — must work whether created_at is
++          # queried raw or rolled to a granularity (granularity-agnostic match).
++          - name: amount_accumulate_by_created_at
++            type: sum
++            sql: "{CUBE.total_amount}"
++            multi_stage: true
++            accumulate:
++                exclude:
++                    - orders.created_at
++                direction: asc
++
++          # accumulate type: max over a max inner → running maximum:
++          # max(max(x)) OVER (...). Inner aggregation MUST match the outer.
++          - name: max_amount_accumulate_by_id
++            type: max
++            sql: "{CUBE.max_amount}"
++            multi_stage: true
++            accumulate:
++                exclude:
++                    - orders.id
++                direction: asc
++
++          # accumulate type: min over a min inner → running minimum:
++          # min(min(x)) OVER (...).
++          - name: min_amount_accumulate_by_id
++            type: min
++            sql: "{CUBE.min_amount}"
++            multi_stage: true
++            accumulate:
++                exclude:
++                    - orders.id
++                direction: asc
++
++          # CROSS-TYPE: sum over a max inner → NOT implemented (faithful only for
++          # matching pairs sum/sum, max/max, min/min). Referencing it errors.
++          - name: sum_of_max_accumulate_by_id
++            type: sum
++            sql: "{CUBE.max_amount}"
++            multi_stage: true
++            accumulate:
++                exclude:
++                    - orders.id
++                direction: asc
++
++          # grain + accumulate on one measure → rejected (both reshape grain).
++          - name: grain_plus_accumulate_conflict
++            type: sum
++            sql: "{CUBE.total_amount}"
++            multi_stage: true
++            grain:
++                exclude:
++                    - orders.status
++            accumulate:
++                exclude:
++                    - orders.id
++                direction: asc
++
++          # filter + accumulate COMPOSE: running sum over rows kept by the inner
++          # filter (status = 'completed'), ordered by id. filter shapes the leaf
++          # WHERE; accumulate runs the window over the filtered result.
++          - name: completed_amount_accumulate_by_id
++            type: sum
++            sql: "{CUBE.total_amount}"
++            multi_stage: true
++            accumulate:
++                exclude:
++                    - orders.id
++                direction: asc
++            filter:
++                include:
++                    - member: orders.status
++                      operator: equals
++                      values:
++                          - completed
++
++          # time_shift + accumulate → not implemented (two multi-stage transforms).
++          - name: ts_plus_accumulate
++            type: sum
++            sql: "{CUBE.total_amount}"
++            multi_stage: true
++            time_shift:
++                - interval: "1 month"
++                  type: prior
++                  timeDimension: orders.created_at
++            accumulate:
++                exclude:
++                    - orders.id
++
++          # rolling_window + accumulate → not implemented (both are windows).
++          - name: rw_plus_accumulate
++            type: sum
++            sql: amount
++            multi_stage: true
++            rolling_window:
++                trailing: unbounded
++            accumulate:
++                exclude:
++                    - orders.id
++
++          # case (switch) + accumulate → not implemented.
++          - name: case_plus_accumulate
++            type: sum
++            multi_stage: true
++            case:
++                switch: "{CUBE.status}"
++                when:
++                    - value: "completed"
++                      sql: "{CUBE.total_amount}"
++                else:
++                    sql: "{CUBE.total_amount} * 0"
++            accumulate:
++                exclude:
++                    - orders.id
++
++          # accumulate on an unsupported aggregation (avg) → not-implemented error.
++          - name: avg_amount_accumulate_by_id
++            type: avg
++            sql: "{CUBE.avg_amount}"
++            multi_stage: true
++            accumulate:
++                exclude:
++                    - orders.id
++
++          # accumulate.include is intentionally NOT implemented — referencing
++          # this measure raises a `not implemented` error (see build_accumulate).
++          - name: amount_accumulate_include
++            type: sum
++            sql: "{CUBE.total_amount}"
++            multi_stage: true
++            accumulate:
++                include:
++                    - orders.id
++
+           - name: amount_prev_month
+             type: number
+             sql: "{CUBE.total_amount}"
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/tests/integration/multi_stage/accumulate.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/tests/integration/multi_stage/accumulate.rs
+new file mode 100644
+index 000000000..774a94204
+--- /dev/null
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/tests/integration/multi_stage/accumulate.rs
+@@ -0,0 +1,334 @@
++use crate::test_fixtures::cube_bridge::MockSchema;
++use crate::test_fixtures::test_utils::TestContext;
++use indoc::indoc;
++
++fn create_context() -> TestContext {
++    let schema = MockSchema::from_yaml_file("common/integration_multi_stage.yaml");
++    TestContext::new(schema).unwrap()
++}
++
++const SEED: &str = "integration_multi_stage_tables.sql";
++
++// `accumulate: { exclude: [id] }` — `id` drops out of the partition and
++// becomes the ORDER BY axis, so the measure is a running total of amount over
++// id within each category (PARTITION BY category ORDER BY id).
++#[tokio::test(flavor = "multi_thread")]
++async fn test_accumulate_exclude_id_within_category() {
++    let ctx = create_context();
++
++    let query = indoc! {r#"
++        measures:
++          - orders.amount_accumulate_by_id
++        dimensions:
++          - orders.category
++          - orders.id
++        order:
++          - id: orders.category
++          - id: orders.id
++    "#};
++
++    ctx.build_sql(query).unwrap();
++
++    if let Some(result) = ctx.try_execute_pg(query, SEED).await {
++        insta::assert_snapshot!(result);
++    }
++}
++
++// With only the accumulation axis (id) in the query and nothing left for the
++// partition, the running total spans the whole result set ordered by id.
++#[tokio::test(flavor = "multi_thread")]
++async fn test_accumulate_exclude_id_global() {
++    let ctx = create_context();
++
++    let query = indoc! {r#"
++        measures:
++          - orders.amount_accumulate_by_id
++        dimensions:
++          - orders.id
++        order:
++          - id: orders.id
++    "#};
++
++    ctx.build_sql(query).unwrap();
++
++    if let Some(result) = ctx.try_execute_pg(query, SEED).await {
++        insta::assert_snapshot!(result);
++    }
++}
++
++// `accumulate: { keep_only: [category], direction: desc }` — category stays in
++// the partition, everything else (here: status) becomes the ORDER BY axis.
++#[tokio::test(flavor = "multi_thread")]
++async fn test_accumulate_keep_only_category() {
++    let ctx = create_context();
++
++    let query = indoc! {r#"
++        measures:
++          - orders.amount_accumulate_keep_category
++        dimensions:
++          - orders.category
++          - orders.status
++        order:
++          - id: orders.category
++          - id: orders.status
++    "#};
++
++    ctx.build_sql(query).unwrap();
++
++    if let Some(result) = ctx.try_execute_pg(query, SEED).await {
++        insta::assert_snapshot!(result);
++    }
++}
++
++// accumulate over a TIME dimension queried with a granularity. The granularity
++// time dim must be recognised as the axis (granularity-agnostic match), not left
++// in the partition — i.e. PARTITION BY category ORDER BY created_at(month).
++#[tokio::test(flavor = "multi_thread")]
++async fn test_accumulate_over_time_dimension_granularity() {
++    let ctx = create_context();
++
++    let query = indoc! {r#"
++        measures:
++          - orders.amount_accumulate_by_created_at
++        dimensions:
++          - orders.category
++        time_dimensions:
++          - dimension: orders.created_at
++            granularity: month
++            dateRange:
++              - "2024-01-01"
++              - "2024-03-31"
++        order:
++          - id: orders.category
++    "#};
++
++    ctx.build_sql(query).unwrap();
++
++    if let Some(result) = ctx.try_execute_pg(query, SEED).await {
++        insta::assert_snapshot!(result);
++    }
++}
++
++// accumulate `type: max` over a `max` inner → running maximum, rendered as
++// `max(max(x)) OVER (PARTITION BY category ORDER BY id ...)`.
++#[tokio::test(flavor = "multi_thread")]
++async fn test_accumulate_running_max() {
++    let ctx = create_context();
++
++    let query = indoc! {r#"
++        measures:
++          - orders.max_amount_accumulate_by_id
++        dimensions:
++          - orders.category
++          - orders.id
++        order:
++          - id: orders.category
++          - id: orders.id
++    "#};
++
++    ctx.build_sql(query).unwrap();
++
++    if let Some(result) = ctx.try_execute_pg(query, SEED).await {
++        insta::assert_snapshot!(result);
++    }
++}
++
++// accumulate `type: min` over a `min` inner → running minimum:
++// `min(min(x)) OVER (...)`.
++#[tokio::test(flavor = "multi_thread")]
++async fn test_accumulate_running_min() {
++    let ctx = create_context();
++
++    let query = indoc! {r#"
++        measures:
++          - orders.min_amount_accumulate_by_id
++        dimensions:
++          - orders.category
++          - orders.id
++        order:
++          - id: orders.category
++          - id: orders.id
++    "#};
++
++    ctx.build_sql(query).unwrap();
++
++    if let Some(result) = ctx.try_execute_pg(query, SEED).await {
++        insta::assert_snapshot!(result);
++    }
++}
++
++// CROSS-TYPE accumulate (`type: sum` over a `max` inner) is NOT implemented —
++// only matching faithful pairs (sum/sum, max/max, min/min) are allowed.
++// Referencing such a measure raises an explicit not-implemented error.
++#[test]
++fn test_accumulate_cross_type_not_implemented() {
++    let ctx = create_context();
++    let err = ctx
++        .create_measure("orders.sum_of_max_accumulate_by_id")
++        .expect_err("cross-type accumulate (sum over max) should be not implemented");
++    assert!(
++        err.message.contains("not implemented"),
++        "unexpected error message: {}",
++        err.message
++    );
++}
++
++// accumulate on an unsupported aggregation (avg) raises an explicit
++// not-implemented error rather than silently falling back to a plain aggregate.
++#[test]
++fn test_accumulate_unsupported_type_errors() {
++    let ctx = create_context();
++    let err = ctx
++        .create_measure("orders.avg_amount_accumulate_by_id")
++        .expect_err("accumulate on type avg should be rejected as not implemented");
++    assert!(
++        err.message.contains("not implemented"),
++        "unexpected error message: {}",
++        err.message
++    );
++}
++
++// `grain` and `accumulate` on the same measure are mutually exclusive (both
++// reshape the inner grain/partition) — compiling such a measure errors.
++#[test]
++fn test_accumulate_with_grain_rejected() {
++    let ctx = create_context();
++    let err = ctx
++        .create_measure("orders.grain_plus_accumulate_conflict")
++        .expect_err("grain + accumulate on one measure should be rejected");
++    assert!(
++        err.message.contains("cannot be combined with `grain`"),
++        "unexpected error message: {}",
++        err.message
++    );
++}
++
++// `accumulate` + `time_shift` on the same measure → not implemented.
++#[test]
++fn test_accumulate_with_time_shift_rejected() {
++    let ctx = create_context();
++    let err = ctx
++        .create_measure("orders.ts_plus_accumulate")
++        .expect_err("time_shift + accumulate should be rejected");
++    assert!(
++        err.message.contains("time_shift"),
++        "unexpected error message: {}",
++        err.message
++    );
++}
++
++// `accumulate` + `rolling_window` on the same measure → not implemented.
++#[test]
++fn test_accumulate_with_rolling_window_rejected() {
++    let ctx = create_context();
++    let err = ctx
++        .create_measure("orders.rw_plus_accumulate")
++        .expect_err("rolling_window + accumulate should be rejected");
++    assert!(
++        err.message.contains("rolling_window"),
++        "unexpected error message: {}",
++        err.message
++    );
++}
++
++// `accumulate` + `case` (switch) on the same measure → not implemented.
++#[test]
++fn test_accumulate_with_case_rejected() {
++    let ctx = create_context();
++    let err = ctx
++        .create_measure("orders.case_plus_accumulate")
++        .expect_err("case + accumulate should be rejected");
++    assert!(
++        err.message.contains("case"),
++        "unexpected error message: {}",
++        err.message
++    );
++}
++
++// `accumulate` in an ungrouped query → not implemented (no GROUP BY → the
++// double-aggregate window is undefined).
++#[tokio::test(flavor = "multi_thread")]
++async fn test_accumulate_ungrouped_rejected() {
++    let ctx = create_context();
++
++    let query = indoc! {r#"
++        measures:
++          - orders.amount_accumulate_by_id
++        dimensions:
++          - orders.category
++          - orders.id
++        ungrouped: true
++    "#};
++
++    let err = ctx
++        .build_sql(query)
++        .expect_err("accumulate in an ungrouped query should be rejected");
++    assert!(
++        err.message.contains("ungrouped"),
++        "unexpected error message: {}",
++        err.message
++    );
++}
++
++// `filter` and `accumulate` COMPOSE (orthogonal: filter shapes the leaf WHERE,
++// accumulate runs the window over the filtered result) — the measure compiles.
++#[tokio::test(flavor = "multi_thread")]
++async fn test_accumulate_with_filter_composes() {
++    let ctx = create_context();
++
++    let query = indoc! {r#"
++        measures:
++          - orders.completed_amount_accumulate_by_id
++        dimensions:
++          - orders.category
++          - orders.id
++        order:
++          - id: orders.category
++          - id: orders.id
++    "#};
++
++    ctx.build_sql(query).unwrap();
++
++    if let Some(result) = ctx.try_execute_pg(query, SEED).await {
++        insta::assert_snapshot!(result);
++    }
++}
++
++// `accumulate.include` is intentionally not implemented — compiling a measure
++// that sets it raises an explicit `not implemented` error rather than being
++// silently ignored. See `build_accumulate` and spec §9.1.
++#[test]
++fn test_accumulate_include_not_implemented() {
++    let ctx = create_context();
++    let err = ctx
++        .create_measure("orders.amount_accumulate_include")
++        .expect_err("accumulate.include should be rejected as not implemented");
++    assert!(
++        err.message.contains("not implemented"),
++        "unexpected error message: {}",
++        err.message
++    );
++}
++
++// Fallback: when the accumulation axis is not present in the query (nothing
++// drops out of the partition), the measure degrades to a plain aggregate
++// rather than erroring.
++#[tokio::test(flavor = "multi_thread")]
++async fn test_accumulate_no_axis_falls_back_to_plain() {
++    let ctx = create_context();
++
++    let query = indoc! {r#"
++        measures:
++          - orders.amount_accumulate_by_id
++        dimensions:
++          - orders.category
++        order:
++          - id: orders.category
++    "#};
++
++    ctx.build_sql(query).unwrap();
++
++    if let Some(result) = ctx.try_execute_pg(query, SEED).await {
++        insta::assert_snapshot!(result);
++    }
++}
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/tests/integration/multi_stage/mod.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/tests/integration/multi_stage/mod.rs
+index dd627f0ba..330d07967 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/tests/integration/multi_stage/mod.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/tests/integration/multi_stage/mod.rs
+@@ -1,3 +1,4 @@
++mod accumulate;
+ mod add_group_by;
+ mod bucketing;
+ mod calculated;
