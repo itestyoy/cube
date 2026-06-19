@@ -301,6 +301,7 @@ impl MultiStageMemberQueryPlanner {
             .partition_by(partition_by)
             .window_function_to_use(window_function_to_use)
             .order_by(self.query_order_by()?)
+            .post_filter(multi_stage_member.post_filter().clone())
             .source(Rc::new(
                 FullKeyAggregate::builder()
                     .schema(full_key_aggregate_schema)

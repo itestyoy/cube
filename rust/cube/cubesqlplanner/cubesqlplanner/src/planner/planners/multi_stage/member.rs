@@ -1,3 +1,4 @@
+use crate::planner::filter::FilterItem;
 use crate::planner::{MeasureTimeShifts, MemberSymbol, MultiStageGrain};
 use std::rc::Rc;
 
@@ -126,6 +127,11 @@ pub struct MultiStageInodeMember {
     /// the JOIN-model and `member_query_planner` emits a window function.
     /// Default `false`.
     use_window_path: bool,
+    /// Post-computation predicates re-applied as a `WHERE` on this inode's
+    /// rendered SELECT (used by the `filter: { qualify: true }` post-filter CTE
+    /// step: the metric is computed ignoring these, but the output rows are
+    /// bounded by them). Empty for every normal inode.
+    post_filter: Vec<FilterItem>,
 }
 
 impl MultiStageInodeMember {
@@ -139,6 +145,7 @@ impl MultiStageInodeMember {
             grain,
             time_shift,
             use_window_path: false,
+            post_filter: vec![],
         }
     }
 
@@ -149,6 +156,15 @@ impl MultiStageInodeMember {
 
     pub fn use_window_path(&self) -> bool {
         self.use_window_path
+    }
+
+    pub fn with_post_filter(mut self, value: Vec<FilterItem>) -> Self {
+        self.post_filter = value;
+        self
+    }
+
+    pub fn post_filter(&self) -> &Vec<FilterItem> {
+        &self.post_filter
     }
 
     pub fn inode_type(&self) -> &MultiStageInodeMemberType {
