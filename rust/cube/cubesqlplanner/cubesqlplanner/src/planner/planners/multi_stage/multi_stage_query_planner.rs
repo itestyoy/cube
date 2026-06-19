@@ -572,6 +572,11 @@ impl MultiStageQueryPlanner {
         }
 
         let has_multi_stage_members = has_multi_stage_members(&member, false)?;
+        // `filter: { qualify: true }`: predicates the `exclude` directive drops
+        // from the measure's leaf state, snapshotted here so they can be
+        // re-applied as a post-computation `WHERE` on a wrapper CTE (see below).
+        // Populated only in the inode branch when the directive opts in.
+        let mut qualify_post_filter: Vec<FilterItem> = vec![];
         let description = if !has_multi_stage_members {
             let alias = scope.next_cte_name();
             MultiStageQueryDescription::new(
@@ -603,6 +608,36 @@ impl MultiStageQueryPlanner {
             }
 
             let directive_filter = multi_stage_filter_directive(&member);
+
+            // Snapshot the excluded predicates before the directive drops them
+            // from `new_state`. Captured from the same base the directive
+            // resolves against (root_state for Fixed, inherited state for
+            // Relative). `keep_only_members` is the inverse of the
+            // `exclude_members` the directive applies, so it yields exactly the
+            // predicates being excluded. Re-applied as a post-filter CTE below.
+            if let Some(filter) = &directive_filter {
+                if filter.qualify {
+                    if let Some(exclude) = &filter.exclude {
+                        let base = match &filter.mode {
+                            MultiStageFilterMode::Fixed => self.root_state(),
+                            MultiStageFilterMode::Relative => &state,
+                        };
+                        let names: Vec<String> = exclude
+                            .iter()
+                            .flat_map(|s| filter_directive_match_names(s))
+                            .collect();
+                        let mut items = crate::planner::filter::tree_ops::keep_only_members(
+                            &names,
+                            base.dimensions_filters(),
+                        );
+                        items.extend(crate::planner::filter::tree_ops::keep_only_members(
+                            &names,
+                            base.time_dimensions_filters(),
+                        ));
+                        qualify_post_filter = items;
+                    }
+                }
+            }
 
             // new_state is the leaf grain on which children are computed.
             // For JOIN-model Aggregate inodes modifiers apply in this order:
@@ -703,7 +738,7 @@ impl MultiStageQueryPlanner {
             MultiStageQueryDescription::new(
                 MultiStageMember::new(
                     MultiStageMemberType::Inode(multi_stage_member),
-                    member,
+                    member.clone(),
                     is_ungrupped,
                     false,
                 ),
@@ -715,6 +750,41 @@ impl MultiStageQueryPlanner {
         };
 
         descriptions.push(description.clone());
+
+        // `filter: { qualify: true }`: the measure CTE above intentionally
+        // dropped the excluded predicates so the metric ignores them, but that
+        // also leaves its (and any FULL-JOIN sibling's) output rows unbounded.
+        // Re-apply the snapshotted predicates as a pass-through wrapper CTE
+        //   SELECT <grid>, <measure> FROM <measure_cte> WHERE <excluded>
+        // so the value is unchanged but the rows are bounded. The wrapper is an
+        // ungrouped Aggregate inode whose single input is the measure CTE: the
+        // measure and the filtered dimensions resolve to plain column
+        // references against that CTE (no re-aggregation), and `post_filter`
+        // renders the `WHERE`.
+        if !qualify_post_filter.is_empty() {
+            let wrapper_member = MultiStageInodeMember::new(
+                MultiStageInodeMemberType::Aggregate,
+                MultiStageGrain::default(),
+                None,
+            )
+            .with_post_filter(qualify_post_filter);
+            let alias = scope.next_cte_name();
+            let wrapper = MultiStageQueryDescription::new(
+                MultiStageMember::new(
+                    MultiStageMemberType::Inode(wrapper_member),
+                    member,
+                    true,
+                    false,
+                ),
+                state.clone(),
+                vec![description.clone()],
+                vec![],
+                alias.clone(),
+            );
+            descriptions.push(wrapper.clone());
+            return Ok(wrapper);
+        }
+
         Ok(description)
     }
 

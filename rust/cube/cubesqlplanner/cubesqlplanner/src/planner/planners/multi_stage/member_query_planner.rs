@@ -341,6 +341,7 @@ impl MultiStageMemberQueryPlanner {
             .order_by(self.query_order_by()?)
             .accumulate_order_by(accumulate_order_by)
             .accumulate_direction(accumulate_direction)
+            .post_filter(multi_stage_member.post_filter().clone())
             .source(Rc::new(
                 FullKeyAggregate::builder()
                     .schema(full_key_aggregate_schema)

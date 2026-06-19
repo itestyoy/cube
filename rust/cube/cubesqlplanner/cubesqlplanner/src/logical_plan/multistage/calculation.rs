@@ -70,12 +70,21 @@ pub struct MultiStageMeasureCalculation {
     /// set by the planner on the Accumulate path; the default is unused there.
     #[builder(default)]
     accumulate_direction: String,
+    /// Post-computation predicates rendered as a `WHERE` on this calculation's
+    /// SELECT (the `filter: { qualify: true }` post-filter CTE step). Empty for
+    /// normal calculations; AND-combined when present.
+    #[builder(default)]
+    post_filter: Vec<crate::planner::filter::FilterItem>,
     source: Rc<FullKeyAggregate>,
 }
 
 impl MultiStageMeasureCalculation {
     pub fn schema(&self) -> &Rc<LogicalSchema> {
         &self.schema
+    }
+
+    pub fn post_filter(&self) -> &Vec<crate::planner::filter::FilterItem> {
+        &self.post_filter
     }
 
     pub fn is_ungrouped(&self) -> bool {
@@ -186,6 +195,7 @@ impl LogicalNode for MultiStageMeasureCalculation {
                 .order_by(self.order_by().clone())
                 .accumulate_order_by(self.accumulate_order_by().clone())
                 .accumulate_direction(self.accumulate_direction().clone())
+                .post_filter(self.post_filter().clone())
                 .source(source.clone().into_logical_node()?)
                 .build(),
         ))

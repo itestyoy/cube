@@ -1,3 +1,4 @@
+use crate::planner::filter::FilterItem;
 use crate::planner::{MeasureTimeShifts, MemberSymbol, MultiStageAccumulate, MultiStageGrain};
 use std::rc::Rc;
 
@@ -132,6 +133,11 @@ pub struct MultiStageInodeMember {
     /// set, `member_query_planner` renders an accumulate window instead of a
     /// plain `Window`/`Aggregate`. Default `None`.
     accumulate: Option<MultiStageAccumulate>,
+    /// Post-computation predicates re-applied as a `WHERE` on this inode's
+    /// rendered SELECT (used by the `filter: { qualify: true }` post-filter CTE
+    /// step: the metric is computed ignoring these, but the output rows are
+    /// bounded by them). Empty for every normal inode.
+    post_filter: Vec<FilterItem>,
 }
 
 impl MultiStageInodeMember {
@@ -146,6 +152,7 @@ impl MultiStageInodeMember {
             time_shift,
             use_window_path: false,
             accumulate: None,
+            post_filter: vec![],
         }
     }
 
@@ -165,6 +172,15 @@ impl MultiStageInodeMember {
 
     pub fn accumulate(&self) -> &Option<MultiStageAccumulate> {
         &self.accumulate
+    }
+
+    pub fn with_post_filter(mut self, value: Vec<FilterItem>) -> Self {
+        self.post_filter = value;
+        self
+    }
+
+    pub fn post_filter(&self) -> &Vec<FilterItem> {
+        &self.post_filter
     }
 
     pub fn inode_type(&self) -> &MultiStageInodeMemberType {

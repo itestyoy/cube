@@ -128,6 +128,19 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
             }
             MultiStageCalculationWindowFunction::None => {}
         }
+
+        // `filter: { qualify: true }` post-filter step: re-apply the excluded
+        // predicates as a `WHERE` on this (ungrouped, pass-through) CTE so the
+        // output rows are bounded while the metric was computed ignoring them.
+        if !measure_calculation.post_filter().is_empty() {
+            let post = Some(crate::planner::filter::Filter {
+                items: measure_calculation.post_filter().clone(),
+            });
+            references_builder
+                .resolve_references_for_filter(&post, context_factory.render_references_mut())?;
+            select_builder.set_filter(post);
+        }
+
         let select = Rc::new(select_builder.build(query_tools.clone(), context_factory));
         Ok(QueryPlan::Select(select))
     }
