@@ -1,0 +1,315 @@
+diff --git a/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts b/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts
+index a3cbf7aeb..2b5fae89d 100644
+--- a/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts
++++ b/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts
+@@ -80,6 +80,7 @@ export const memberOrderByFixture = (): unknown => ({
+ export const multiStageFilterFixture = (): unknown => ({
+   mode: 'relative',
+   excludeReferences: ['orders.status'],
++  qualify: true,
+   include: [{ member: 'orders.amount', operator: 'gt', values: ['0'] }],
+ });
+ 
+diff --git a/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts b/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts
+index 154eec990..702115e19 100644
+--- a/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts
++++ b/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts
+@@ -204,7 +204,7 @@ const BRIDGES: BridgeSpec[] = [
+   },
+   {
+     name: 'multiStageFilter',
+-    expected: ['exclude', 'include', 'keep_only', 'mode'],
++    expected: ['exclude', 'include', 'keep_only', 'mode', 'qualify'],
+   },
+   {
+     name: 'multiStageGrain',
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/multi_stage_filter.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/multi_stage_filter.rs
+index 665eaedac..d923c2503 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/multi_stage_filter.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/multi_stage_filter.rs
+@@ -15,6 +15,11 @@ pub struct MultiStageFilterReferencesStatic {
+     #[serde(rename = "keepOnlyReferences")]
+     pub keep_only: Option<Vec<String>>,
+     pub include: Option<Vec<NativeFilterItem>>,
++    // When true, the predicates dropped by `exclude` are re-applied as a
++    // post-computation filter (a wrapping subquery `WHERE`) on the measure's
++    // CTE — the metric is computed ignoring them, but the output rows stay
++    // bounded by them. Portable (no SQL `QUALIFY`). Default false.
++    pub qualify: Option<bool>,
+ }
+ 
+ #[nativebridge::native_bridge(MultiStageFilterReferencesStatic, with_static_meta)]
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs
+index 87c873bf4..23e802d30 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs
+@@ -70,6 +70,11 @@ pub struct MultiStageMeasureCalculation {
+     /// set by the planner on the Accumulate path; the default is unused there.
+     #[builder(default)]
+     accumulate_direction: String,
++    /// Post-computation predicates rendered as a `WHERE` on this calculation's
++    /// SELECT (the `filter: { qualify: true }` post-filter CTE step). Empty for
++    /// normal calculations; AND-combined when present.
++    #[builder(default)]
++    post_filter: Vec<crate::planner::filter::FilterItem>,
+     source: Rc<FullKeyAggregate>,
+ }
+ 
+@@ -78,6 +83,10 @@ impl MultiStageMeasureCalculation {
+         &self.schema
+     }
+ 
++    pub fn post_filter(&self) -> &Vec<crate::planner::filter::FilterItem> {
++        &self.post_filter
++    }
++
+     pub fn is_ungrouped(&self) -> bool {
+         self.is_ungrouped
+     }
+@@ -186,6 +195,7 @@ impl LogicalNode for MultiStageMeasureCalculation {
+                 .order_by(self.order_by().clone())
+                 .accumulate_order_by(self.accumulate_order_by().clone())
+                 .accumulate_direction(self.accumulate_direction().clone())
++                .post_filter(self.post_filter().clone())
+                 .source(source.clone().into_logical_node()?)
+                 .build(),
+         ))
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs
+index 1c53565ce..e34198046 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs
+@@ -128,6 +128,19 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
+             }
+             MultiStageCalculationWindowFunction::None => {}
+         }
++
++        // `filter: { qualify: true }` post-filter step: re-apply the excluded
++        // predicates as a `WHERE` on this (ungrouped, pass-through) CTE so the
++        // output rows are bounded while the metric was computed ignoring them.
++        if !measure_calculation.post_filter().is_empty() {
++            let post = Some(crate::planner::filter::Filter {
++                items: measure_calculation.post_filter().clone(),
++            });
++            references_builder
++                .resolve_references_for_filter(&post, context_factory.render_references_mut())?;
++            select_builder.set_filter(post);
++        }
++
+         let select = Rc::new(select_builder.build(query_tools.clone(), context_factory));
+         Ok(QueryPlan::Select(select))
+     }
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member.rs
+index e9fe44e85..13b97ee6f 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member.rs
+@@ -1,3 +1,4 @@
++use crate::planner::filter::FilterItem;
+ use crate::planner::{MeasureTimeShifts, MemberSymbol, MultiStageAccumulate, MultiStageGrain};
+ use std::rc::Rc;
+ 
+@@ -132,6 +133,11 @@ pub struct MultiStageInodeMember {
+     /// set, `member_query_planner` renders an accumulate window instead of a
+     /// plain `Window`/`Aggregate`. Default `None`.
+     accumulate: Option<MultiStageAccumulate>,
++    /// Post-computation predicates re-applied as a `WHERE` on this inode's
++    /// rendered SELECT (used by the `filter: { qualify: true }` post-filter CTE
++    /// step: the metric is computed ignoring these, but the output rows are
++    /// bounded by them). Empty for every normal inode.
++    post_filter: Vec<FilterItem>,
+ }
+ 
+ impl MultiStageInodeMember {
+@@ -146,6 +152,7 @@ impl MultiStageInodeMember {
+             time_shift,
+             use_window_path: false,
+             accumulate: None,
++            post_filter: vec![],
+         }
+     }
+ 
+@@ -167,6 +174,15 @@ impl MultiStageInodeMember {
+         &self.accumulate
+     }
+ 
++    pub fn with_post_filter(mut self, value: Vec<FilterItem>) -> Self {
++        self.post_filter = value;
++        self
++    }
++
++    pub fn post_filter(&self) -> &Vec<FilterItem> {
++        &self.post_filter
++    }
++
+     pub fn inode_type(&self) -> &MultiStageInodeMemberType {
+         &self.inode_type
+     }
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
+index 422e2db0c..e1ae3b430 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
+@@ -341,6 +341,7 @@ impl MultiStageMemberQueryPlanner {
+             .order_by(self.query_order_by()?)
+             .accumulate_order_by(accumulate_order_by)
+             .accumulate_direction(accumulate_direction)
++            .post_filter(multi_stage_member.post_filter().clone())
+             .source(Rc::new(
+                 FullKeyAggregate::builder()
+                     .schema(full_key_aggregate_schema)
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
+index b51af7aa2..1e8731953 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
+@@ -572,6 +572,11 @@ impl MultiStageQueryPlanner {
+         }
+ 
+         let has_multi_stage_members = has_multi_stage_members(&member, false)?;
++        // `filter: { qualify: true }`: predicates the `exclude` directive drops
++        // from the measure's leaf state, snapshotted here so they can be
++        // re-applied as a post-computation `WHERE` on a wrapper CTE (see below).
++        // Populated only in the inode branch when the directive opts in.
++        let mut qualify_post_filter: Vec<FilterItem> = vec![];
+         let description = if !has_multi_stage_members {
+             let alias = scope.next_cte_name();
+             MultiStageQueryDescription::new(
+@@ -604,6 +609,36 @@ impl MultiStageQueryPlanner {
+ 
+             let directive_filter = multi_stage_filter_directive(&member);
+ 
++            // Snapshot the excluded predicates before the directive drops them
++            // from `new_state`. Captured from the same base the directive
++            // resolves against (root_state for Fixed, inherited state for
++            // Relative). `keep_only_members` is the inverse of the
++            // `exclude_members` the directive applies, so it yields exactly the
++            // predicates being excluded. Re-applied as a post-filter CTE below.
++            if let Some(filter) = &directive_filter {
++                if filter.qualify {
++                    if let Some(exclude) = &filter.exclude {
++                        let base = match &filter.mode {
++                            MultiStageFilterMode::Fixed => self.root_state(),
++                            MultiStageFilterMode::Relative => &state,
++                        };
++                        let names: Vec<String> = exclude
++                            .iter()
++                            .flat_map(|s| filter_directive_match_names(s))
++                            .collect();
++                        let mut items = crate::planner::filter::tree_ops::keep_only_members(
++                            &names,
++                            base.dimensions_filters(),
++                        );
++                        items.extend(crate::planner::filter::tree_ops::keep_only_members(
++                            &names,
++                            base.time_dimensions_filters(),
++                        ));
++                        qualify_post_filter = items;
++                    }
++                }
++            }
++
+             // new_state is the leaf grain on which children are computed.
+             // For JOIN-model Aggregate inodes modifiers apply in this order:
+             //   1. filter directive — pick `state` (Relative/None) or
+@@ -703,7 +738,7 @@ impl MultiStageQueryPlanner {
+             MultiStageQueryDescription::new(
+                 MultiStageMember::new(
+                     MultiStageMemberType::Inode(multi_stage_member),
+-                    member,
++                    member.clone(),
+                     is_ungrupped,
+                     false,
+                 ),
+@@ -715,6 +750,41 @@ impl MultiStageQueryPlanner {
+         };
+ 
+         descriptions.push(description.clone());
++
++        // `filter: { qualify: true }`: the measure CTE above intentionally
++        // dropped the excluded predicates so the metric ignores them, but that
++        // also leaves its (and any FULL-JOIN sibling's) output rows unbounded.
++        // Re-apply the snapshotted predicates as a pass-through wrapper CTE
++        //   SELECT <grid>, <measure> FROM <measure_cte> WHERE <excluded>
++        // so the value is unchanged but the rows are bounded. The wrapper is an
++        // ungrouped Aggregate inode whose single input is the measure CTE: the
++        // measure and the filtered dimensions resolve to plain column
++        // references against that CTE (no re-aggregation), and `post_filter`
++        // renders the `WHERE`.
++        if !qualify_post_filter.is_empty() {
++            let wrapper_member = MultiStageInodeMember::new(
++                MultiStageInodeMemberType::Aggregate,
++                MultiStageGrain::default(),
++                None,
++            )
++            .with_post_filter(qualify_post_filter);
++            let alias = scope.next_cte_name();
++            let wrapper = MultiStageQueryDescription::new(
++                MultiStageMember::new(
++                    MultiStageMemberType::Inode(wrapper_member),
++                    member,
++                    true,
++                    false,
++                ),
++                state.clone(),
++                vec![description.clone()],
++                vec![],
++                alias.clone(),
++            );
++            descriptions.push(wrapper.clone());
++            return Ok(wrapper);
++        }
++
+         Ok(description)
+     }
+ 
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
+index 1157d19e9..3c0600a9f 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
+@@ -51,6 +51,11 @@ pub struct MultiStageFilter {
+     // `FilterCompiler` classifies time-dimension filters separately.
+     pub include_time_dimension: Vec<FilterItem>,
+     pub include_measure: Vec<FilterItem>,
++    /// When true, the predicates dropped by `exclude` are re-applied as a
++    /// dedicated post-computation CTE step (`SELECT * FROM <measure_cte> WHERE
++    /// <excluded predicates>`) — the metric is computed ignoring them, but the
++    /// output rows stay bounded by them. Default false.
++    pub qualify: bool,
+ }
+ 
+ /// Set operation on the inherited grain context of a multi-stage member.
+@@ -209,6 +214,7 @@ impl MultiStageProperties {
+                 include_dimension: f_old.include_dimension.clone(),
+                 include_time_dimension: f_old.include_time_dimension.clone(),
+                 include_measure: f_old.include_measure.clone(),
++                qualify: f_old.qualify,
+             }),
+             None => None,
+         };
+@@ -383,5 +389,6 @@ fn build_filter(
+         include_dimension,
+         include_time_dimension,
+         include_measure,
++        qualify: static_data.qualify.unwrap_or(false),
+     }))
+ }
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mock_multi_stage_filter.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mock_multi_stage_filter.rs
+index ea9d5fe27..a82043a69 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mock_multi_stage_filter.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/test_fixtures/cube_bridge/mock_multi_stage_filter.rs
+@@ -17,6 +17,8 @@ pub struct MockMultiStageFilterReferences {
+     keep_only: Option<Vec<String>>,
+     #[builder(default)]
+     include: Option<Vec<NativeFilterItem>>,
++    #[builder(default)]
++    qualify: Option<bool>,
+ }
+ 
+ impl_static_data!(
+@@ -25,7 +27,8 @@ impl_static_data!(
+     mode,
+     exclude,
+     keep_only,
+-    include
++    include,
++    qualify
+ );
+ 
+ impl MultiStageFilterReferences for MockMultiStageFilterReferences {

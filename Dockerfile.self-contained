@@ -131,6 +131,12 @@ COPY rust/cubesql ./rust/cubesql
 COPY patches/accumulate-rust-native.patch /tmp/accumulate-rust-native.patch
 RUN git apply --verbose /tmp/accumulate-rust-native.patch
 
+# Apply the `filter: { qualify }` patch (Rust SQL planner + native bridge) on
+# top of the accumulate patch. Generated against master+accumulate, so it
+# applies cleanly only after the patch above.
+COPY patches/filter-qualify-rust-native.patch /tmp/filter-qualify-rust-native.patch
+RUN git apply --verbose /tmp/filter-qualify-rust-native.patch
+
 # Build native module (workflow command from line 121)
 # For fallback (no Python) version
 # Building natively on target platform, no cross-compilation needed
@@ -199,6 +205,11 @@ RUN --mount=type=cache,target=/usr/local/share/.cache/yarn \
 # stage above.
 COPY patches/accumulate-schema-compiler.patch /tmp/accumulate-schema-compiler.patch
 RUN git apply --verbose /tmp/accumulate-schema-compiler.patch
+
+# Apply the `filter: { qualify }` patch (schema-compiler TypeScript) on top of
+# the accumulate patch, same ordering rationale as the native stage above.
+COPY patches/filter-qualify-schema-compiler.patch /tmp/filter-qualify-schema-compiler.patch
+RUN git apply --verbose /tmp/filter-qualify-schema-compiler.patch
 
 # Copy built native module from previous stage
 # This prevents it from being downloaded/built again
