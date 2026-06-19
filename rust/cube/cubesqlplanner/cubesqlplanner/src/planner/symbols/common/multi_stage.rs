@@ -51,6 +51,11 @@ pub struct MultiStageFilter {
     // `FilterCompiler` classifies time-dimension filters separately.
     pub include_time_dimension: Vec<FilterItem>,
     pub include_measure: Vec<FilterItem>,
+    /// When true, the predicates dropped by `exclude` are re-applied as a
+    /// dedicated post-computation CTE step (`SELECT * FROM <measure_cte> WHERE
+    /// <excluded predicates>`) — the metric is computed ignoring them, but the
+    /// output rows stay bounded by them. Default false.
+    pub qualify: bool,
 }
 
 /// Set operation on the inherited grain context of a multi-stage member.
@@ -209,6 +214,7 @@ impl MultiStageProperties {
                 include_dimension: f_old.include_dimension.clone(),
                 include_time_dimension: f_old.include_time_dimension.clone(),
                 include_measure: f_old.include_measure.clone(),
+                qualify: f_old.qualify,
             }),
             None => None,
         };
@@ -383,5 +389,6 @@ fn build_filter(
         include_dimension,
         include_time_dimension,
         include_measure,
+        qualify: static_data.qualify.unwrap_or(false),
     }))
 }

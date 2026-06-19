@@ -17,6 +17,8 @@ pub struct MockMultiStageFilterReferences {
     keep_only: Option<Vec<String>>,
     #[builder(default)]
     include: Option<Vec<NativeFilterItem>>,
+    #[builder(default)]
+    qualify: Option<bool>,
 }
 
 impl_static_data!(
@@ -25,7 +27,8 @@ impl_static_data!(
     mode,
     exclude,
     keep_only,
-    include
+    include,
+    qualify
 );
 
 impl MultiStageFilterReferences for MockMultiStageFilterReferences {

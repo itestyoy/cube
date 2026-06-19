@@ -204,7 +204,7 @@ const BRIDGES: BridgeSpec[] = [
   },
   {
     name: 'multiStageFilter',
-    expected: ['exclude', 'include', 'keep_only', 'mode'],
+    expected: ['exclude', 'include', 'keep_only', 'mode', 'qualify'],
   },
   {
     name: 'multiStageGrain',
