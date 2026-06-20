@@ -344,6 +344,12 @@ impl MultiStageQueryPlanner {
         if Self::is_window_path_eligible(base_member) {
             return true;
         }
+        // `count_distinct_approx` over `count_distinct_approx` — cumulative unique
+        // count via the HLL join-model (spec §14), planned separately by
+        // `try_plan_accumulate_distinct`.
+        if Self::is_accumulate_distinct(base_member) {
+            return true;
+        }
         // `sum` over a distinct count (`count_distinct` / `count_distinct_approx`):
         // window renders `sum(sum(<cardinality>)) OVER (…)` — a running sum of the
         // per-bucket (approximate) distinct counts. Additive over those numbers,
@@ -393,6 +399,36 @@ impl MultiStageQueryPlanner {
             return false;
         };
         matches!(inner.kind(), MeasureKind::Aggregated(a) if a.agg_type() == outer_agg)
+    }
+
+    /// `count_distinct_approx` over `count_distinct_approx` — the cumulative
+    /// unique-count shape that routes to the HLL join-model (spec §14):
+    /// per-bucket sketches merged cumulatively along the axis via an aggregate
+    /// `hll_cardinality_merge` over a self-join (portable; not a window). The
+    /// inner agg must match the outer (idempotent HLL union), mirroring the
+    /// max-over-max / min-over-min rule.
+    fn is_accumulate_distinct(base_member: &Rc<MemberSymbol>) -> bool {
+        let Ok(outer) = base_member.as_measure() else {
+            return false;
+        };
+        let outer_is_cda = matches!(
+            outer.kind(),
+            MeasureKind::Aggregated(a) if a.agg_type() == AggregationType::CountDistinctApprox
+        );
+        if !outer_is_cda {
+            return false;
+        }
+        let deps = base_member.get_dependencies();
+        let [dep] = deps.as_slice() else {
+            return false;
+        };
+        let Ok(inner) = dep.clone().resolve_reference_chain().as_measure() else {
+            return false;
+        };
+        matches!(
+            inner.kind(),
+            MeasureKind::Aggregated(a) if a.agg_type() == AggregationType::CountDistinctApprox
+        )
     }
 
     /// Applies the partition-shaping part of `grain` to a parent-state
@@ -604,6 +640,21 @@ impl MultiStageQueryPlanner {
             scope,
         )? {
             return Ok(rolling_window_query);
+        }
+
+        // `accumulate:` over a `count_distinct_approx`-over-`count_distinct_approx`
+        // measure → cumulative unique count via the HLL join-model (spec §14):
+        // a state leaf (per-bucket sketch) + a self-join merge stage. Planned
+        // separately because the leaf must render the HLL sketch (state), unlike
+        // the window accumulate path.
+        if let Some(accumulate_distinct_query) = self.try_plan_accumulate_distinct(
+            member.clone(),
+            state.clone(),
+            descriptions,
+            resolved_multi_stage_dimensions,
+            scope,
+        )? {
+            return Ok(accumulate_distinct_query);
         }
 
         let has_multi_stage_members = has_multi_stage_members(&member, false)?;
@@ -927,6 +978,77 @@ impl MultiStageQueryPlanner {
         } else {
             Ok(None)
         }
+    }
+
+    /// Cumulative distinct count via the HLL join-model (spec §14). Triggers for
+    /// an `accumulate:` measure whose own type and base measure are both
+    /// `count_distinct_approx`. Builds two CTEs:
+    ///   1. a **state leaf** — the inner measure rendered as a per-bucket HLL
+    ///      sketch (`has_aggregates_on_top = true` → `render_measure_as_state` →
+    ///      `hll_init`), grouped at the query grain;
+    ///   2. a **merge** inode (Aggregate carrying `accumulate.distinct = true`)
+    ///      whose single input is the state leaf — `member_query_planner` renders
+    ///      it as a self-join on the axis + aggregate `hll_cardinality_merge`.
+    /// Returns `None` for any other measure (falls through to the normal paths).
+    pub fn try_plan_accumulate_distinct(
+        &self,
+        member: Rc<MemberSymbol>,
+        state: Rc<QueryProperties>,
+        descriptions: &mut Vec<Rc<MultiStageQueryDescription>>,
+        _resolved_multi_stage_dimensions: &mut HashSet<String>,
+        scope: &mut PlanningScope,
+    ) -> Result<Option<Rc<MultiStageQueryDescription>>, CubeError> {
+        let Ok(measure) = member.as_measure() else {
+            return Ok(None);
+        };
+        let Some(mut accumulate) = measure.multi_stage().and_then(|ms| ms.accumulate.clone())
+        else {
+            return Ok(None);
+        };
+        if !Self::is_accumulate_distinct(&member) {
+            return Ok(None);
+        }
+        if self.query_properties.ungrouped() {
+            return Err(CubeError::user(
+                "Multi-stage `accumulate` is not implemented for ungrouped queries.".to_string(),
+            ));
+        }
+        accumulate.distinct = true;
+
+        // State leaf: the single inner cda dependency, rendered as an HLL sketch
+        // at the query grain (partition + axis). Reuses the rolling-window base
+        // helper, which marks the leaf `has_aggregates_on_top` so the measure
+        // renders as state (`hll_init`) rather than a final cardinality.
+        let deps = member.get_dependencies();
+        let [inner] = deps.as_slice() else {
+            return Ok(None);
+        };
+        let inner = inner.clone().resolve_reference_chain();
+        let state_leaf =
+            self.add_rolling_window_base(inner, state.clone(), false, descriptions, scope)?;
+
+        // Merge inode: an Aggregate carrying the distinct accumulate. The grain
+        // stays empty — partition / axis are derived from the query dims in
+        // `member_query_planner` (accumulate_partition_and_order).
+        let inode_member =
+            MultiStageInodeMember::new(MultiStageInodeMemberType::Aggregate, MultiStageGrain::default(), None)
+                .with_accumulate(accumulate);
+
+        let alias = scope.next_cte_name();
+        let description = MultiStageQueryDescription::new(
+            MultiStageMember::new(
+                MultiStageMemberType::Inode(inode_member),
+                member,
+                false, // grouped: GROUP BY partition + axis
+                false,
+            ),
+            state.clone(),
+            vec![state_leaf],
+            vec![],
+            alias.clone(),
+        );
+        descriptions.push(description.clone());
+        Ok(Some(description))
     }
 
     /// Adds (or reuses) the `time_series_get_range` leaf CTE — used
