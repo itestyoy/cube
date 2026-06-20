@@ -594,12 +594,16 @@ impl MultiStageMemberQueryPlanner {
     /// `RANGE ORDER BY` is order-sensitive and its result depends on the order
     /// dimensions happen to appear in the query — the bug this fixes).
     ///
-    /// - `exclude`: the axis is the LAST excluded member in its declared order;
-    ///   every other dimension — including the earlier excluded ones — forms
-    ///   the partition. So `exclude: [retention_day, session_number]`
-    ///   accumulates over `session_number` independently within each
-    ///   `(…, retention_day)` series, regardless of query dimension order. With
-    ///   a single excluded member this is identical to the old behaviour.
+    /// - `exclude`: the axis is the LAST excluded member (in declared order)
+    ///   that is actually present in the query dimensions; every other query
+    ///   dimension — including earlier excluded ones — forms the partition. So
+    ///   which member partitions vs. orders is decided dynamically by what the
+    ///   query selects. With `exclude: [retention_day, session_number]`:
+    ///     - query `[session, retention]` → `PARTITION BY retention ORDER BY session`
+    ///     - query `[retention]`          → `ORDER BY retention` (no partition)
+    ///     - query `[session]`            → `ORDER BY session`   (no partition)
+    ///   This keeps the result independent of the order dimensions appear in
+    ///   the query. A single excluded member is identical to the old behaviour.
     /// - `keep_only`: partition is the kept dimensions; the axis is whatever
     ///   remains. (Legacy shape — deterministic only when exactly one remains.)
     ///
@@ -612,19 +616,27 @@ impl MultiStageMemberQueryPlanner {
     ) -> (Vec<Rc<MemberSymbol>>, Vec<Rc<MemberSymbol>>) {
         let dimensions = self.all_dimensions();
 
-        // `exclude` with a declared order: the last member is the axis, the
-        // rest stay in the partition.
-        if let Some(axis_member) = grain.exclude.as_ref().and_then(|e| e.last()) {
-            let partition = dimensions
+        // `exclude`: the axis is the last excluded member that the query
+        // actually selects (declared order breaks ties); everything else stays
+        // in the partition. If no excluded member is present, the axis is empty
+        // and we fall through to the degenerate (plain aggregate) handling.
+        if let Some(exclude) = &grain.exclude {
+            let axis_member = exclude
                 .iter()
-                .filter(|d| !d.matches_grain_member(axis_member))
-                .cloned()
-                .collect_vec();
-            let order_by = dimensions
-                .into_iter()
-                .filter(|d| d.matches_grain_member(axis_member))
-                .collect_vec();
-            return (partition, order_by);
+                .rev()
+                .find(|m| dimensions.iter().any(|d| d.matches_grain_member(m)));
+            if let Some(axis_member) = axis_member {
+                let partition = dimensions
+                    .iter()
+                    .filter(|d| !d.matches_grain_member(axis_member))
+                    .cloned()
+                    .collect_vec();
+                let order_by = dimensions
+                    .into_iter()
+                    .filter(|d| d.matches_grain_member(axis_member))
+                    .collect_vec();
+                return (partition, order_by);
+            }
         }
 
         // `keep_only` (or empty): partition is the kept dimensions; the axis is
