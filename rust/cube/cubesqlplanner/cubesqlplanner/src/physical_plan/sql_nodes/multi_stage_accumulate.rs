@@ -18,7 +18,9 @@ use std::rc::Rc;
 /// Structurally this is [`MultiStageWindowNode`](super::MultiStageWindowNode)
 /// plus an `ORDER BY` axis and an `UNBOUNDED PRECEDING` frame. The partition
 /// is the query grain minus the accumulation axis; the axis itself is the
-/// `order_by`. Non-window measures go through `else_processor`.
+/// `order_by`. The planner derives a single-column axis (the last `exclude`
+/// member), so this `ORDER BY` is normally one column — keeping the `RANGE`
+/// frame deterministic. Non-window measures go through `else_processor`.
 pub struct MultiStageAccumulateNode {
     input: Rc<dyn SqlNode>,
     else_processor: Rc<dyn SqlNode>,

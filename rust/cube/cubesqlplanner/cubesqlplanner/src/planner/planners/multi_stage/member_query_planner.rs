@@ -212,29 +212,16 @@ impl MultiStageMemberQueryPlanner {
     ) -> Result<Rc<LogicalMultiStageMember>, CubeError> {
         // `accumulate:` shapes the partition with its own grain
         // (exclude / keep_only); every other inode uses its own grain.
+        // For accumulate, partition + the single ORDER BY axis are derived
+        // together so the running window stays deterministic (see
+        // `accumulate_partition_and_order`).
         let accumulate = multi_stage_member.accumulate();
-        let partition_by = match accumulate {
-            // Granularity-agnostic matching so the axis works whether the time
-            // dimension is queried raw or rolled to a granularity (day/week/…).
-            Some(accum) => self.accumulate_partition_by(&accum.grain),
-            None => self.member_partition_by_logical(multi_stage_member.grain()),
-        };
-
-        // The running window's ORDER BY axis is the set of query dimensions
-        // that dropped out of the partition. Empty when nothing dropped out
-        // (the accumulate then falls back to a plain aggregate below).
-        let accumulate_order_by = if accumulate.is_some() {
-            self.all_dimensions()
-                .into_iter()
-                .filter(|d| {
-                    let name = d.clone().resolve_reference_chain().full_name();
-                    !partition_by
-                        .iter()
-                        .any(|p| p.clone().resolve_reference_chain().full_name() == name)
-                })
-                .collect_vec()
-        } else {
-            vec![]
+        let (partition_by, accumulate_order_by) = match accumulate {
+            Some(accum) => self.accumulate_partition_and_order(&accum.grain),
+            None => (
+                self.member_partition_by_logical(multi_stage_member.grain()),
+                vec![],
+            ),
         };
         let accumulate_direction = accumulate
             .as_ref()
@@ -598,31 +585,68 @@ impl MultiStageMemberQueryPlanner {
         dimensions
     }
 
-    /// Partition for an `accumulate:` window. Same shape as
-    /// `member_partition_by_logical`, but matches members granularity-agnostically
-    /// (`matches_grain_member`) so a queried time dimension at any granularity is
-    /// recognised by an `exclude` / `keep_only` referencing the base time
-    /// dimension. Kept separate so grain/rank matching stays byte-for-byte
-    /// unchanged.
-    fn accumulate_partition_by(&self, grain: &MultiStageGrain) -> Vec<Rc<MemberSymbol>> {
+    /// Partition + the single ORDER BY axis for an `accumulate:` window.
+    /// Returns `(partition_by, order_by)`.
+    ///
+    /// The accumulation axis is always exactly ONE dimension so the `RANGE`
+    /// running window is deterministic and well-defined (a multi-column
+    /// `RANGE ORDER BY` is order-sensitive and its result depends on the order
+    /// dimensions happen to appear in the query — the bug this fixes).
+    ///
+    /// - `exclude`: the axis is the LAST excluded member in its declared order;
+    ///   every other dimension — including the earlier excluded ones — forms
+    ///   the partition. So `exclude: [retention_day, session_number]`
+    ///   accumulates over `session_number` independently within each
+    ///   `(…, retention_day)` series, regardless of query dimension order. With
+    ///   a single excluded member this is identical to the old behaviour.
+    /// - `keep_only`: partition is the kept dimensions; the axis is whatever
+    ///   remains. (Legacy shape — deterministic only when exactly one remains.)
+    ///
+    /// Matching is granularity-agnostic (`matches_grain_member`) so a queried
+    /// time dimension at any granularity is recognised by an `exclude` /
+    /// `keep_only` referencing the base time dimension.
+    fn accumulate_partition_and_order(
+        &self,
+        grain: &MultiStageGrain,
+    ) -> (Vec<Rc<MemberSymbol>>, Vec<Rc<MemberSymbol>>) {
         let dimensions = self.all_dimensions();
-        let dimensions = if let Some(exclude) = &grain.exclude {
-            dimensions
+
+        // `exclude` with a declared order: the last member is the axis, the
+        // rest stay in the partition.
+        if let Some(axis_member) = grain.exclude.as_ref().and_then(|e| e.last()) {
+            let partition = dimensions
+                .iter()
+                .filter(|d| !d.matches_grain_member(axis_member))
+                .cloned()
+                .collect_vec();
+            let order_by = dimensions
                 .into_iter()
-                .filter(|d| !exclude.iter().any(|m| d.matches_grain_member(m)))
-                .collect_vec()
-        } else {
+                .filter(|d| d.matches_grain_member(axis_member))
+                .collect_vec();
+            return (partition, order_by);
+        }
+
+        // `keep_only` (or empty): partition is the kept dimensions; the axis is
+        // every dimension that is not kept, in query order.
+        let partition = if let Some(keep_only) = &grain.keep_only {
             dimensions
-        };
-        let dimensions = if let Some(keep_only) = &grain.keep_only {
-            dimensions
-                .into_iter()
+                .iter()
                 .filter(|d| keep_only.iter().any(|m| d.matches_grain_member(m)))
+                .cloned()
                 .collect_vec()
         } else {
-            dimensions
+            dimensions.clone()
         };
-        dimensions
+        let order_by = dimensions
+            .into_iter()
+            .filter(|d| {
+                let name = d.clone().resolve_reference_chain().full_name();
+                !partition
+                    .iter()
+                    .any(|p| p.clone().resolve_reference_chain().full_name() == name)
+            })
+            .collect_vec();
+        (partition, order_by)
     }
 
     fn query_order_by(&self) -> Result<Vec<OrderByItem>, CubeError> {
