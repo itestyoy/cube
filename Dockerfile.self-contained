@@ -131,9 +131,15 @@ COPY rust/cubesql ./rust/cubesql
 COPY patches/accumulate-rust-native.patch /tmp/accumulate-rust-native.patch
 RUN git apply --verbose /tmp/accumulate-rust-native.patch
 
+# Accumulate determinism fix: single ORDER BY axis (last `exclude` member) so
+# the running window no longer depends on query dimension order. Modifies
+# accumulate-added code, so it applies on top of the patch above.
+COPY patches/accumulate-orderby-fix.patch /tmp/accumulate-orderby-fix.patch
+RUN git apply --verbose /tmp/accumulate-orderby-fix.patch
+
 # Apply the `filter: { qualify }` patch (Rust SQL planner + native bridge) on
-# top of the accumulate patch. Generated against master+accumulate, so it
-# applies cleanly only after the patch above.
+# top of the accumulate patches. Generated against master+accumulate, so it
+# applies cleanly only after the patches above.
 COPY patches/filter-qualify-rust-native.patch /tmp/filter-qualify-rust-native.patch
 RUN git apply --verbose /tmp/filter-qualify-rust-native.patch
 
