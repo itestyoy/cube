@@ -156,7 +156,7 @@ index 422e2db0c..e1ae3b430 100644
                  FullKeyAggregate::builder()
                      .schema(full_key_aggregate_schema)
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
-index b51af7aa2..1e8731953 100644
+index b51af7aa2..d0d93b0e7 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
 @@ -572,6 +572,11 @@ impl MultiStageQueryPlanner {
@@ -171,7 +171,7 @@ index b51af7aa2..1e8731953 100644
          let description = if !has_multi_stage_members {
              let alias = scope.next_cte_name();
              MultiStageQueryDescription::new(
-@@ -604,6 +609,36 @@ impl MultiStageQueryPlanner {
+@@ -604,6 +609,52 @@ impl MultiStageQueryPlanner {
  
              let directive_filter = multi_stage_filter_directive(&member);
  
@@ -200,7 +200,23 @@ index b51af7aa2..1e8731953 100644
 +                            &names,
 +                            base.time_dimensions_filters(),
 +                        ));
-+                        qualify_post_filter = items;
++                        // The post-filter runs over the measure CTE, which only
++                        // projects the query grid (dimensions + time dimensions).
++                        // A predicate on an excluded member that is NOT part of
++                        // that grid has no column to reference and would emit an
++                        // unresolved raw-cube reference (e.g. `cube.session_number`)
++                        // into a CTE that lacks it — breaking the query. Keep only
++                        // predicates whose member is in the grid; for the rest,
++                        // qualify is silently a no-op (the metric already ignores
++                        // them, and there is no output column to bound).
++                        let grid_names: Vec<String> = state
++                            .dimensions()
++                            .iter()
++                            .chain(state.time_dimensions().iter())
++                            .flat_map(|d| filter_directive_match_names(d))
++                            .collect();
++                        qualify_post_filter =
++                            crate::planner::filter::tree_ops::keep_only_members(&grid_names, &items);
 +                    }
 +                }
 +            }
@@ -208,7 +224,7 @@ index b51af7aa2..1e8731953 100644
              // new_state is the leaf grain on which children are computed.
              // For JOIN-model Aggregate inodes modifiers apply in this order:
              //   1. filter directive — pick `state` (Relative/None) or
-@@ -703,7 +738,7 @@ impl MultiStageQueryPlanner {
+@@ -703,7 +754,7 @@ impl MultiStageQueryPlanner {
              MultiStageQueryDescription::new(
                  MultiStageMember::new(
                      MultiStageMemberType::Inode(multi_stage_member),
@@ -217,7 +233,7 @@ index b51af7aa2..1e8731953 100644
                      is_ungrupped,
                      false,
                  ),
-@@ -715,6 +750,41 @@ impl MultiStageQueryPlanner {
+@@ -715,6 +766,41 @@ impl MultiStageQueryPlanner {
          };
  
          descriptions.push(description.clone());
