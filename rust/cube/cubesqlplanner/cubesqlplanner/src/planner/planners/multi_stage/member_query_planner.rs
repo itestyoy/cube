@@ -329,7 +329,7 @@ impl MultiStageMemberQueryPlanner {
             .accumulate_order_by(accumulate_order_by)
             .accumulate_direction(accumulate_direction)
             .post_filter(multi_stage_member.post_filter().clone())
-            .accumulate_merge(accumulate.map(|a| a.distinct).unwrap_or(false))
+            .accumulate_merge(matches!(accumulate, Some(a) if a.distinct))
             .source(Rc::new(
                 FullKeyAggregate::builder()
                     .schema(full_key_aggregate_schema)
