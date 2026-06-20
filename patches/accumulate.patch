@@ -382,7 +382,7 @@ index 000000000..c98570685
 +#[nativebridge::native_bridge(MultiStageAccumulateReferencesStatic, with_static_meta)]
 +pub trait MultiStageAccumulateReferences {}
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs
-index 50d2f477a..87c873bf4 100644
+index 50d2f477a..b5ac01cb1 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs
 @@ -31,6 +31,9 @@ impl ToString for MultiStageCalculationType {
@@ -403,7 +403,7 @@ index 50d2f477a..87c873bf4 100644
              MultiStageCalculationWindowFunction::None => "None".to_string(),
          }
      }
-@@ -57,6 +61,15 @@ pub struct MultiStageMeasureCalculation {
+@@ -57,6 +61,23 @@ pub struct MultiStageMeasureCalculation {
      window_function_to_use: MultiStageCalculationWindowFunction,
      #[builder(default)]
      order_by: Vec<OrderByItem>,
@@ -416,10 +416,18 @@ index 50d2f477a..87c873bf4 100644
 +    /// set by the planner on the Accumulate path; the default is unused there.
 +    #[builder(default)]
 +    accumulate_direction: String,
++    /// Cumulative-distinct accumulate (spec §14): render this calculation as a
++    /// self-join of the (single) input state CTE on the accumulation axis +
++    /// aggregate `hll_cardinality_merge`, instead of the normal aggregate /
++    /// window. `partition_by` is the partition grid, `accumulate_order_by[0]` is
++    /// the axis, `accumulate_direction` chooses `<=` (asc) / `>=` (desc).
++    /// Default `false`.
++    #[builder(default)]
++    accumulate_merge: bool,
      source: Rc<FullKeyAggregate>,
  }
  
-@@ -85,6 +98,14 @@ impl MultiStageMeasureCalculation {
+@@ -85,6 +106,18 @@ impl MultiStageMeasureCalculation {
          &self.order_by
      }
  
@@ -431,25 +439,125 @@ index 50d2f477a..87c873bf4 100644
 +        &self.accumulate_direction
 +    }
 +
++    pub fn accumulate_merge(&self) -> bool {
++        self.accumulate_merge
++    }
++
      pub fn source(&self) -> &Rc<FullKeyAggregate> {
          &self.source
      }
-@@ -163,6 +184,8 @@ impl LogicalNode for MultiStageMeasureCalculation {
+@@ -163,6 +196,9 @@ impl LogicalNode for MultiStageMeasureCalculation {
                  .partition_by(self.partition_by().clone())
                  .window_function_to_use(self.window_function_to_use().clone())
                  .order_by(self.order_by().clone())
 +                .accumulate_order_by(self.accumulate_order_by().clone())
 +                .accumulate_direction(self.accumulate_direction().clone())
++                .accumulate_merge(self.accumulate_merge())
                  .source(source.clone().into_logical_node()?)
                  .build(),
          ))
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/count_approx_merge.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/count_approx_merge.rs
+new file mode 100644
+index 000000000..7e286f733
+--- /dev/null
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/count_approx_merge.rs
+@@ -0,0 +1,88 @@
++use super::SqlNode;
++use crate::physical_plan::SqlEvaluatorVisitor;
++use crate::planner::query_tools::QueryTools;
++use crate::planner::sql_templates::PlanSqlTemplates;
++use crate::planner::symbols::{AggregationType, MeasureKind};
++use crate::planner::MemberSymbol;
++use cubenativeutils::CubeError;
++use std::any::Any;
++use std::rc::Rc;
++
++/// Renders a `count_distinct_approx` measure as an **aggregate** HLL merge —
++/// `{{ hll_cardinality_merge(<state>) }}` — for the `accumulate` join-model
++/// (the cumulative-distinct path, see the accumulate spec §14). The inner
++/// `<state>` is the per-bucket HLL sketch produced by the leaf
++/// (`render_measure_as_state` → `hll_init`); merging the sketches with an
++/// aggregate (not a window) keeps the running distinct count **portable** —
++/// BigQuery `HLL_COUNT.MERGE`, Snowflake `HLL_ESTIMATE(HLL_COMBINE(..))`, etc.,
++/// all via the existing `hll_cardinality_merge` dialect template.
++///
++/// Structurally this is [`RollingWindowNode`](super::RollingWindowNode)'s
++/// count-distinct-approx branch, but **not** gated on `is_cumulative()` — it is
++/// switched on explicitly by the factory flag `count_approx_merge` (set only by
++/// the accumulate-merge processor). Every other measure falls through to
++/// `default_processor`.
++pub struct CountApproxMergeNode {
++    input: Rc<dyn SqlNode>,
++    default_processor: Rc<dyn SqlNode>,
++}
++
++impl CountApproxMergeNode {
++    pub fn new(input: Rc<dyn SqlNode>, default_processor: Rc<dyn SqlNode>) -> Rc<Self> {
++        Rc::new(Self {
++            input,
++            default_processor,
++        })
++    }
++
++    pub fn input(&self) -> &Rc<dyn SqlNode> {
++        &self.input
++    }
++}
++
++impl SqlNode for CountApproxMergeNode {
++    fn to_sql(
++        &self,
++        visitor: &SqlEvaluatorVisitor,
++        node: &Rc<MemberSymbol>,
++        query_tools: Rc<QueryTools>,
++        node_processor: Rc<dyn SqlNode>,
++        templates: &PlanSqlTemplates,
++    ) -> Result<String, CubeError> {
++        let res = match node.as_ref() {
++            MemberSymbol::Measure(m)
++                if matches!(
++                    m.kind(),
++                    MeasureKind::Aggregated(a)
++                        if a.agg_type() == AggregationType::CountDistinctApprox
++                ) =>
++            {
++                let inner_visitor = visitor.with_arg_needs_paren_safe(false);
++                let input_sql = self.input.to_sql(
++                    &inner_visitor,
++                    node,
++                    query_tools.clone(),
++                    node_processor.clone(),
++                    templates,
++                )?;
++                templates.hll_cardinality_merge(input_sql)?
++            }
++            _ => self.default_processor.to_sql(
++                visitor,
++                node,
++                query_tools.clone(),
++                node_processor.clone(),
++                templates,
++            )?,
++        };
++        Ok(res)
++    }
++
++    fn as_any(self: Rc<Self>) -> Rc<dyn Any> {
++        self.clone()
++    }
++
++    fn childs(&self) -> Vec<Rc<dyn SqlNode>> {
++        vec![self.input.clone(), self.default_processor.clone()]
++    }
++}
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/factory.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/factory.rs
-index 24c9fd7fc..7a139cc1e 100644
+index 24c9fd7fc..4132f8159 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/factory.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/factory.rs
 @@ -1,7 +1,8 @@
  use super::{
-     AutoPrefixSqlNode, CaseSqlNode, EvaluateSqlNode, FinalMeasureSqlNode,
+-    AutoPrefixSqlNode, CaseSqlNode, EvaluateSqlNode, FinalMeasureSqlNode,
++    AutoPrefixSqlNode, CaseSqlNode, CountApproxMergeNode, EvaluateSqlNode, FinalMeasureSqlNode,
      FinalPreAggregationMeasureSqlNode, GeoDimensionSqlNode, MaskedSqlNode, MeasureFilterSqlNode,
 -    MultiStageRankNode, MultiStageWindowNode, ParenthesizeSqlNode, RenderReferencesSqlNode,
 +    MultiStageAccumulateNode, MultiStageRankNode, MultiStageWindowNode, ParenthesizeSqlNode,
@@ -457,16 +565,20 @@ index 24c9fd7fc..7a139cc1e 100644
      RenderReferencesType, RollingWindowNode, RootSqlNode, SegmentDimensionSqlNode, SqlNode,
      TimeDimensionNode, TimeShiftSqlNode, UngroupedMeasureSqlNode,
      UngroupedQueryFinalMeasureSqlNode,
-@@ -32,6 +33,8 @@ pub struct SqlNodesFactory {
+@@ -32,6 +33,12 @@ pub struct SqlNodesFactory {
      cube_name_references: HashMap<String, String>,
      multi_stage_rank: Option<Vec<String>>,   //partition_by
      multi_stage_window: Option<Vec<String>>, //partition_by
 +    // (partition_by, order_by, direction) for the `accumulate:` running window
 +    multi_stage_accumulate: Option<(Vec<String>, Vec<String>, String)>,
++    // Render `count_distinct_approx` measures as an aggregate HLL merge
++    // (`hll_cardinality_merge`) — the accumulate cumulative-distinct join-model
++    // (spec §14). Set only by the accumulate-merge processor.
++    count_approx_merge: bool,
      rolling_window: bool,
      dimensions_with_ignored_timezone: HashSet<String>,
      use_local_tz_in_date_range: bool,
-@@ -123,6 +126,15 @@ impl SqlNodesFactory {
+@@ -123,6 +130,15 @@ impl SqlNodesFactory {
          self.multi_stage_window = Some(partition_by);
      }
  
@@ -482,7 +594,18 @@ index 24c9fd7fc..7a139cc1e 100644
      pub fn add_pre_aggregation_measure_reference<T: Into<RenderReferencesType>>(
          &mut self,
          name: String,
-@@ -194,6 +206,10 @@ impl SqlNodesFactory {
+@@ -139,6 +155,10 @@ impl SqlNodesFactory {
+         self.count_approx_as_state = value;
+     }
+ 
++    pub fn set_count_approx_merge(&mut self, value: bool) {
++        self.count_approx_merge = value;
++    }
++
+     pub fn add_ungrouped_measure_reference<T: Into<RenderReferencesType>>(
+         &mut self,
+         name: String,
+@@ -194,6 +214,12 @@ impl SqlNodesFactory {
          };
          let measure_processor = self
              .add_multi_stage_window_if_needed(measure_processor, measure_filter_processor.clone());
@@ -490,10 +613,12 @@ index 24c9fd7fc..7a139cc1e 100644
 +            measure_processor,
 +            measure_filter_processor.clone(),
 +        );
++        let measure_processor = self
++            .add_count_approx_merge_if_needed(measure_processor, measure_filter_processor.clone());
          let measure_processor = self.add_multi_stage_rank_if_needed(measure_processor);
  
          let default_processor: Rc<dyn SqlNode> =
-@@ -250,6 +266,24 @@ impl SqlNodesFactory {
+@@ -250,6 +276,40 @@ impl SqlNodesFactory {
          }
      }
  
@@ -515,14 +640,38 @@ index 24c9fd7fc..7a139cc1e 100644
 +        }
 +    }
 +
++    // Cumulative-distinct accumulate (spec §14): render `count_distinct_approx`
++    // measures as an aggregate `hll_cardinality_merge(<state>)`. `merge_input`
++    // renders the measure body (its inner resolves to the joined state column);
++    // every other measure falls through to `default`.
++    fn add_count_approx_merge_if_needed(
++        &self,
++        default: Rc<dyn SqlNode>,
++        merge_input: Rc<dyn SqlNode>,
++    ) -> Rc<dyn SqlNode> {
++        if self.count_approx_merge {
++            CountApproxMergeNode::new(merge_input, default)
++        } else {
++            default
++        }
++    }
++
      fn final_measure_node_processor(&self, input: Rc<dyn SqlNode>) -> Rc<dyn SqlNode> {
          if self.ungrouped_measure {
              UngroupedMeasureSqlNode::new(input)
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/mod.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/mod.rs
-index 4620ad8c6..fff363588 100644
+index 4620ad8c6..3a1481eed 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/mod.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/mod.rs
-@@ -17,6 +17,7 @@ pub mod final_pre_aggregation_measure;
+@@ -9,6 +9,7 @@
+ pub mod auto_prefix;
+ pub mod calendar_time_shift;
+ pub mod case;
++pub mod count_approx_merge;
+ //pub mod cube_calc_groups;
+ pub mod evaluate_sql;
+ pub mod factory;
+@@ -17,6 +18,7 @@ pub mod final_pre_aggregation_measure;
  pub mod geo_dimension;
  pub mod masked;
  pub mod measure_filter;
@@ -530,7 +679,15 @@ index 4620ad8c6..fff363588 100644
  pub mod multi_stage_rank;
  pub mod multi_stage_window;
  pub mod parenthesize;
-@@ -40,6 +41,7 @@ pub use final_pre_aggregation_measure::FinalPreAggregationMeasureSqlNode;
+@@ -32,6 +34,7 @@ pub mod ungroupped_query_final_measure;
+ 
+ pub use auto_prefix::AutoPrefixSqlNode;
+ pub use case::CaseSqlNode;
++pub use count_approx_merge::CountApproxMergeNode;
+ //pub use cube_calc_groups::CubeCalcGroupsSqlNode;
+ pub use evaluate_sql::EvaluateSqlNode;
+ pub use factory::SqlNodesFactory;
+@@ -40,6 +43,7 @@ pub use final_pre_aggregation_measure::FinalPreAggregationMeasureSqlNode;
  pub use geo_dimension::GeoDimensionSqlNode;
  pub use masked::MaskedSqlNode;
  pub use measure_filter::MeasureFilterSqlNode;
@@ -696,18 +853,62 @@ index 000000000..6f1289bb9
 +    }
 +}
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs
-index 7a4f2a2ed..1c53565ce 100644
+index 7a4f2a2ed..8dc21c621 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs
-@@ -4,6 +4,7 @@ use crate::logical_plan::{MultiStageCalculationWindowFunction, MultiStageMeasure
+@@ -2,12 +2,37 @@ use super::super::context::PushDownBuilderContext;
+ use super::super::{LogicalNodeProcessor, ProcessableNode};
+ use crate::logical_plan::{MultiStageCalculationWindowFunction, MultiStageMeasureCalculation};
  use crate::physical_plan::ReferencesBuilder;
- use crate::physical_plan::{Expr, MemberExpression, QueryPlan, SelectBuilder};
+-use crate::physical_plan::{Expr, MemberExpression, QueryPlan, SelectBuilder};
++use crate::physical_plan::{
++    Expr, From, JoinBuilder, JoinCondition, MemberExpression, QualifiedColumnName, QueryPlan,
++    SelectBuilder,
++};
++use crate::physical_plan::VisitorContext;
  use crate::physical_plan_builder::PhysicalPlanBuilder;
++use crate::planner::base_join_condition::BaseJoinCondition;
++use crate::planner::sql_templates::PlanSqlTemplates;
 +use crate::planner::MemberSymbol;
  use cubenativeutils::CubeError;
  use itertools::Itertools;
  use std::rc::Rc;
-@@ -72,29 +73,41 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
+ 
++/// Pre-rendered join condition for the accumulate cumulative-distinct self-join
++/// (spec §14). The condition SQL (partition equality + the axis `<=` / `>=`
++/// comparison) is built at processing time from resolved column references, so
++/// `to_sql` just returns it verbatim.
++struct RawJoinCondition {
++    sql: String,
++}
++
++impl BaseJoinCondition for RawJoinCondition {
++    fn to_sql(
++        &self,
++        _context: Rc<VisitorContext>,
++        _templates: &PlanSqlTemplates,
++    ) -> Result<String, CubeError> {
++        Ok(self.sql.clone())
++    }
++}
++
+ pub struct MultiStageMeasureCalculationProcessor<'a> {
+     builder: &'a PhysicalPlanBuilder,
+ }
+@@ -25,6 +50,12 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
+         measure_calculation: &MultiStageMeasureCalculation,
+         context: &PushDownBuilderContext,
+     ) -> Result<Self::PhysycalNode, CubeError> {
++        // Cumulative distinct count (spec §14): self-join the input state CTE on
++        // the axis + aggregate `hll_cardinality_merge`, instead of the normal
++        // aggregate / window render.
++        if measure_calculation.accumulate_merge() {
++            return self.process_accumulate_merge(measure_calculation, context);
++        }
+         let (query_tools, templates) = self.builder.qtools_and_templates();
+         let mut context_factory = context.make_sql_nodes_factory()?;
+         let from = self
+@@ -72,29 +103,41 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
              );
          }
  
@@ -771,7 +972,7 @@ index 7a4f2a2ed..1c53565ce 100644
          match measure_calculation.window_function_to_use() {
              MultiStageCalculationWindowFunction::Rank => {
                  context_factory.set_multi_stage_rank(partition_by)
-@@ -102,6 +115,17 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
+@@ -102,6 +145,17 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
              MultiStageCalculationWindowFunction::Window => {
                  context_factory.set_multi_stage_window(partition_by)
              }
@@ -789,6 +990,140 @@ index 7a4f2a2ed..1c53565ce 100644
              MultiStageCalculationWindowFunction::None => {}
          }
          let select = Rc::new(select_builder.build(query_tools.clone(), context_factory));
+@@ -109,6 +163,133 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
+     }
+ }
+ 
++impl<'a> MultiStageMeasureCalculationProcessor<'a> {
++    /// Renders the cumulative-distinct accumulate (spec §14):
++    /// ```sql
++    /// SELECT b1.<partition…>, b1.<axis>, {{ hll_cardinality_merge(b2.<state>) }}
++    /// FROM <state_cte> b1
++    /// JOIN <state_cte> b2 ON <b1.p = b2.p …> AND b2.<axis> <= b1.<axis>
++    /// GROUP BY b1.<partition…>, b1.<axis>
++    /// ```
++    /// The input state CTE holds per-bucket HLL sketches (rendered via
++    /// `render_measure_as_state`); the self-join accumulates them along the axis
++    /// and `count_approx_merge` wraps the result in the dialect's aggregate HLL
++    /// merge — portable, no windowed HLL.
++    fn process_accumulate_merge(
++        &self,
++        measure_calculation: &MultiStageMeasureCalculation,
++        context: &PushDownBuilderContext,
++    ) -> Result<QueryPlan, CubeError> {
++        let (query_tools, templates) = self.builder.qtools_and_templates();
++
++        // The single input is the state leaf CTE.
++        let source_refs = measure_calculation.source().multi_stage_subquery_refs();
++        let state_ref = source_refs.first().ok_or_else(|| {
++            CubeError::internal("accumulate-merge expects one input state CTE".to_string())
++        })?;
++        let state_name = state_ref.name().clone();
++        let state_schema = context.get_multi_stage_schema(&state_name)?;
++        // The leaf's member is the inner measure (the per-bucket HLL sketch).
++        let inner_measure = state_ref
++            .symbols()
++            .first()
++            .ok_or_else(|| {
++                CubeError::internal("accumulate-merge state CTE has no measure".to_string())
++            })?
++            .clone();
++
++        // b1 supplies the output grid (one row per partition + axis value); b2 is
++        // merged for every row whose axis is at-or-before b1's (asc → `<=`).
++        let series_alias = "acc_series".to_string();
++        let merge_alias = "acc_merge".to_string();
++        let cmp = if measure_calculation
++            .accumulate_direction()
++            .eq_ignore_ascii_case("desc")
++        {
++            ">="
++        } else {
++            "<="
++        };
++
++        let partition = measure_calculation.partition_by();
++        let axis = measure_calculation.accumulate_order_by();
++
++        let mut conditions: Vec<String> = Vec::new();
++        for dim in partition.iter() {
++            let col = state_schema.resolve_member_alias(dim);
++            let left = templates.column_reference(&Some(series_alias.clone()), &col)?;
++            let right = templates.column_reference(&Some(merge_alias.clone()), &col)?;
++            conditions.push(format!("{left} = {right}"));
++        }
++        for dim in axis.iter() {
++            let col = state_schema.resolve_member_alias(dim);
++            let b1 = templates.column_reference(&Some(series_alias.clone()), &col)?;
++            let b2 = templates.column_reference(&Some(merge_alias.clone()), &col)?;
++            conditions.push(format!("{b2} {cmp} {b1}"));
++        }
++        let condition_sql = if conditions.is_empty() {
++            "1 = 1".to_string()
++        } else {
++            conditions.join(" AND ")
++        };
++
++        let mut join_builder = JoinBuilder::new_from_table_reference(
++            state_name.clone(),
++            state_schema.clone(),
++            Some(series_alias.clone()),
++        );
++        join_builder.inner_join_table_reference(
++            state_name.clone(),
++            state_schema.clone(),
++            Some(merge_alias.clone()),
++            JoinCondition::new_base_join(Rc::new(RawJoinCondition { sql: condition_sql })),
++        );
++        let from = From::new_from_join(join_builder.build());
++
++        let mut context_factory = context.make_sql_nodes_factory()?;
++        context_factory.set_count_approx_merge(true);
++
++        let references_builder = ReferencesBuilder::new(from.clone());
++        let mut select_builder = SelectBuilder::new(from.clone());
++
++        // Project the partition + axis dimensions from the series side (b1).
++        let grid = partition.iter().chain(axis.iter()).cloned().collect_vec();
++        for dim in grid.iter() {
++            references_builder.resolve_references_for_member(
++                dim.clone(),
++                &Some(series_alias.clone()),
++                context_factory.render_references_mut(),
++            )?;
++            let alias =
++                references_builder.resolve_alias_for_member(dim, &Some(series_alias.clone()));
++            select_builder.add_projection_member(dim, alias);
++        }
++
++        // Project the measure as `hll_cardinality_merge(b2.<inner state>)`: point
++        // the (outer) measure at the merge-side state column, and let the
++        // `count_approx_merge` node apply the aggregate HLL merge.
++        let inner_state_col = state_schema.resolve_member_alias(&inner_measure);
++        for measure in measure_calculation.schema().measures.iter() {
++            context_factory.add_ungrouped_measure_reference(
++                measure.full_name(),
++                QualifiedColumnName::new(Some(merge_alias.clone()), inner_state_col.clone()),
++            );
++            let alias = references_builder.resolve_alias_for_member(measure, &None);
++            select_builder.add_projection_member(measure, alias);
++        }
++
++        // Aggregate the merge per output grid row.
++        let group_by = grid
++            .iter()
++            .map(|dim| Expr::Member(MemberExpression::new(dim.clone())))
++            .collect::<Vec<_>>();
++        select_builder.set_group_by(group_by);
++
++        let select = Rc::new(select_builder.build(query_tools.clone(), context_factory));
++        Ok(QueryPlan::Select(select))
++    }
++}
++
+ impl ProcessableNode for MultiStageMeasureCalculation {
+     type ProcessorType<'a> = MultiStageMeasureCalculationProcessor<'a>;
+ }
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member.rs
 index 9a429eecd..e9fe44e85 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member.rs
@@ -837,7 +1172,7 @@ index 9a429eecd..e9fe44e85 100644
          &self.inode_type
      }
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
-index 689d4fc95..9c415dfe3 100644
+index 689d4fc95..ca91f0f4a 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
 @@ -210,16 +210,41 @@ impl MultiStageMemberQueryPlanner {
@@ -884,16 +1219,17 @@ index 689d4fc95..9c415dfe3 100644
              MultiStageInodeMemberType::Aggregate
                  if multi_stage_member.use_window_path()
                      && partition_by.len() != self.all_dimensions().len() =>
-@@ -301,6 +326,8 @@ impl MultiStageMemberQueryPlanner {
+@@ -301,6 +326,9 @@ impl MultiStageMemberQueryPlanner {
              .partition_by(partition_by)
              .window_function_to_use(window_function_to_use)
              .order_by(self.query_order_by()?)
 +            .accumulate_order_by(accumulate_order_by)
 +            .accumulate_direction(accumulate_direction)
++            .accumulate_merge(accumulate.map(|a| a.distinct).unwrap_or(false))
              .source(Rc::new(
                  FullKeyAggregate::builder()
                      .schema(full_key_aggregate_schema)
-@@ -558,6 +585,82 @@ impl MultiStageMemberQueryPlanner {
+@@ -558,6 +586,82 @@ impl MultiStageMemberQueryPlanner {
          dimensions
      }
  
@@ -977,7 +1313,7 @@ index 689d4fc95..9c415dfe3 100644
          let member_node = self.description.member_node();
          let measures = if member_node.as_measure().is_ok() {
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
-index 5dfa0b066..7dc481cc6 100644
+index 5dfa0b066..3870b4370 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
 @@ -179,15 +179,55 @@ impl MultiStageQueryPlanner {
@@ -1042,7 +1378,7 @@ index 5dfa0b066..7dc481cc6 100644
          } else {
              let grain = base_member
                  .as_dimension()
-@@ -279,6 +319,82 @@ impl MultiStageQueryPlanner {
+@@ -279,6 +319,118 @@ impl MultiStageQueryPlanner {
          }
      }
  
@@ -1069,6 +1405,12 @@ index 5dfa0b066..7dc481cc6 100644
 +        // `sum` over sum/count — additive rollup (count rolls up as sum). Shared
 +        // with grain/rank via `is_window_path_eligible`.
 +        if Self::is_window_path_eligible(base_member) {
++            return true;
++        }
++        // `count_distinct_approx` over `count_distinct_approx` — cumulative unique
++        // count via the HLL join-model (spec §14), planned separately by
++        // `try_plan_accumulate_distinct`.
++        if Self::is_accumulate_distinct(base_member) {
 +            return true;
 +        }
 +        // `sum` over a distinct count (`count_distinct` / `count_distinct_approx`):
@@ -1122,11 +1464,141 @@ index 5dfa0b066..7dc481cc6 100644
 +        matches!(inner.kind(), MeasureKind::Aggregated(a) if a.agg_type() == outer_agg)
 +    }
 +
++    /// `count_distinct_approx` over `count_distinct_approx` — the cumulative
++    /// unique-count shape that routes to the HLL join-model (spec §14):
++    /// per-bucket sketches merged cumulatively along the axis via an aggregate
++    /// `hll_cardinality_merge` over a self-join (portable; not a window). The
++    /// inner agg must match the outer (idempotent HLL union), mirroring the
++    /// max-over-max / min-over-min rule.
++    fn is_accumulate_distinct(base_member: &Rc<MemberSymbol>) -> bool {
++        let Ok(outer) = base_member.as_measure() else {
++            return false;
++        };
++        let outer_is_cda = matches!(
++            outer.kind(),
++            MeasureKind::Aggregated(a) if a.agg_type() == AggregationType::CountDistinctApprox
++        );
++        if !outer_is_cda {
++            return false;
++        }
++        let deps = base_member.get_dependencies();
++        let [dep] = deps.as_slice() else {
++            return false;
++        };
++        let Ok(inner) = dep.clone().resolve_reference_chain().as_measure() else {
++            return false;
++        };
++        matches!(
++            inner.kind(),
++            MeasureKind::Aggregated(a) if a.agg_type() == AggregationType::CountDistinctApprox
++        )
++    }
++
      /// Applies the partition-shaping part of `grain` to a parent-state
      /// dimension list: `exclude` removes matching dims, then `keep_only`
      /// intersects what's left. `include` is appended outside this helper
+@@ -491,6 +643,21 @@ impl MultiStageQueryPlanner {
+             return Ok(rolling_window_query);
+         }
+ 
++        // `accumulate:` over a `count_distinct_approx`-over-`count_distinct_approx`
++        // measure → cumulative unique count via the HLL join-model (spec §14):
++        // a state leaf (per-bucket sketch) + a self-join merge stage. Planned
++        // separately because the leaf must render the HLL sketch (state), unlike
++        // the window accumulate path.
++        if let Some(accumulate_distinct_query) = self.try_plan_accumulate_distinct(
++            member.clone(),
++            state.clone(),
++            descriptions,
++            resolved_multi_stage_dimensions,
++            scope,
++        )? {
++            return Ok(accumulate_distinct_query);
++        }
++
+         let has_multi_stage_members = has_multi_stage_members(&member, false)?;
+         let description = if !has_multi_stage_members {
+             let alias = scope.next_cte_name();
+@@ -814,6 +981,77 @@ impl MultiStageQueryPlanner {
+         }
+     }
+ 
++    /// Cumulative distinct count via the HLL join-model (spec §14). Triggers for
++    /// an `accumulate:` measure whose own type and base measure are both
++    /// `count_distinct_approx`. Builds two CTEs:
++    ///   1. a **state leaf** — the inner measure rendered as a per-bucket HLL
++    ///      sketch (`has_aggregates_on_top = true` → `render_measure_as_state` →
++    ///      `hll_init`), grouped at the query grain;
++    ///   2. a **merge** inode (Aggregate carrying `accumulate.distinct = true`)
++    ///      whose single input is the state leaf — `member_query_planner` renders
++    ///      it as a self-join on the axis + aggregate `hll_cardinality_merge`.
++    /// Returns `None` for any other measure (falls through to the normal paths).
++    pub fn try_plan_accumulate_distinct(
++        &self,
++        member: Rc<MemberSymbol>,
++        state: Rc<QueryProperties>,
++        descriptions: &mut Vec<Rc<MultiStageQueryDescription>>,
++        _resolved_multi_stage_dimensions: &mut HashSet<String>,
++        scope: &mut PlanningScope,
++    ) -> Result<Option<Rc<MultiStageQueryDescription>>, CubeError> {
++        let Ok(measure) = member.as_measure() else {
++            return Ok(None);
++        };
++        let Some(mut accumulate) = measure.multi_stage().and_then(|ms| ms.accumulate.clone())
++        else {
++            return Ok(None);
++        };
++        if !Self::is_accumulate_distinct(&member) {
++            return Ok(None);
++        }
++        if self.query_properties.ungrouped() {
++            return Err(CubeError::user(
++                "Multi-stage `accumulate` is not implemented for ungrouped queries.".to_string(),
++            ));
++        }
++        accumulate.distinct = true;
++
++        // State leaf: the single inner cda dependency, rendered as an HLL sketch
++        // at the query grain (partition + axis). Reuses the rolling-window base
++        // helper, which marks the leaf `has_aggregates_on_top` so the measure
++        // renders as state (`hll_init`) rather than a final cardinality.
++        let deps = member.get_dependencies();
++        let [inner] = deps.as_slice() else {
++            return Ok(None);
++        };
++        let inner = inner.clone().resolve_reference_chain();
++        let state_leaf =
++            self.add_rolling_window_base(inner, state.clone(), false, descriptions, scope)?;
++
++        // Merge inode: an Aggregate carrying the distinct accumulate. The grain
++        // stays empty — partition / axis are derived from the query dims in
++        // `member_query_planner` (accumulate_partition_and_order).
++        let inode_member =
++            MultiStageInodeMember::new(MultiStageInodeMemberType::Aggregate, MultiStageGrain::default(), None)
++                .with_accumulate(accumulate);
++
++        let alias = scope.next_cte_name();
++        let description = MultiStageQueryDescription::new(
++            MultiStageMember::new(
++                MultiStageMemberType::Inode(inode_member),
++                member,
++                false, // grouped: GROUP BY partition + axis
++                false,
++            ),
++            state.clone(),
++            vec![state_leaf],
++            vec![],
++            alias.clone(),
++        );
++        descriptions.push(description.clone());
++        Ok(Some(description))
++    }
++
+     /// Adds (or reuses) the `time_series_get_range` leaf CTE — used
+     /// by `add_time_series` when the requested time dimension has no
+     /// explicit date range and the planner needs to compute one.
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
-index 4f64597c1..1157d19e9 100644
+index 4f64597c1..54784ed1a 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
 @@ -2,6 +2,7 @@ use super::super::measure_symbol::MeasureTimeShifts;
@@ -1137,7 +1609,7 @@ index 4f64597c1..1157d19e9 100644
  use crate::cube_bridge::multi_stage_grain::MultiStageGrainReferences;
  use crate::planner::filter::compiler::FilterCompiler;
  use crate::planner::filter::FilterItem;
-@@ -63,11 +64,26 @@ pub struct MultiStageGrain {
+@@ -63,11 +64,31 @@ pub struct MultiStageGrain {
      pub include: Option<Vec<Rc<MemberSymbol>>>,
  }
  
@@ -1153,6 +1625,11 @@ index 4f64597c1..1157d19e9 100644
 +    pub grain: MultiStageGrain,
 +    /// "asc" | "desc" — normalized at construction; default "asc".
 +    pub direction: String,
++    /// Cumulative-distinct join-model (spec §14): set by the planner when the
++    /// measure and its base are both `count_distinct_approx`. When `true` the
++    /// running window is replaced by a self-join + aggregate `hll_cardinality_merge`
++    /// (a true cumulative unique count). Default `false` (the window path).
++    pub distinct: bool,
 +}
 +
  #[derive(Clone)]
@@ -1164,7 +1641,7 @@ index 4f64597c1..1157d19e9 100644
  }
  
  impl MultiStageProperties {
-@@ -88,10 +104,62 @@ impl MultiStageProperties {
+@@ -88,10 +109,62 @@ impl MultiStageProperties {
  
          let filter = build_filter(cube_name, definition.filter()?, compiler)?;
  
@@ -1227,7 +1704,7 @@ index 4f64597c1..1157d19e9 100644
          }))
      }
  
-@@ -115,6 +183,7 @@ impl MultiStageProperties {
+@@ -115,6 +188,7 @@ impl MultiStageProperties {
              },
              filter,
              time_shift: None,
@@ -1235,7 +1712,7 @@ index 4f64597c1..1157d19e9 100644
          }))
      }
  
-@@ -150,10 +219,23 @@ impl MultiStageProperties {
+@@ -150,10 +224,24 @@ impl MultiStageProperties {
              include: map_refs(&self.grain.include)?,
          };
  
@@ -1247,6 +1724,7 @@ index 4f64597c1..1157d19e9 100644
 +                    include: map_refs(&a.grain.include)?,
 +                },
 +                direction: a.direction.clone(),
++                distinct: a.distinct,
 +            }),
 +            None => None,
 +        };
@@ -1259,7 +1737,7 @@ index 4f64597c1..1157d19e9 100644
          })
      }
  }
-@@ -202,6 +284,58 @@ fn build_grain_from_legacy(
+@@ -202,6 +290,61 @@ fn build_grain_from_legacy(
      })
  }
  
@@ -1312,6 +1790,9 @@ index 4f64597c1..1157d19e9 100644
 +            include: resolve_reference_paths(&static_data.include, compiler)?,
 +        },
 +        direction,
++        // Set later by the planner (create_multi_stage_inode_member) once the
++        // measure/base types are known; the directive itself can't decide it.
++        distinct: false,
 +    }))
 +}
 +

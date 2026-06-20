@@ -1,5 +1,5 @@
 diff --git a/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts b/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts
-index 574cf8d85..50bb1f734 100644
+index a3cbf7aeb..2b5fae89d 100644
 --- a/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts
 +++ b/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts
 @@ -80,6 +80,7 @@ export const memberOrderByFixture = (): unknown => ({
@@ -11,10 +11,10 @@ index 574cf8d85..50bb1f734 100644
  });
  
 diff --git a/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts b/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts
-index 873b0d67d..62c12fbdf 100644
+index 154eec990..702115e19 100644
 --- a/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts
 +++ b/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts
-@@ -205,7 +205,7 @@ const BRIDGES: BridgeSpec[] = [
+@@ -204,7 +204,7 @@ const BRIDGES: BridgeSpec[] = [
    },
    {
      name: 'multiStageFilter',
@@ -24,10 +24,10 @@ index 873b0d67d..62c12fbdf 100644
    {
      name: 'multiStageGrain',
 diff --git a/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts b/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts
-index 1dd16f8aa..b20022528 100644
+index 9118b1037..3a3468cb9 100644
 --- a/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts
 +++ b/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts
-@@ -893,6 +893,9 @@ const MultiStageFilter = Joi.object().keys({
+@@ -930,6 +930,9 @@ const MultiStageFilter = Joi.object().keys({
    mode: Joi.string().valid('relative', 'fixed'),
    exclude: Joi.func(),
    keepOnly: Joi.func(),
@@ -54,7 +54,7 @@ index 665eaedac..d923c2503 100644
  
  #[nativebridge::native_bridge(MultiStageFilterReferencesStatic, with_static_meta)]
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs
-index 87c873bf4..23e802d30 100644
+index b5ac01cb1..6b93c55dd 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/logical_plan/multistage/calculation.rs
 @@ -70,6 +70,11 @@ pub struct MultiStageMeasureCalculation {
@@ -66,10 +66,10 @@ index 87c873bf4..23e802d30 100644
 +    /// normal calculations; AND-combined when present.
 +    #[builder(default)]
 +    post_filter: Vec<crate::planner::filter::FilterItem>,
-     source: Rc<FullKeyAggregate>,
- }
- 
-@@ -78,6 +83,10 @@ impl MultiStageMeasureCalculation {
+     /// Cumulative-distinct accumulate (spec §14): render this calculation as a
+     /// self-join of the (single) input state CTE on the accumulation axis +
+     /// aggregate `hll_cardinality_merge`, instead of the normal aggregate /
+@@ -86,6 +91,10 @@ impl MultiStageMeasureCalculation {
          &self.schema
      }
  
@@ -80,19 +80,19 @@ index 87c873bf4..23e802d30 100644
      pub fn is_ungrouped(&self) -> bool {
          self.is_ungrouped
      }
-@@ -186,6 +195,7 @@ impl LogicalNode for MultiStageMeasureCalculation {
+@@ -198,6 +207,7 @@ impl LogicalNode for MultiStageMeasureCalculation {
                  .order_by(self.order_by().clone())
                  .accumulate_order_by(self.accumulate_order_by().clone())
                  .accumulate_direction(self.accumulate_direction().clone())
 +                .post_filter(self.post_filter().clone())
+                 .accumulate_merge(self.accumulate_merge())
                  .source(source.clone().into_logical_node()?)
                  .build(),
-         ))
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs
-index 1c53565ce..e34198046 100644
+index 8dc21c621..b20212f18 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/multi_stage_measure_calculation.rs
-@@ -128,6 +128,19 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
+@@ -158,6 +158,19 @@ impl<'a> LogicalNodeProcessor<'a, MultiStageMeasureCalculation>
              }
              MultiStageCalculationWindowFunction::None => {}
          }
@@ -158,7 +158,7 @@ index e9fe44e85..13b97ee6f 100644
          &self.inode_type
      }
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
-index 9c415dfe3..94cffa0a2 100644
+index 6bf0732b2..bb9273eb6 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
 @@ -328,6 +328,7 @@ impl MultiStageMemberQueryPlanner {
@@ -166,14 +166,14 @@ index 9c415dfe3..94cffa0a2 100644
              .accumulate_order_by(accumulate_order_by)
              .accumulate_direction(accumulate_direction)
 +            .post_filter(multi_stage_member.post_filter().clone())
+             .accumulate_merge(accumulate.map(|a| a.distinct).unwrap_or(false))
              .source(Rc::new(
                  FullKeyAggregate::builder()
-                     .schema(full_key_aggregate_schema)
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
-index 7dc481cc6..4785ed4a0 100644
+index 28d6c9a24..890b02a81 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
-@@ -608,6 +608,11 @@ impl MultiStageQueryPlanner {
+@@ -658,6 +658,11 @@ impl MultiStageQueryPlanner {
          }
  
          let has_multi_stage_members = has_multi_stage_members(&member, false)?;
@@ -185,7 +185,7 @@ index 7dc481cc6..4785ed4a0 100644
          let description = if !has_multi_stage_members {
              let alias = scope.next_cte_name();
              MultiStageQueryDescription::new(
-@@ -640,6 +645,52 @@ impl MultiStageQueryPlanner {
+@@ -690,6 +695,52 @@ impl MultiStageQueryPlanner {
  
              let directive_filter = multi_stage_filter_directive(&member);
  
@@ -238,7 +238,7 @@ index 7dc481cc6..4785ed4a0 100644
              // new_state is the leaf grain on which children are computed.
              // For JOIN-model Aggregate inodes modifiers apply in this order:
              //   1. filter directive — pick `state` (Relative/None) or
-@@ -739,7 +790,7 @@ impl MultiStageQueryPlanner {
+@@ -789,7 +840,7 @@ impl MultiStageQueryPlanner {
              MultiStageQueryDescription::new(
                  MultiStageMember::new(
                      MultiStageMemberType::Inode(multi_stage_member),
@@ -247,7 +247,7 @@ index 7dc481cc6..4785ed4a0 100644
                      is_ungrupped,
                      false,
                  ),
-@@ -751,6 +802,41 @@ impl MultiStageQueryPlanner {
+@@ -801,6 +852,41 @@ impl MultiStageQueryPlanner {
          };
  
          descriptions.push(description.clone());
@@ -290,7 +290,7 @@ index 7dc481cc6..4785ed4a0 100644
      }
  
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
-index 1157d19e9..3c0600a9f 100644
+index 54784ed1a..e3652aeb7 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
 @@ -51,6 +51,11 @@ pub struct MultiStageFilter {
@@ -305,7 +305,7 @@ index 1157d19e9..3c0600a9f 100644
  }
  
  /// Set operation on the inherited grain context of a multi-stage member.
-@@ -209,6 +214,7 @@ impl MultiStageProperties {
+@@ -214,6 +219,7 @@ impl MultiStageProperties {
                  include_dimension: f_old.include_dimension.clone(),
                  include_time_dimension: f_old.include_time_dimension.clone(),
                  include_measure: f_old.include_measure.clone(),
@@ -313,7 +313,7 @@ index 1157d19e9..3c0600a9f 100644
              }),
              None => None,
          };
-@@ -383,5 +389,6 @@ fn build_filter(
+@@ -392,5 +398,6 @@ fn build_filter(
          include_dimension,
          include_time_dimension,
          include_measure,
