@@ -634,7 +634,23 @@ impl MultiStageQueryPlanner {
                             &names,
                             base.time_dimensions_filters(),
                         ));
-                        qualify_post_filter = items;
+                        // The post-filter runs over the measure CTE, which only
+                        // projects the query grid (dimensions + time dimensions).
+                        // A predicate on an excluded member that is NOT part of
+                        // that grid has no column to reference and would emit an
+                        // unresolved raw-cube reference (e.g. `cube.session_number`)
+                        // into a CTE that lacks it — breaking the query. Keep only
+                        // predicates whose member is in the grid; for the rest,
+                        // qualify is silently a no-op (the metric already ignores
+                        // them, and there is no output column to bound).
+                        let grid_names: Vec<String> = state
+                            .dimensions()
+                            .iter()
+                            .chain(state.time_dimensions().iter())
+                            .flat_map(|d| filter_directive_match_names(d))
+                            .collect();
+                        qualify_post_filter =
+                            crate::planner::filter::tree_ops::keep_only_members(&grid_names, &items);
                     }
                 }
             }
