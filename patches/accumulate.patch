@@ -1598,7 +1598,7 @@ index 5dfa0b066..3870b4370 100644
      /// by `add_time_series` when the requested time dimension has no
      /// explicit date range and the planner needs to compute one.
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
-index 4f64597c1..54784ed1a 100644
+index 4f64597c1..9d09fb9d0 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/symbols/common/multi_stage.rs
 @@ -2,6 +2,7 @@ use super::super::measure_symbol::MeasureTimeShifts;
@@ -1641,21 +1641,32 @@ index 4f64597c1..54784ed1a 100644
  }
  
  impl MultiStageProperties {
-@@ -88,10 +109,62 @@ impl MultiStageProperties {
+@@ -88,10 +109,73 @@ impl MultiStageProperties {
  
          let filter = build_filter(cube_name, definition.filter()?, compiler)?;
  
 +        let accumulate = build_accumulate(definition.accumulate()?, compiler)?;
 +        if accumulate.is_some() {
-+            // `accumulate` renders a running window aggregate `agg(agg(x)) OVER`.
-+            // Only idempotent/associative aggregations produce a faithful running
-+            // value: `sum`, `max`, `min`. Anything else (avg, count, number/…) is
-+            // an explicit not-implemented error rather than a silent fall-back to a
-+            // plain aggregate. (For a running count use `type: sum` over a count.)
++            // `accumulate` renders a running aggregate. The window path supports
++            // the idempotent/associative aggregations `sum`, `max`, `min` (plus
++            // `sum` over a distinct count — a running sum of counts). The
++            // cumulative-distinct join-model (spec §14) additionally supports
++            // `count_distinct_approx` (over a `count_distinct_approx` base). Other
++            // types (avg, number/…) are an explicit not-implemented error rather
++            // than a silent fall-back. This is a coarse type gate; the precise
++            // (outer, inner) eligibility is enforced in the planner
++            // (`is_accumulate_eligible` / `is_accumulate_distinct`).
 +            let measure_type = &definition.static_data().measure_type;
-+            if !matches!(measure_type.as_str(), "sum" | "max" | "min") {
++            if !matches!(
++                measure_type.as_str(),
++                "sum"
++                    | "max"
++                    | "min"
++                    | "count_distinct_approx"
++                    | "countDistinctApprox"
++            ) {
 +                return Err(CubeError::user(format!(
-+                    "Multi-stage `accumulate` is not implemented for measure type `{}` — supported types are `sum`, `max`, `min`. For a running count, use `type: sum` over a count measure.",
++                    "Multi-stage `accumulate` is not implemented for measure type `{}` — supported types are `sum`, `max`, `min`, and `count_distinct_approx` (cumulative distinct, over a count_distinct_approx base). For a running count, use `type: sum` over a count measure.",
 +                    measure_type
 +                )));
 +            }
@@ -1704,7 +1715,7 @@ index 4f64597c1..54784ed1a 100644
          }))
      }
  
-@@ -115,6 +188,7 @@ impl MultiStageProperties {
+@@ -115,6 +199,7 @@ impl MultiStageProperties {
              },
              filter,
              time_shift: None,
@@ -1712,7 +1723,7 @@ index 4f64597c1..54784ed1a 100644
          }))
      }
  
-@@ -150,10 +224,24 @@ impl MultiStageProperties {
+@@ -150,10 +235,24 @@ impl MultiStageProperties {
              include: map_refs(&self.grain.include)?,
          };
  
@@ -1737,7 +1748,7 @@ index 4f64597c1..54784ed1a 100644
          })
      }
  }
-@@ -202,6 +290,61 @@ fn build_grain_from_legacy(
+@@ -202,6 +301,61 @@ fn build_grain_from_legacy(
      })
  }
  
