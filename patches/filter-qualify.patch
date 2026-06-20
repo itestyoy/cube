@@ -170,10 +170,10 @@ index 9c415dfe3..94cffa0a2 100644
                  FullKeyAggregate::builder()
                      .schema(full_key_aggregate_schema)
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
-index 57731aa1f..27e2cc1ca 100644
+index 7dc481cc6..4785ed4a0 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
-@@ -573,6 +573,11 @@ impl MultiStageQueryPlanner {
+@@ -608,6 +608,11 @@ impl MultiStageQueryPlanner {
          }
  
          let has_multi_stage_members = has_multi_stage_members(&member, false)?;
@@ -185,7 +185,7 @@ index 57731aa1f..27e2cc1ca 100644
          let description = if !has_multi_stage_members {
              let alias = scope.next_cte_name();
              MultiStageQueryDescription::new(
-@@ -605,6 +610,52 @@ impl MultiStageQueryPlanner {
+@@ -640,6 +645,52 @@ impl MultiStageQueryPlanner {
  
              let directive_filter = multi_stage_filter_directive(&member);
  
@@ -238,7 +238,7 @@ index 57731aa1f..27e2cc1ca 100644
              // new_state is the leaf grain on which children are computed.
              // For JOIN-model Aggregate inodes modifiers apply in this order:
              //   1. filter directive — pick `state` (Relative/None) or
-@@ -704,7 +755,7 @@ impl MultiStageQueryPlanner {
+@@ -739,7 +790,7 @@ impl MultiStageQueryPlanner {
              MultiStageQueryDescription::new(
                  MultiStageMember::new(
                      MultiStageMemberType::Inode(multi_stage_member),
@@ -247,7 +247,7 @@ index 57731aa1f..27e2cc1ca 100644
                      is_ungrupped,
                      false,
                  ),
-@@ -716,6 +767,41 @@ impl MultiStageQueryPlanner {
+@@ -751,6 +802,41 @@ impl MultiStageQueryPlanner {
          };
  
          descriptions.push(description.clone());
