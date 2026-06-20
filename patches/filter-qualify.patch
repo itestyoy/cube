@@ -1,5 +1,5 @@
 diff --git a/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts b/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts
-index a3cbf7aeb..2b5fae89d 100644
+index 574cf8d85..50bb1f734 100644
 --- a/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts
 +++ b/packages/cubejs-backend-native/test/bridge/bridge-fixtures.ts
 @@ -80,6 +80,7 @@ export const memberOrderByFixture = (): unknown => ({
@@ -11,10 +11,10 @@ index a3cbf7aeb..2b5fae89d 100644
  });
  
 diff --git a/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts b/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts
-index 154eec990..702115e19 100644
+index 873b0d67d..62c12fbdf 100644
 --- a/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts
 +++ b/packages/cubejs-backend-native/test/bridge/object-bridges-coverage.test.ts
-@@ -204,7 +204,7 @@ const BRIDGES: BridgeSpec[] = [
+@@ -205,7 +205,7 @@ const BRIDGES: BridgeSpec[] = [
    },
    {
      name: 'multiStageFilter',
@@ -23,6 +23,20 @@ index 154eec990..702115e19 100644
    },
    {
      name: 'multiStageGrain',
+diff --git a/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts b/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts
+index 1dd16f8aa..b20022528 100644
+--- a/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts
++++ b/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts
+@@ -893,6 +893,9 @@ const MultiStageFilter = Joi.object().keys({
+   mode: Joi.string().valid('relative', 'fixed'),
+   exclude: Joi.func(),
+   keepOnly: Joi.func(),
++  // Re-apply the `exclude`d predicates as a post-computation CTE step so the
++  // metric ignores them but the output rows stay bounded. Default false.
++  qualify: Joi.boolean(),
+   include: Joi.array().items(
+     MultiStageIncludeMemberFilterSchema,
+     MultiStageIncludeConditionSchema
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/multi_stage_filter.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/multi_stage_filter.rs
 index 665eaedac..d923c2503 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/multi_stage_filter.rs
@@ -144,7 +158,7 @@ index e9fe44e85..13b97ee6f 100644
          &self.inode_type
      }
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
-index 0f62137b8..dfe3fac90 100644
+index 9c415dfe3..94cffa0a2 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
 @@ -328,6 +328,7 @@ impl MultiStageMemberQueryPlanner {
@@ -156,10 +170,10 @@ index 0f62137b8..dfe3fac90 100644
                  FullKeyAggregate::builder()
                      .schema(full_key_aggregate_schema)
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
-index b51af7aa2..d0d93b0e7 100644
+index 57731aa1f..27e2cc1ca 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/multi_stage_query_planner.rs
-@@ -572,6 +572,11 @@ impl MultiStageQueryPlanner {
+@@ -573,6 +573,11 @@ impl MultiStageQueryPlanner {
          }
  
          let has_multi_stage_members = has_multi_stage_members(&member, false)?;
@@ -171,7 +185,7 @@ index b51af7aa2..d0d93b0e7 100644
          let description = if !has_multi_stage_members {
              let alias = scope.next_cte_name();
              MultiStageQueryDescription::new(
-@@ -604,6 +609,52 @@ impl MultiStageQueryPlanner {
+@@ -605,6 +610,52 @@ impl MultiStageQueryPlanner {
  
              let directive_filter = multi_stage_filter_directive(&member);
  
@@ -224,7 +238,7 @@ index b51af7aa2..d0d93b0e7 100644
              // new_state is the leaf grain on which children are computed.
              // For JOIN-model Aggregate inodes modifiers apply in this order:
              //   1. filter directive — pick `state` (Relative/None) or
-@@ -703,7 +754,7 @@ impl MultiStageQueryPlanner {
+@@ -704,7 +755,7 @@ impl MultiStageQueryPlanner {
              MultiStageQueryDescription::new(
                  MultiStageMember::new(
                      MultiStageMemberType::Inode(multi_stage_member),
@@ -233,7 +247,7 @@ index b51af7aa2..d0d93b0e7 100644
                      is_ungrupped,
                      false,
                  ),
-@@ -715,6 +766,41 @@ impl MultiStageQueryPlanner {
+@@ -716,6 +767,41 @@ impl MultiStageQueryPlanner {
          };
  
          descriptions.push(description.clone());

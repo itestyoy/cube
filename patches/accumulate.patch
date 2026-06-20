@@ -78,6 +78,242 @@ index ea902c565..873b0d67d 100644
    {
      name: 'multiStageFilter',
      expected: ['exclude', 'include', 'keep_only', 'mode'],
+diff --git a/packages/cubejs-schema-compiler/src/compiler/CubeEvaluator.ts b/packages/cubejs-schema-compiler/src/compiler/CubeEvaluator.ts
+index 4b2fa3540..b1a26fda1 100644
+--- a/packages/cubejs-schema-compiler/src/compiler/CubeEvaluator.ts
++++ b/packages/cubejs-schema-compiler/src/compiler/CubeEvaluator.ts
+@@ -64,6 +64,21 @@ export type MultiStageGrainDirective = {
+   includeReferences?: string[];
+ };
+ 
++// `accumulate:` directive — a running-window accumulation over an arbitrary
++// axis. Shares the grain partition sets (exclude/keepOnly/include) and adds a
++// window ORDER BY `direction`. The native bridge reads the resolved
++// `*References` fields (not the function forms).
++export type MultiStageAccumulateDirective = {
++  exclude?: (...args: Array<unknown>) => Array<ToString>;
++  keepOnly?: (...args: Array<unknown>) => Array<ToString>;
++  include?: (...args: Array<unknown>) => Array<ToString>;
++  direction?: 'asc' | 'desc';
++  // Resolved sibling fields populated by `evaluateMultiStageReferences`.
++  excludeReferences?: string[];
++  keepOnlyReferences?: string[];
++  includeReferences?: string[];
++};
++
+ export type LinkDefinition = {
+   name: string;
+   label: string;
+@@ -121,6 +136,7 @@ export type MeasureDefinition = {
+   reduceBy?: (...args: Array<unknown>) => Array<ToString>;
+   addGroupBy?: (...args: Array<unknown>) => Array<ToString>;
+   grain?: MultiStageGrainDirective;
++  accumulate?: MultiStageAccumulateDirective;
+   timeShift?: TimeShiftDefinition[];
+   groupByReferences?: string[];
+   reduceByReferences?: string[];
+@@ -660,6 +676,17 @@ export class CubeEvaluator extends CubeSymbols {
+             member.grain.includeReferences = this.evaluateReferences(cubeName, member.grain.include);
+           }
+         }
++        if (member.accumulate) {
++          if (typeof member.accumulate.exclude === 'function') {
++            member.accumulate.excludeReferences = this.evaluateReferences(cubeName, member.accumulate.exclude);
++          }
++          if (typeof member.accumulate.keepOnly === 'function') {
++            member.accumulate.keepOnlyReferences = this.evaluateReferences(cubeName, member.accumulate.keepOnly);
++          }
++          if (typeof member.accumulate.include === 'function') {
++            member.accumulate.includeReferences = this.evaluateReferences(cubeName, member.accumulate.include);
++          }
++        }
+       }
+     }
+   }
+diff --git a/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts b/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts
+index 9003936fc..1dd16f8aa 100644
+--- a/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts
++++ b/packages/cubejs-schema-compiler/src/compiler/CubeValidator.ts
+@@ -905,6 +905,17 @@ const MultiStageGrain = Joi.object().keys({
+   include: Joi.func(),
+ }).nand('exclude', 'keepOnly');
+ 
++// `accumulate:` — running-window accumulation over an arbitrary axis. The
++// partition is shaped by the same exclude/keepOnly/include grain sets; the
++// dimensions that drop out of the partition become the window ORDER BY axis.
++// `direction` chooses the order along that axis (default asc).
++const MultiStageAccumulate = Joi.object().keys({
++  exclude: Joi.func(),
++  keepOnly: Joi.func(),
++  include: Joi.func(),
++  direction: Joi.string().valid('asc', 'desc'),
++}).nand('exclude', 'keepOnly');
++
+ const CaseSchema = Joi.object().keys({
+   when: Joi.array().items(Joi.object().keys({
+     sql: Joi.func().required(),
+@@ -954,6 +965,7 @@ const MeasuresSchema = Joi.object().pattern(identifierRegex, Joi.alternatives().
+       addGroupBy: Joi.func(),
+       filter: MultiStageFilter,
+       grain: MultiStageGrain,
++      accumulate: MultiStageAccumulate,
+       timeShift: Joi.alternatives().conditional(Joi.array().length(1), {
+         then: Joi.array().items(timeShiftItemOptional),
+         otherwise: Joi.array().items(timeShiftItemRequired)
+@@ -963,7 +975,7 @@ const MeasuresSchema = Joi.object().pattern(identifierRegex, Joi.alternatives().
+         sql: Joi.func().required(),
+         dir: Joi.string().valid('asc', 'desc')
+       })),
+-    })
++    }).nand('grain', 'accumulate')
+   }
+ ]).conditional(
+   Joi.ref('.type'), [
+diff --git a/packages/cubejs-schema-compiler/src/compiler/transpilers/CubePropContextTranspiler.ts b/packages/cubejs-schema-compiler/src/compiler/transpilers/CubePropContextTranspiler.ts
+index b703780f0..41fc6f5bd 100644
+--- a/packages/cubejs-schema-compiler/src/compiler/transpilers/CubePropContextTranspiler.ts
++++ b/packages/cubejs-schema-compiler/src/compiler/transpilers/CubePropContextTranspiler.ts
+@@ -21,6 +21,7 @@ export const transpiledFieldsPatterns: Array<RegExp> = [
+   /^measures\.[_a-zA-Z][_a-zA-Z0-9]*\.(reduceBy|reduce_by|groupBy|group_by|addGroupBy|add_group_by)$/,
+   /^(measures|dimensions)\.[_a-zA-Z][_a-zA-Z0-9]*\.filter\.(exclude|keepOnly|keep_only)$/,
+   /^measures\.[_a-zA-Z][_a-zA-Z0-9]*\.grain\.(exclude|keepOnly|keep_only|include)$/,
++  /^measures\.[_a-zA-Z][_a-zA-Z0-9]*\.accumulate\.(exclude|keepOnly|keep_only|include)$/,
+   /^(measures|dimensions)\.[_a-zA-Z][_a-zA-Z0-9]*\.case\.switch$/,
+   /^dimensions\.[_a-zA-Z][_a-zA-Z0-9]*\.(reduceBy|reduce_by|groupBy|group_by|addGroupBy|add_group_by|key)$/,
+   /^(preAggregations|pre_aggregations)\.[_a-zA-Z][_a-zA-Z0-9]*\.indexes\.[_a-zA-Z][_a-zA-Z0-9]*\.columns$/,
+diff --git a/packages/cubejs-schema-compiler/test/unit/cube-validator.test.ts b/packages/cubejs-schema-compiler/test/unit/cube-validator.test.ts
+index 183b44abe..3030440ba 100644
+--- a/packages/cubejs-schema-compiler/test/unit/cube-validator.test.ts
++++ b/packages/cubejs-schema-compiler/test/unit/cube-validator.test.ts
+@@ -910,6 +910,128 @@ describe('Cube Validation', () => {
+       expect(validationResult.error).toBeTruthy();
+     });
+ 
++    it('multi-stage accumulate — full directive accepted', async () => {
++      const cubeValidator = new CubeValidator(new CubeSymbols());
++      const cube = {
++        name: 'name',
++        sql: () => '',
++        fileName: 'fileName',
++        measures: {
++          running_total: {
++            multiStage: true,
++            type: 'sum',
++            sql: () => '',
++            accumulate: {
++              exclude: () => [],
++              direction: 'asc',
++            }
++          },
++          keep_only_variant: {
++            multiStage: true,
++            type: 'sum',
++            sql: () => '',
++            accumulate: {
++              keepOnly: () => [],
++              direction: 'desc',
++            }
++          },
++        }
++      };
++
++      const validationResult = cubeValidator.validate(cube, {
++        error: (message: any, _e: any) => {
++          console.log(message);
++        }
++      } as any);
++
++      expect(validationResult.error).toBeFalsy();
++    });
++
++    it('multi-stage accumulate — exclude and keepOnly are mutually exclusive', async () => {
++      const cubeValidator = new CubeValidator(new CubeSymbols());
++      const cube = {
++        name: 'name',
++        sql: () => '',
++        fileName: 'fileName',
++        measures: {
++          both_set: {
++            multiStage: true,
++            type: 'sum',
++            sql: () => '',
++            accumulate: {
++              exclude: () => [],
++              keepOnly: () => [],
++            }
++          }
++        }
++      };
++
++      const validationResult = cubeValidator.validate(cube, {
++        error: (message: any, _e: any) => {
++          console.log(message);
++          expect(message).toContain('exclude');
++          expect(message).toContain('keepOnly');
++        }
++      } as any);
++
++      expect(validationResult.error).toBeTruthy();
++    });
++
++    it('multi-stage accumulate — direction must be asc or desc', async () => {
++      const cubeValidator = new CubeValidator(new CubeSymbols());
++      const cube = {
++        name: 'name',
++        sql: () => '',
++        fileName: 'fileName',
++        measures: {
++          bad_direction: {
++            multiStage: true,
++            type: 'sum',
++            sql: () => '',
++            accumulate: {
++              exclude: () => [],
++              direction: 'sideways',
++            }
++          }
++        }
++      };
++
++      const validationResult = cubeValidator.validate(cube, {
++        error: (message: any, _e: any) => {
++          console.log(message);
++          expect(message).toContain('direction');
++        }
++      } as any);
++
++      expect(validationResult.error).toBeTruthy();
++    });
++
++    it('multi-stage accumulate — cannot be combined with grain', async () => {
++      const cubeValidator = new CubeValidator(new CubeSymbols());
++      const cube = {
++        name: 'name',
++        sql: () => '',
++        fileName: 'fileName',
++        measures: {
++          grain_and_accumulate: {
++            multiStage: true,
++            type: 'sum',
++            sql: () => '',
++            grain: { exclude: () => [] },
++            accumulate: { exclude: () => [] },
++          }
++        }
++      };
++
++      const validationResult = cubeValidator.validate(cube, {
++        error: (message: any, _e: any) => {
++          console.log(message);
++        }
++      } as any);
++
++      expect(validationResult.error).toBeTruthy();
++    });
++
+     it('multi-stage grain — rejected on multi-stage dimension', async () => {
+       const cubeValidator = new CubeValidator(new CubeSymbols());
+       const cube = {
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/measure_definition.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/measure_definition.rs
 index b9b54f3b5..59f7b7021 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/cube_bridge/measure_definition.rs
@@ -304,10 +540,10 @@ index 4620ad8c6..fff363588 100644
  pub use parenthesize::ParenthesizeSqlNode;
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/multi_stage_accumulate.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/multi_stage_accumulate.rs
 new file mode 100644
-index 000000000..b4cf97695
+index 000000000..6f1289bb9
 --- /dev/null
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan/sql_nodes/multi_stage_accumulate.rs
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,151 @@
 +use super::SqlNode;
 +use crate::physical_plan::SqlEvaluatorVisitor;
 +use crate::planner::query_tools::QueryTools;
@@ -328,7 +564,9 @@ index 000000000..b4cf97695
 +/// Structurally this is [`MultiStageWindowNode`](super::MultiStageWindowNode)
 +/// plus an `ORDER BY` axis and an `UNBOUNDED PRECEDING` frame. The partition
 +/// is the query grain minus the accumulation axis; the axis itself is the
-+/// `order_by`. Non-window measures go through `else_processor`.
++/// `order_by`. The planner derives a single-column axis (the last `exclude`
++/// member), so this `ORDER BY` is normally one column — keeping the `RANGE`
++/// frame deterministic. Non-window measures go through `else_processor`.
 +pub struct MultiStageAccumulateNode {
 +    input: Rc<dyn SqlNode>,
 +    else_processor: Rc<dyn SqlNode>,
@@ -599,39 +837,26 @@ index 9a429eecd..e9fe44e85 100644
          &self.inode_type
      }
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
-index 689d4fc95..ee6d3fcde 100644
+index 689d4fc95..9c415dfe3 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
-@@ -210,16 +210,54 @@ impl MultiStageMemberQueryPlanner {
+@@ -210,16 +210,41 @@ impl MultiStageMemberQueryPlanner {
          &self,
          multi_stage_member: &MultiStageInodeMember,
      ) -> Result<Rc<LogicalMultiStageMember>, CubeError> {
 -        let partition_by = self.member_partition_by_logical(multi_stage_member.grain());
 +        // `accumulate:` shapes the partition with its own grain
 +        // (exclude / keep_only); every other inode uses its own grain.
++        // For accumulate, partition + the single ORDER BY axis are derived
++        // together so the running window stays deterministic (see
++        // `accumulate_partition_and_order`).
 +        let accumulate = multi_stage_member.accumulate();
-+        let partition_by = match accumulate {
-+            // Granularity-agnostic matching so the axis works whether the time
-+            // dimension is queried raw or rolled to a granularity (day/week/…).
-+            Some(accum) => self.accumulate_partition_by(&accum.grain),
-+            None => self.member_partition_by_logical(multi_stage_member.grain()),
-+        };
-+
-+        // The running window's ORDER BY axis is the set of query dimensions
-+        // that dropped out of the partition. Empty when nothing dropped out
-+        // (the accumulate then falls back to a plain aggregate below).
-+        let accumulate_order_by = if accumulate.is_some() {
-+            self.all_dimensions()
-+                .into_iter()
-+                .filter(|d| {
-+                    let name = d.clone().resolve_reference_chain().full_name();
-+                    !partition_by
-+                        .iter()
-+                        .any(|p| p.clone().resolve_reference_chain().full_name() == name)
-+                })
-+                .collect_vec()
-+        } else {
-+            vec![]
++        let (partition_by, accumulate_order_by) = match accumulate {
++            Some(accum) => self.accumulate_partition_and_order(&accum.grain),
++            None => (
++                self.member_partition_by_logical(multi_stage_member.grain()),
++                vec![],
++            ),
 +        };
 +        let accumulate_direction = accumulate
 +            .as_ref()
@@ -659,7 +884,7 @@ index 689d4fc95..ee6d3fcde 100644
              MultiStageInodeMemberType::Aggregate
                  if multi_stage_member.use_window_path()
                      && partition_by.len() != self.all_dimensions().len() =>
-@@ -301,6 +339,8 @@ impl MultiStageMemberQueryPlanner {
+@@ -301,6 +326,8 @@ impl MultiStageMemberQueryPlanner {
              .partition_by(partition_by)
              .window_function_to_use(window_function_to_use)
              .order_by(self.query_order_by()?)
@@ -668,35 +893,84 @@ index 689d4fc95..ee6d3fcde 100644
              .source(Rc::new(
                  FullKeyAggregate::builder()
                      .schema(full_key_aggregate_schema)
-@@ -558,6 +598,33 @@ impl MultiStageMemberQueryPlanner {
+@@ -558,6 +585,82 @@ impl MultiStageMemberQueryPlanner {
          dimensions
      }
  
-+    /// Partition for an `accumulate:` window. Same shape as
-+    /// `member_partition_by_logical`, but matches members granularity-agnostically
-+    /// (`matches_grain_member`) so a queried time dimension at any granularity is
-+    /// recognised by an `exclude` / `keep_only` referencing the base time
-+    /// dimension. Kept separate so grain/rank matching stays byte-for-byte
-+    /// unchanged.
-+    fn accumulate_partition_by(&self, grain: &MultiStageGrain) -> Vec<Rc<MemberSymbol>> {
++    /// Partition + the single ORDER BY axis for an `accumulate:` window.
++    /// Returns `(partition_by, order_by)`.
++    ///
++    /// The accumulation axis is always exactly ONE dimension so the `RANGE`
++    /// running window is deterministic and well-defined (a multi-column
++    /// `RANGE ORDER BY` is order-sensitive and its result depends on the order
++    /// dimensions happen to appear in the query — the bug this fixes).
++    ///
++    /// - `exclude`: the axis is the LAST excluded member (in declared order)
++    ///   that is actually present in the query dimensions; every other query
++    ///   dimension — including earlier excluded ones — forms the partition. So
++    ///   which member partitions vs. orders is decided dynamically by what the
++    ///   query selects. With `exclude: [retention_day, session_number]`:
++    ///     - query `[session, retention]` → `PARTITION BY retention ORDER BY session`
++    ///     - query `[retention]`          → `ORDER BY retention` (no partition)
++    ///     - query `[session]`            → `ORDER BY session`   (no partition)
++    ///   This keeps the result independent of the order dimensions appear in
++    ///   the query. A single excluded member is identical to the old behaviour.
++    /// - `keep_only`: partition is the kept dimensions; the axis is whatever
++    ///   remains. (Legacy shape — deterministic only when exactly one remains.)
++    ///
++    /// Matching is granularity-agnostic (`matches_grain_member`) so a queried
++    /// time dimension at any granularity is recognised by an `exclude` /
++    /// `keep_only` referencing the base time dimension.
++    fn accumulate_partition_and_order(
++        &self,
++        grain: &MultiStageGrain,
++    ) -> (Vec<Rc<MemberSymbol>>, Vec<Rc<MemberSymbol>>) {
 +        let dimensions = self.all_dimensions();
-+        let dimensions = if let Some(exclude) = &grain.exclude {
++
++        // `exclude`: the axis is the last excluded member that the query
++        // actually selects (declared order breaks ties); everything else stays
++        // in the partition. If no excluded member is present, the axis is empty
++        // and we fall through to the degenerate (plain aggregate) handling.
++        if let Some(exclude) = &grain.exclude {
++            let axis_member = exclude
++                .iter()
++                .rev()
++                .find(|m| dimensions.iter().any(|d| d.matches_grain_member(m)));
++            if let Some(axis_member) = axis_member {
++                let partition = dimensions
++                    .iter()
++                    .filter(|d| !d.matches_grain_member(axis_member))
++                    .cloned()
++                    .collect_vec();
++                let order_by = dimensions
++                    .into_iter()
++                    .filter(|d| d.matches_grain_member(axis_member))
++                    .collect_vec();
++                return (partition, order_by);
++            }
++        }
++
++        // `keep_only` (or empty): partition is the kept dimensions; the axis is
++        // every dimension that is not kept, in query order.
++        let partition = if let Some(keep_only) = &grain.keep_only {
 +            dimensions
-+                .into_iter()
-+                .filter(|d| !exclude.iter().any(|m| d.matches_grain_member(m)))
-+                .collect_vec()
-+        } else {
-+            dimensions
-+        };
-+        let dimensions = if let Some(keep_only) = &grain.keep_only {
-+            dimensions
-+                .into_iter()
++                .iter()
 +                .filter(|d| keep_only.iter().any(|m| d.matches_grain_member(m)))
++                .cloned()
 +                .collect_vec()
 +        } else {
-+            dimensions
++            dimensions.clone()
 +        };
-+        dimensions
++        let order_by = dimensions
++            .into_iter()
++            .filter(|d| {
++                let name = d.clone().resolve_reference_chain().full_name();
++                !partition
++                    .iter()
++                    .any(|p| p.clone().resolve_reference_chain().full_name() == name)
++            })
++            .collect_vec();
++        (partition, order_by)
 +    }
 +
      fn query_order_by(&self) -> Result<Vec<OrderByItem>, CubeError> {
