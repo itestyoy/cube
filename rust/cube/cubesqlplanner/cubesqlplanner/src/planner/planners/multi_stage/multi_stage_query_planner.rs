@@ -209,10 +209,11 @@ impl MultiStageQueryPlanner {
             if accumulate.is_some() && !accumulate_eligible {
                 return Err(CubeError::user(
                     "Multi-stage `accumulate` is only implemented for faithful running \
-                     aggregates: `sum` over a sum/count measure, `max` over a max measure, \
-                     or `min` over a min measure. Cross-type or non-additive combinations \
-                     (e.g. sum over avg/max, max over sum, sum over count_distinct) are not \
-                     implemented."
+                     aggregates: `sum` over a sum/count/count_distinct/count_distinct_approx \
+                     measure (note: sum over a distinct count is a running SUM of the \
+                     per-bucket distinct counts, not a cumulative unique count), `max` over a \
+                     max measure, or `min` over a min measure. Cross-type or non-additive \
+                     combinations (e.g. sum over avg/max, max over sum) are not implemented."
                         .to_string(),
                 ));
             }
@@ -318,14 +319,21 @@ impl MultiStageQueryPlanner {
         }
     }
 
-    /// Accumulate-only window eligibility. Validity is decided by the OUTER
-    /// aggregation (`sum` / `max` / `min`) — the running aggregates that are
-    /// faithful over a window. The INNER expression (the measure's `sql`) is the
-    /// user's business and is intentionally NOT constrained: the window renders
-    /// `agg(agg(value)) OVER (…)`, and at query grain the inner `agg` is over a
-    /// single row (identity), so it collapses to `agg(value) OVER (…)` whatever
-    /// `value` aggregates — `sum(max(x))`, `max(sum(x))`, `sum(avg(x))` are all
-    /// well-defined running aggregates of the user's value. The only structural
+    /// Accumulate-only window eligibility — the faithful (outer, inner)
+    /// aggregation pairs for a running `agg(agg(value)) OVER (…)` window. The
+    /// allowed pairs are:
+    ///   - `sum` over `sum` / `count`            — additive rollup (count rolls up as sum)
+    ///   - `sum` over `count_distinct` / `count_distinct_approx`
+    ///                                            — running SUM of the per-bucket
+    ///       (approximate) distinct counts. The inner measure produces a numeric
+    ///       cardinality per query-grain row and the window sums those numbers, so
+    ///       it is arithmetically additive and faithful. NOTE: this is a running
+    ///       sum of distinct counts, NOT a cumulative unique count — it
+    ///       double-counts entities shared across buckets. A true cumulative
+    ///       unique count would need an HLL-merge window (out of scope).
+    ///   - `max` over `max`, `min` over `min`     — idempotent rollup (inner must match outer)
+    /// Cross-type / non-additive pairs (e.g. `sum` over `avg`/`max`, `max` over
+    /// `sum`) stay rejected as an explicit not-implemented error. The structural
     /// requirement is a single measure dependency, so the window-path assembly
     /// has one input CTE. Kept separate from `is_window_path_eligible` (which is
     /// sum-rollup-specific and stays in use for grain/rank) so their eligibility
@@ -335,6 +343,33 @@ impl MultiStageQueryPlanner {
         // with grain/rank via `is_window_path_eligible`.
         if Self::is_window_path_eligible(base_member) {
             return true;
+        }
+        // `sum` over a distinct count (`count_distinct` / `count_distinct_approx`):
+        // window renders `sum(sum(<cardinality>)) OVER (…)` — a running sum of the
+        // per-bucket (approximate) distinct counts. Additive over those numbers,
+        // hence faithful (see the doc note above re: not a cumulative unique count).
+        if let Ok(outer) = base_member.as_measure() {
+            let outer_is_sum = matches!(
+                outer.kind(),
+                MeasureKind::Aggregated(a) if a.agg_type() == AggregationType::Sum
+            );
+            if outer_is_sum {
+                if let [dep] = base_member.get_dependencies().as_slice() {
+                    if let Ok(inner) = dep.clone().resolve_reference_chain().as_measure() {
+                        if matches!(
+                            inner.kind(),
+                            MeasureKind::Aggregated(a)
+                                if matches!(
+                                    a.agg_type(),
+                                    AggregationType::CountDistinct
+                                        | AggregationType::CountDistinctApprox
+                                )
+                        ) {
+                            return true;
+                        }
+                    }
+                }
+            }
         }
         // `max` over `max` / `min` over `min` — idempotent rollup, so `max(max)`
         // / `min(min)` is faithful. The inner aggregation MUST match the outer;
