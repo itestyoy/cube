@@ -1172,7 +1172,7 @@ index 9a429eecd..e9fe44e85 100644
          &self.inode_type
      }
 diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
-index 689d4fc95..ca91f0f4a 100644
+index 689d4fc95..ab3c4669c 100644
 --- a/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
 +++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/planner/planners/multi_stage/member_query_planner.rs
 @@ -210,16 +210,41 @@ impl MultiStageMemberQueryPlanner {
@@ -1225,7 +1225,7 @@ index 689d4fc95..ca91f0f4a 100644
              .order_by(self.query_order_by()?)
 +            .accumulate_order_by(accumulate_order_by)
 +            .accumulate_direction(accumulate_direction)
-+            .accumulate_merge(accumulate.map(|a| a.distinct).unwrap_or(false))
++            .accumulate_merge(matches!(accumulate, Some(a) if a.distinct))
              .source(Rc::new(
                  FullKeyAggregate::builder()
                      .schema(full_key_aggregate_schema)
