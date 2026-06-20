@@ -9,6 +9,7 @@
 pub mod auto_prefix;
 pub mod calendar_time_shift;
 pub mod case;
+pub mod count_approx_merge;
 //pub mod cube_calc_groups;
 pub mod evaluate_sql;
 pub mod factory;
@@ -33,6 +34,7 @@ pub mod ungroupped_query_final_measure;
 
 pub use auto_prefix::AutoPrefixSqlNode;
 pub use case::CaseSqlNode;
+pub use count_approx_merge::CountApproxMergeNode;
 //pub use cube_calc_groups::CubeCalcGroupsSqlNode;
 pub use evaluate_sql::EvaluateSqlNode;
 pub use factory::SqlNodesFactory;

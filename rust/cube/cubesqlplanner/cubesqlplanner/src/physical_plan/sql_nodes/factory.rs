@@ -1,5 +1,5 @@
 use super::{
-    AutoPrefixSqlNode, CaseSqlNode, EvaluateSqlNode, FinalMeasureSqlNode,
+    AutoPrefixSqlNode, CaseSqlNode, CountApproxMergeNode, EvaluateSqlNode, FinalMeasureSqlNode,
     FinalPreAggregationMeasureSqlNode, GeoDimensionSqlNode, MaskedSqlNode, MeasureFilterSqlNode,
     MultiStageAccumulateNode, MultiStageRankNode, MultiStageWindowNode, ParenthesizeSqlNode,
     RenderReferencesSqlNode,
@@ -35,6 +35,10 @@ pub struct SqlNodesFactory {
     multi_stage_window: Option<Vec<String>>, //partition_by
     // (partition_by, order_by, direction) for the `accumulate:` running window
     multi_stage_accumulate: Option<(Vec<String>, Vec<String>, String)>,
+    // Render `count_distinct_approx` measures as an aggregate HLL merge
+    // (`hll_cardinality_merge`) — the accumulate cumulative-distinct join-model
+    // (spec §14). Set only by the accumulate-merge processor.
+    count_approx_merge: bool,
     rolling_window: bool,
     dimensions_with_ignored_timezone: HashSet<String>,
     use_local_tz_in_date_range: bool,
@@ -151,6 +155,10 @@ impl SqlNodesFactory {
         self.count_approx_as_state = value;
     }
 
+    pub fn set_count_approx_merge(&mut self, value: bool) {
+        self.count_approx_merge = value;
+    }
+
     pub fn add_ungrouped_measure_reference<T: Into<RenderReferencesType>>(
         &mut self,
         name: String,
@@ -210,6 +218,8 @@ impl SqlNodesFactory {
             measure_processor,
             measure_filter_processor.clone(),
         );
+        let measure_processor = self
+            .add_count_approx_merge_if_needed(measure_processor, measure_filter_processor.clone());
         let measure_processor = self.add_multi_stage_rank_if_needed(measure_processor);
 
         let default_processor: Rc<dyn SqlNode> =
@@ -279,6 +289,22 @@ impl SqlNodesFactory {
                 order_by.clone(),
                 direction.clone(),
             )
+        } else {
+            default
+        }
+    }
+
+    // Cumulative-distinct accumulate (spec §14): render `count_distinct_approx`
+    // measures as an aggregate `hll_cardinality_merge(<state>)`. `merge_input`
+    // renders the measure body (its inner resolves to the joined state column);
+    // every other measure falls through to `default`.
+    fn add_count_approx_merge_if_needed(
+        &self,
+        default: Rc<dyn SqlNode>,
+        merge_input: Rc<dyn SqlNode>,
+    ) -> Rc<dyn SqlNode> {
+        if self.count_approx_merge {
+            CountApproxMergeNode::new(merge_input, default)
         } else {
             default
         }

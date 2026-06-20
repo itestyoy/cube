@@ -75,6 +75,14 @@ pub struct MultiStageMeasureCalculation {
     /// normal calculations; AND-combined when present.
     #[builder(default)]
     post_filter: Vec<crate::planner::filter::FilterItem>,
+    /// Cumulative-distinct accumulate (spec §14): render this calculation as a
+    /// self-join of the (single) input state CTE on the accumulation axis +
+    /// aggregate `hll_cardinality_merge`, instead of the normal aggregate /
+    /// window. `partition_by` is the partition grid, `accumulate_order_by[0]` is
+    /// the axis, `accumulate_direction` chooses `<=` (asc) / `>=` (desc).
+    /// Default `false`.
+    #[builder(default)]
+    accumulate_merge: bool,
     source: Rc<FullKeyAggregate>,
 }
 
@@ -113,6 +121,10 @@ impl MultiStageMeasureCalculation {
 
     pub fn accumulate_direction(&self) -> &String {
         &self.accumulate_direction
+    }
+
+    pub fn accumulate_merge(&self) -> bool {
+        self.accumulate_merge
     }
 
     pub fn source(&self) -> &Rc<FullKeyAggregate> {
@@ -196,6 +208,7 @@ impl LogicalNode for MultiStageMeasureCalculation {
                 .accumulate_order_by(self.accumulate_order_by().clone())
                 .accumulate_direction(self.accumulate_direction().clone())
                 .post_filter(self.post_filter().clone())
+                .accumulate_merge(self.accumulate_merge())
                 .source(source.clone().into_logical_node()?)
                 .build(),
         ))

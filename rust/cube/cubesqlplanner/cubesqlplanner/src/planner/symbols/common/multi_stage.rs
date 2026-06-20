@@ -81,6 +81,11 @@ pub struct MultiStageAccumulate {
     pub grain: MultiStageGrain,
     /// "asc" | "desc" — normalized at construction; default "asc".
     pub direction: String,
+    /// Cumulative-distinct join-model (spec §14): set by the planner when the
+    /// measure and its base are both `count_distinct_approx`. When `true` the
+    /// running window is replaced by a self-join + aggregate `hll_cardinality_merge`
+    /// (a true cumulative unique count). Default `false` (the window path).
+    pub distinct: bool,
 }
 
 #[derive(Clone)]
@@ -233,6 +238,7 @@ impl MultiStageProperties {
                     include: map_refs(&a.grain.include)?,
                 },
                 direction: a.direction.clone(),
+                distinct: a.distinct,
             }),
             None => None,
         };
@@ -339,6 +345,9 @@ fn build_accumulate(
             include: resolve_reference_paths(&static_data.include, compiler)?,
         },
         direction,
+        // Set later by the planner (create_multi_stage_inode_member) once the
+        // measure/base types are known; the directive itself can't decide it.
+        distinct: false,
     }))
 }
 
