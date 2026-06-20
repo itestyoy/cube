@@ -111,15 +111,26 @@ impl MultiStageProperties {
 
         let accumulate = build_accumulate(definition.accumulate()?, compiler)?;
         if accumulate.is_some() {
-            // `accumulate` renders a running window aggregate `agg(agg(x)) OVER`.
-            // Only idempotent/associative aggregations produce a faithful running
-            // value: `sum`, `max`, `min`. Anything else (avg, count, number/…) is
-            // an explicit not-implemented error rather than a silent fall-back to a
-            // plain aggregate. (For a running count use `type: sum` over a count.)
+            // `accumulate` renders a running aggregate. The window path supports
+            // the idempotent/associative aggregations `sum`, `max`, `min` (plus
+            // `sum` over a distinct count — a running sum of counts). The
+            // cumulative-distinct join-model (spec §14) additionally supports
+            // `count_distinct_approx` (over a `count_distinct_approx` base). Other
+            // types (avg, number/…) are an explicit not-implemented error rather
+            // than a silent fall-back. This is a coarse type gate; the precise
+            // (outer, inner) eligibility is enforced in the planner
+            // (`is_accumulate_eligible` / `is_accumulate_distinct`).
             let measure_type = &definition.static_data().measure_type;
-            if !matches!(measure_type.as_str(), "sum" | "max" | "min") {
+            if !matches!(
+                measure_type.as_str(),
+                "sum"
+                    | "max"
+                    | "min"
+                    | "count_distinct_approx"
+                    | "countDistinctApprox"
+            ) {
                 return Err(CubeError::user(format!(
-                    "Multi-stage `accumulate` is not implemented for measure type `{}` — supported types are `sum`, `max`, `min`. For a running count, use `type: sum` over a count measure.",
+                    "Multi-stage `accumulate` is not implemented for measure type `{}` — supported types are `sum`, `max`, `min`, and `count_distinct_approx` (cumulative distinct, over a count_distinct_approx base). For a running count, use `type: sum` over a count measure.",
                     measure_type
                 )));
             }
