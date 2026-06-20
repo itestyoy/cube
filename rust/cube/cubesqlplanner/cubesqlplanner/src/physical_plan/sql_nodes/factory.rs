@@ -204,6 +204,12 @@ impl SqlNodesFactory {
         let measure_processor = CaseSqlNode::new(measure_filter_processor.clone());
 
         let measure_processor = self.add_ungrouped_measure_reference_if_needed(measure_processor);
+        // The measure chain with `ungrouped_measure_references` resolved — a cda
+        // measure that has such a reference renders as the referenced column
+        // (e.g. `acc_merge.<state>`) rather than its body. `count_approx_merge`
+        // wraps THIS chain so it merges that column once, instead of re-rendering
+        // (and double-wrapping) the measure expression.
+        let ungrouped_resolved_processor = measure_processor.clone();
         let measure_processor = self.final_measure_node_processor(measure_processor);
         // Wrap the entire measure chain with MaskedSqlNode so masked measures
         // are intercepted before aggregation/ungrouped wrapping.
@@ -219,7 +225,7 @@ impl SqlNodesFactory {
             measure_filter_processor.clone(),
         );
         let measure_processor = self
-            .add_count_approx_merge_if_needed(measure_processor, measure_filter_processor.clone());
+            .add_count_approx_merge_if_needed(measure_processor, ungrouped_resolved_processor);
         let measure_processor = self.add_multi_stage_rank_if_needed(measure_processor);
 
         let default_processor: Rc<dyn SqlNode> =
