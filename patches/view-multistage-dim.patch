@@ -1,0 +1,29 @@
+diff --git a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/query.rs b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/query.rs
+index 7b1fa4c93..2b9f75145 100644
+--- a/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/query.rs
++++ b/rust/cube/cubesqlplanner/cubesqlplanner/src/physical_plan_builder/processors/query.rs
+@@ -54,11 +54,22 @@ impl<'a> LogicalNodeProcessor<'a, Query> for QueryProcessor<'a> {
+                 vec![]
+             };
+         for member in logical_plan.schema().multi_stage_dimensions()? {
++            // Key the multi-stage-dimension lookup by the RESOLVED member name
++            // (following the reference chain), matching how the dimension-
++            // calculation CTE registers its schema in `RootQuery` via
++            // `resolved_dimensions()` (which also resolves the chain). Without
++            // this, a multi-stage dimension queried through a VIEW is added
++            // under the view path (`view.dim`) while the schema is registered
++            // under the cube path (`cube.dim`), so the sorted-name lookup misses
++            // ("Cannot find source for resolve multi stage dimensions"). For a
++            // cube-direct query the resolved name equals `full_name()`, so this
++            // is a no-op there.
++            let member_name = member.clone().resolve_reference_chain().full_name();
+             if resolved_multistage_dimension
+                 .iter()
+-                .all(|d| d.full_name() != member.full_name())
++                .all(|d| d.clone().resolve_reference_chain().full_name() != member_name)
+             {
+-                context.add_multi_stage_dimension(member.full_name());
++                context.add_multi_stage_dimension(member_name);
+             }
+         }
+ 

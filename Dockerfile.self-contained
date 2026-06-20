@@ -133,8 +133,12 @@ COPY rust/cubesql ./rust/cubesql
 # git is installed above; `git apply` (incl. --include) works without a .git repo.
 COPY patches/accumulate.patch /tmp/accumulate.patch
 COPY patches/filter-qualify.patch /tmp/filter-qualify.patch
+# Standalone upstream fix (rust-only): resolve multi-stage dimension name for
+# view lookup. Independent of the feature patches (touches only query.rs).
+COPY patches/view-multistage-dim.patch /tmp/view-multistage-dim.patch
 RUN git apply --verbose --include='rust/*' --include='packages/cubejs-backend-native/*' /tmp/accumulate.patch && \
-    git apply --verbose --include='rust/*' --include='packages/cubejs-backend-native/*' /tmp/filter-qualify.patch
+    git apply --verbose --include='rust/*' --include='packages/cubejs-backend-native/*' /tmp/filter-qualify.patch && \
+    git apply --verbose --include='rust/*' /tmp/view-multistage-dim.patch
 
 # Build native module (workflow command from line 121)
 # For fallback (no Python) version
