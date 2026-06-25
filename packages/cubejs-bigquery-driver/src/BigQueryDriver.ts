@@ -173,7 +173,12 @@ export class BigQueryDriver extends BaseDriver implements DriverInterface {
 
     this.bigquery = new BigQuery(this.options);
     if (this.options.exportBucket) {
-      this.storage = new Storage(this.options);
+      // `this.options` is typed as BigQueryOptions; from @google-cloud/bigquery
+      // v8 its bundled google-auth-library diverged from @google-cloud/storage's,
+      // so StorageOptions is no longer structurally assignable (authClient.gaxios).
+      // The object is valid for Storage at runtime — bypass the cross-package
+      // type skew here.
+      this.storage = new Storage(this.options as any);
       this.bucket = this.storage.bucket(this.options.exportBucket);
     }
 
