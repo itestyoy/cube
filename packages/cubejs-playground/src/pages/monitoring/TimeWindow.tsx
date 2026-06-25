@@ -1,17 +1,31 @@
 import { useState } from 'react';
-import { Button, DatePicker, Dropdown } from 'antd';
+import { Button, Dropdown, Slider } from 'antd';
 import { CalendarOutlined, DownOutlined } from '@ant-design/icons';
 
 import { Range, WINDOW_OPTIONS } from './common';
 
-const { RangePicker } = DatePicker;
-
 /**
  * Analytics time-interval picker: relative presets (15m … 7d) plus a custom
- * absolute [from, to) range. Emits a Range the pages turn into query params.
+ * absolute range chosen with a dual-handle slider over the last 72 hours
+ * (−72h … Now). Emits a Range the pages turn into query params.
  */
 export function TimeWindow({ value, onChange }: { value: Range; onChange: (r: Range) => void }) {
   const [visible, setVisible] = useState(false);
+  // Slider value is "hours ago": [olderEdge, newerEdge]; reversed so Now is on
+  // the right. Default mirrors the last-24h window.
+  const [slider, setSlider] = useState<[number, number]>([24, 0]);
+
+  const applySlider = (v: number[]) => {
+    const older = Math.max(v[0], v[1]);
+    const newer = Math.min(v[0], v[1]);
+    const now = Date.now();
+    onChange({
+      from: new Date(now - older * 3600 * 1000).toISOString(),
+      to: new Date(now - newer * 3600 * 1000).toISOString(),
+      label: newer === 0 ? `Last ${older}h` : `${older}h → ${newer}h ago`,
+    });
+    setVisible(false);
+  };
 
   const panel = (
     <div
@@ -20,7 +34,7 @@ export function TimeWindow({ value, onChange }: { value: Range; onChange: (r: Ra
         padding: 16,
         boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
         borderRadius: 8,
-        width: 320,
+        width: 360,
       }}
     >
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
@@ -38,20 +52,18 @@ export function TimeWindow({ value, onChange }: { value: Range; onChange: (r: Ra
           </Button>
         ))}
       </div>
-      <div style={{ color: '#888', fontSize: 12, marginBottom: 6 }}>Custom range</div>
-      <RangePicker
-        showTime
-        style={{ width: '100%' }}
-        onChange={(vals: any) => {
-          if (vals && vals[0] && vals[1]) {
-            onChange({
-              from: vals[0].toISOString(),
-              to: vals[1].toISOString(),
-              label: `${vals[0].format('MMM D, HH:mm')} – ${vals[1].format('MMM D, HH:mm')}`,
-            });
-            setVisible(false);
-          }
-        }}
+      <div style={{ color: '#888', fontSize: 12, marginBottom: 4 }}>Custom range (drag the handles)</div>
+      <Slider
+        range
+        reverse
+        min={0}
+        max={72}
+        step={1}
+        value={slider}
+        marks={{ 0: 'Now', 24: '-24h', 48: '-48h', 72: '-72h' }}
+        tipFormatter={(v?: number) => (v === 0 ? 'Now' : `-${v}h`)}
+        onChange={(v: any) => setSlider(v as [number, number])}
+        onAfterChange={(v: any) => applySlider(v as number[])}
       />
     </div>
   );
