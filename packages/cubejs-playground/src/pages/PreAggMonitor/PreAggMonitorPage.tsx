@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useHistory } from 'react-router-dom';
-import { Alert, Button, Card, Col, Row, Select, Statistic, Table, Tabs, Tag, Tooltip } from 'antd';
+import { Alert, Button, Card, Col, Row, Statistic, Table, Tabs, Tag, Tooltip } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import {
   Bar,
@@ -12,7 +12,8 @@ import {
   YAxis,
 } from 'recharts';
 
-import { fmtMs, fmtTs, getJson, preAggStatusTag } from '../monitoring/common';
+import { DEFAULT_RANGE, Range, fmtMs, fmtTs, getJson, preAggStatusTag, rangeParams } from '../monitoring/common';
+import { TimeWindow } from '../monitoring/TimeWindow';
 
 const { TabPane } = Tabs;
 
@@ -23,16 +24,9 @@ type Summary = {
   p95_ms: number;
 } | null;
 
-const WINDOW_OPTIONS = [
-  { label: 'Last 1h', value: 1 },
-  { label: 'Last 6h', value: 6 },
-  { label: 'Last 24h', value: 24 },
-  { label: 'Last 7d', value: 168 },
-];
-
 export function PreAggMonitorPage() {
   const history = useHistory();
-  const [windowHours, setWindowHours] = useState<number>(24);
+  const [range, setRange] = useState<Range>(DEFAULT_RANGE);
   const [loading, setLoading] = useState<boolean>(true);
   const [enabled, setEnabled] = useState<boolean>(true);
   const [summary, setSummary] = useState<Summary>(null);
@@ -44,7 +38,7 @@ export function PreAggMonitorPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const w = `?windowHours=${windowHours}`;
+      const w = `?${rangeParams(range)}`;
       const [s, c, b, qq] = await Promise.all([
         getJson(`playground/pre-agg-monitor/summary${w}`),
         getJson(`playground/pre-agg-monitor/catalog${w}`),
@@ -59,7 +53,7 @@ export function PreAggMonitorPage() {
     } finally {
       setLoading(false);
     }
-  }, [windowHours]);
+  }, [range]);
 
   useEffect(() => {
     load();
@@ -179,8 +173,8 @@ export function PreAggMonitorPage() {
           <h1 style={{ margin: 0 }}>Pre-Aggregations</h1>
         </Col>
         <Col>
-          <Select value={windowHours} onChange={setWindowHours} options={WINDOW_OPTIONS} style={{ width: 140, marginRight: 8 }} />
-          <Button icon={<ReloadOutlined />} onClick={() => { load(); loadPartState(); }} loading={loading}>
+          <TimeWindow value={range} onChange={setRange} />
+          <Button icon={<ReloadOutlined />} onClick={() => { load(); loadPartState(); }} loading={loading} style={{ marginLeft: 8 }}>
             Refresh
           </Button>
         </Col>
@@ -200,7 +194,7 @@ export function PreAggMonitorPage() {
         <Col span={6}><Card><Statistic title="Defined pre-aggs" value={stats.defined} /></Card></Col>
         <Col span={6}><Card><Statistic title="Used" value={stats.used} valueStyle={{ color: '#3f8600' }} /></Card></Col>
         <Col span={6}><Card><Statistic title="Unused" value={stats.unused} valueStyle={{ color: stats.unused ? '#cf1322' : undefined }} /></Card></Col>
-        <Col span={6}><Card><Statistic title={`Pre-Agg hit rate (${windowHours}h)`} value={hitRate} suffix="%" /></Card></Col>
+        <Col span={6}><Card><Statistic title="Pre-Agg hit rate" value={hitRate} suffix="%" /></Card></Col>
       </Row>
 
       <Tabs defaultActiveKey="catalog">

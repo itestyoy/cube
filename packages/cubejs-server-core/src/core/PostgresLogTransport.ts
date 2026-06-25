@@ -72,6 +72,9 @@ export function queryFingerprint(shape: any): string {
 
 export type TelemetryEvent = { msg: string; params: Record<string, any> };
 
+/** Relative window (last N hours, fractional ok) or an absolute [from, to). */
+export type TimeRange = { windowHours?: number; from?: string; to?: string };
+
 type QueryLogRow = {
   ts: Date;
   requestId: string | null;
@@ -586,13 +589,31 @@ export class PostgresLogTransport {
   }
 
   /**
+   * Resolve a window (number of hours, or a TimeRange) to absolute ISO bounds.
+   * Presets are converted to [now - hours, now); a custom range passes through.
+   */
+  private timeBounds(window: number | TimeRange = 24): { from: string; to: string } {
+    if (typeof window === 'object' && window.from && window.to) {
+      return { from: window.from, to: window.to };
+    }
+    const hours =
+      typeof window === 'number'
+        ? window
+        : (window.windowHours && window.windowHours > 0 ? window.windowHours : 24);
+    const to = new Date();
+    const from = new Date(to.getTime() - hours * 3600 * 1000);
+    return { from: from.toISOString(), to: to.toISOString() };
+  }
+
+  /**
    * Query helpers used by the playground monitoring endpoints.
    */
-  public async getSummary(windowHours = 24): Promise<any> {
+  public async getSummary(window: number | TimeRange = 24): Promise<any> {
     await this.init();
     if (this.disabled || !this.pool) {
       return null;
     }
+    const { from, to } = this.timeBounds(window);
     const { rows } = await this.pool.query(
       `SELECT
          count(*)::int                                            AS total_queries,
@@ -600,10 +621,38 @@ export class PostgresLogTransport {
          coalesce(percentile_disc(0.5) within group (order by duration_ms),0)::int  AS p50_ms,
          coalesce(percentile_disc(0.95) within group (order by duration_ms),0)::int AS p95_ms
        FROM ${this.schema}.query_log
-       WHERE ts > now() - ($1 || ' hours')::interval`,
-      [windowHours],
+       WHERE ts >= $1 AND ts < $2`,
+      [from, to],
     );
     return rows[0];
+  }
+
+  /**
+   * Time-bucketed series for charts: request volume (total/errors/accelerated)
+   * and average duration over the window.
+   */
+  public async getTimeSeries(window: number | TimeRange = 24): Promise<any[]> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return [];
+    }
+    const { from, to } = this.timeBounds(window);
+    const spanMin = (new Date(to).getTime() - new Date(from).getTime()) / 60000;
+    const bucketMinutes = Math.max(1, Math.round(spanMin / 48));
+    const { rows } = await this.pool.query(
+      `SELECT to_timestamp(floor(extract(epoch from ts) / ($3 * 60)) * ($3 * 60)) AS bucket,
+              count(*)::int                                                          AS total,
+              sum(CASE WHEN status='error' THEN 1 ELSE 0 END)::int                   AS errors,
+              sum(CASE WHEN coalesce(queries_with_pre_aggregations,0) > 0 THEN 1 ELSE 0 END)::int AS accelerated,
+              coalesce(round(avg(duration_ms)),0)::int                               AS avg_ms,
+              coalesce(percentile_disc(0.95) within group (order by duration_ms),0)::int AS p95_ms
+       FROM ${this.schema}.query_log
+       WHERE ts >= $1 AND ts < $2
+       GROUP BY bucket
+       ORDER BY bucket`,
+      [from, to, bucketMinutes],
+    );
+    return rows;
   }
 
   public async getQueryLog(limit = 200): Promise<any[]> {
@@ -630,6 +679,8 @@ export class PostgresLogTransport {
     apiType?: string;
     minDurationMs?: number;
     windowHours?: number;
+    from?: string;
+    to?: string;
   } = {}): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
@@ -642,7 +693,9 @@ export class PostgresLogTransport {
       where.push(clause.replace('$?', `$${params.length}`));
     };
 
-    add('ts > now() - ($? || \' hours\')::interval', filters.windowHours && filters.windowHours > 0 ? filters.windowHours : 24);
+    const { from, to } = this.timeBounds({ windowHours: filters.windowHours, from: filters.from, to: filters.to });
+    params.push(from, to);
+    where.push('ts >= $1 AND ts < $2');
     if (filters.status) {
       add('status = $?', filters.status);
     }
@@ -675,18 +728,19 @@ export class PostgresLogTransport {
     return rows;
   }
 
-  public async getBuildHistory(windowHours = 24, limit = 500): Promise<any[]> {
+  public async getBuildHistory(window: number | TimeRange = 24, limit = 500): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
     }
+    const { from, to } = this.timeBounds(window);
     const { rows } = await this.pool.query(
       `SELECT id, ts, request_id, target_table, pre_aggregation, build_range_end, duration_ms, status
        FROM ${this.schema}.preagg_build_log
-       WHERE ts > now() - ($1 || ' hours')::interval AND status = 'completed'
+       WHERE ts >= $1 AND ts < $2 AND status = 'completed'
        ORDER BY ts DESC
-       LIMIT $2`,
-      [windowHours, Math.min(limit, 2000)],
+       LIMIT $3`,
+      [from, to, Math.min(limit, 2000)],
     );
     return rows;
   }
@@ -721,11 +775,12 @@ export class PostgresLogTransport {
    * pre-aggregation key as it appears in usedPreAggregations. Used to join
    * against the defined pre-aggregation catalog (so unused ones show 0 hits).
    */
-  public async getPreAggUsage(windowHours = 24): Promise<any[]> {
+  public async getPreAggUsage(window: number | TimeRange = 24): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
     }
+    const { from, to } = this.timeBounds(window);
     const { rows } = await this.pool.query(
       `SELECT pre_agg AS pre_aggregation,
               count(*)::int AS query_count,
@@ -736,11 +791,11 @@ export class PostgresLogTransport {
          SELECT ts, duration_ms, jsonb_object_keys(coalesce(used_pre_aggregations,'{}'::jsonb)) AS pre_agg
          FROM ${this.schema}.query_log
          WHERE used_pre_aggregations IS NOT NULL
-           AND ts > now() - ($1 || ' hours')::interval
+           AND ts >= $1 AND ts < $2
        ) t
        GROUP BY pre_agg
        ORDER BY query_count DESC`,
-      [windowHours],
+      [from, to],
     );
     return rows;
   }
@@ -748,11 +803,12 @@ export class PostgresLogTransport {
   /**
    * Per-pre-aggregation build statistics within a time window.
    */
-  public async getPreAggBuildStats(windowHours = 24): Promise<any[]> {
+  public async getPreAggBuildStats(window: number | TimeRange = 24): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
     }
+    const { from, to } = this.timeBounds(window);
     const { rows } = await this.pool.query(
       `SELECT pre_aggregation,
               count(*)::int AS build_count,
@@ -762,9 +818,9 @@ export class PostgresLogTransport {
        FROM ${this.schema}.preagg_build_log
        WHERE status = 'completed'
          AND pre_aggregation IS NOT NULL
-         AND ts > now() - ($1 || ' hours')::interval
+         AND ts >= $1 AND ts < $2
        GROUP BY pre_aggregation`,
-      [windowHours],
+      [from, to],
     );
     return rows;
   }
@@ -809,19 +865,20 @@ export class PostgresLogTransport {
    * Recent queries that were accelerated by a specific pre-aggregation
    * (matched on the exact key stored in usedPreAggregations).
    */
-  public async getQueriesForPreAgg(key: string, windowHours = 24, limit = 100): Promise<any[]> {
+  public async getQueriesForPreAgg(key: string, window: number | TimeRange = 24, limit = 100): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
     }
+    const { from, to } = this.timeBounds(window);
     const { rows } = await this.pool.query(
       `SELECT id, ts, request_id, api_type, duration_ms, query, sql, generated_sql, external
        FROM ${this.schema}.query_log
-       WHERE used_pre_aggregations ? $1
-         AND ts > now() - ($2 || ' hours')::interval
+       WHERE used_pre_aggregations ? $3
+         AND ts >= $1 AND ts < $2
        ORDER BY ts DESC
-       LIMIT $3`,
-      [key, windowHours, Math.min(limit, 500)],
+       LIMIT $4`,
+      [from, to, key, Math.min(limit, 500)],
     );
     return rows;
   }
@@ -832,11 +889,12 @@ export class PostgresLogTransport {
    * Queries grouped by field-level fingerprint: how heavy each distinct query
    * shape is. orderBy 'total' (sum duration — biggest cost) or 'count'.
    */
-  public async getTopQueries(windowHours = 24, orderBy: 'total' | 'count' = 'total', limit = 100): Promise<any[]> {
+  public async getTopQueries(window: number | TimeRange = 24, orderBy: 'total' | 'count' = 'total', limit = 100): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
     }
+    const { from, to } = this.timeBounds(window);
     const order = orderBy === 'count' ? 'executions DESC' : 'total_ms DESC';
     const { rows } = await this.pool.query(
       `SELECT query_hash,
@@ -851,11 +909,11 @@ export class PostgresLogTransport {
               (array_agg(query ORDER BY ts DESC))[1]                                      AS sample_query
        FROM ${this.schema}.query_log
        WHERE query_hash IS NOT NULL
-         AND ts > now() - ($1 || ' hours')::interval
+         AND ts >= $1 AND ts < $2
        GROUP BY query_hash
        ORDER BY ${order}
-       LIMIT $2`,
-      [windowHours, Math.min(limit, 500)],
+       LIMIT $3`,
+      [from, to, Math.min(limit, 500)],
     );
     return rows;
   }
@@ -865,11 +923,12 @@ export class PostgresLogTransport {
    * NOT accelerated — candidates that would benefit from a pre-aggregation.
    * Ranked by total time spent on the data source.
    */
-  public async getRecommendations(windowHours = 24, minAvgMs = 50, limit = 100): Promise<any[]> {
+  public async getRecommendations(window: number | TimeRange = 24, minAvgMs = 50, limit = 100): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
     }
+    const { from, to } = this.timeBounds(window);
     const { rows } = await this.pool.query(
       `SELECT query_hash,
               count(*)::int                            AS executions,
@@ -883,12 +942,12 @@ export class PostgresLogTransport {
        WHERE query_hash IS NOT NULL
          AND status = 'success'
          AND coalesce(queries_with_pre_aggregations,0) = 0
-         AND ts > now() - ($1 || ' hours')::interval
+         AND ts >= $1 AND ts < $2
        GROUP BY query_hash
-       HAVING coalesce(round(avg(duration_ms)),0) >= $2
+       HAVING coalesce(round(avg(duration_ms)),0) >= $3
        ORDER BY total_ms DESC
-       LIMIT $3`,
-      [windowHours, minAvgMs, Math.min(limit, 500)],
+       LIMIT $4`,
+      [from, to, minAvgMs, Math.min(limit, 500)],
     );
     return rows;
   }
@@ -896,11 +955,12 @@ export class PostgresLogTransport {
   /**
    * Errors grouped by message: what is failing and how often.
    */
-  public async getErrorStats(windowHours = 24, limit = 100): Promise<any[]> {
+  public async getErrorStats(window: number | TimeRange = 24, limit = 100): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
     }
+    const { from, to } = this.timeBounds(window);
     const { rows } = await this.pool.query(
       `SELECT error,
               count(*)::int AS count,
@@ -910,11 +970,11 @@ export class PostgresLogTransport {
               (array_agg(query ORDER BY ts DESC))[1]    AS sample_query
        FROM ${this.schema}.query_log
        WHERE status = 'error' AND error IS NOT NULL
-         AND ts > now() - ($1 || ' hours')::interval
+         AND ts >= $1 AND ts < $2
        GROUP BY error
        ORDER BY count DESC
-       LIMIT $2`,
-      [windowHours, Math.min(limit, 500)],
+       LIMIT $3`,
+      [from, to, Math.min(limit, 500)],
     );
     return rows;
   }
@@ -923,21 +983,22 @@ export class PostgresLogTransport {
    * Per-member usage across queries: how often each measure / dimension is
    * actually queried. Members never appearing are dead model parts.
    */
-  public async getModelUsage(windowHours = 24): Promise<{ measures: any[]; dimensions: any[] }> {
+  public async getModelUsage(window: number | TimeRange = 24): Promise<{ measures: any[]; dimensions: any[] }> {
     await this.init();
     if (this.disabled || !this.pool) {
       return { measures: [], dimensions: [] };
     }
+    const { from, to } = this.timeBounds(window);
     const memberUsage = async (field: 'measures' | 'dimensions') => {
       const { rows } = await this.pool!.query(
         `SELECT m.member, count(*)::int AS uses, max(q.ts) AS last_used
          FROM ${this.schema}.query_log q
          CROSS JOIN LATERAL jsonb_array_elements_text(q.query->'${field}') AS m(member)
          WHERE jsonb_typeof(q.query->'${field}') = 'array'
-           AND q.ts > now() - ($1 || ' hours')::interval
+           AND q.ts >= $1 AND q.ts < $2
          GROUP BY m.member
          ORDER BY uses DESC`,
-        [windowHours],
+        [from, to],
       );
       return rows;
     };
@@ -949,8 +1010,8 @@ export class PostgresLogTransport {
    * Aggregate usage count per member (measure or dimension) as a flat map,
    * used to flag unused fields inside a pre-aggregation's definition.
    */
-  public async getMemberUsageMap(windowHours = 24): Promise<Record<string, number>> {
-    const { measures, dimensions } = await this.getModelUsage(windowHours);
+  public async getMemberUsageMap(window: number | TimeRange = 24): Promise<Record<string, number>> {
+    const { measures, dimensions } = await this.getModelUsage(window);
     const map: Record<string, number> = {};
     [...measures, ...dimensions].forEach((r: any) => {
       map[r.member] = (map[r.member] || 0) + r.uses;
@@ -961,20 +1022,21 @@ export class PostgresLogTransport {
   /**
    * Recent individual queries for one fingerprint (Top Queries drill-down).
    */
-  public async getQueriesForHash(hash: string, windowHours = 24, limit = 100): Promise<any[]> {
+  public async getQueriesForHash(hash: string, window: number | TimeRange = 24, limit = 100): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
     }
+    const { from, to } = this.timeBounds(window);
     const { rows } = await this.pool.query(
       `SELECT id, ts, request_id, api_type, duration_ms, status, external,
               queries_with_pre_aggregations, used_pre_aggregations, query
        FROM ${this.schema}.query_log
-       WHERE query_hash = $1
-         AND ts > now() - ($2 || ' hours')::interval
+       WHERE query_hash = $3
+         AND ts >= $1 AND ts < $2
        ORDER BY ts DESC
-       LIMIT $3`,
-      [hash, windowHours, Math.min(limit, 500)],
+       LIMIT $4`,
+      [from, to, hash, Math.min(limit, 500)],
     );
     return rows;
   }

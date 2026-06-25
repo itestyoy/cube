@@ -13,6 +13,38 @@ import 'prismjs/components/prism-json';
 import PrismCode from '../../PrismCode';
 import { playgroundFetch } from '../../shared/helpers';
 
+/**
+ * Shared analytics time-window presets (relative "last N", fractional hours
+ * supported end-to-end). Used by the Pre-Aggregations, Query History and
+ * Insights pages so the interval picker is consistent everywhere.
+ */
+export const WINDOW_OPTIONS = [
+  { label: 'Last 15 minutes', value: 0.25 },
+  { label: 'Last 30 minutes', value: 0.5 },
+  { label: 'Last 1 hour', value: 1 },
+  { label: 'Last 4 hours', value: 4 },
+  { label: 'Last 12 hours', value: 12 },
+  { label: 'Last 24 hours', value: 24 },
+  { label: 'Last 3 days', value: 72 },
+  { label: 'Last 7 days', value: 168 },
+];
+
+/**
+ * Analytics time range: a preset (relative windowHours) or an absolute
+ * [from, to). `label` is for display in the picker button.
+ */
+export type Range = { windowHours?: number; from?: string; to?: string; label: string };
+
+export const DEFAULT_RANGE: Range = { windowHours: 24, label: 'Last 24 hours' };
+
+/** Build the query string a range maps to for the monitoring endpoints. */
+export function rangeParams(r: Range): string {
+  if (r.from && r.to) {
+    return `from=${encodeURIComponent(r.from)}&to=${encodeURIComponent(r.to)}`;
+  }
+  return `windowHours=${r.windowHours ?? 24}`;
+}
+
 export const fmtMs = (v: number | null | undefined) => (v == null ? '—' : `${v} ms`);
 
 export const fmtTs = (v: string | null | undefined) => (v ? new Date(v).toLocaleString() : '—');
@@ -91,6 +123,64 @@ export function cacheTag(row: any) {
     );
   }
   return <Tag>raw db</Tag>;
+}
+
+/**
+ * A single member rendered as a two-tone chip: cube (muted) + member name,
+ * mirroring the Cube Cloud query chips.
+ */
+export function MemberTag({ member, color }: { member: string; color?: string }) {
+  const idx = member.indexOf('.');
+  const cube = idx > 0 ? member.slice(0, idx) : '';
+  const name = idx > 0 ? member.slice(idx + 1) : member;
+  return (
+    <Tag color={color} style={{ margin: 2 }}>
+      {cube ? <span style={{ opacity: 0.55 }}>{cube} </span> : null}
+      {name}
+    </Tag>
+  );
+}
+
+function collectFilterMembers(filters: any): string[] {
+  const out: string[] = [];
+  const walk = (f: any) => {
+    if (!f) return;
+    if (Array.isArray(f)) { f.forEach(walk); return; }
+    if (Array.isArray(f.and)) f.and.forEach(walk);
+    if (Array.isArray(f.or)) f.or.forEach(walk);
+    const m = f.member || f.dimension;
+    if (m) out.push(m);
+  };
+  walk(filters);
+  return out;
+}
+
+/**
+ * Render a Cube query as compact chips (measures / dimensions / time dims /
+ * filters) instead of raw JSON — clearer at a glance in tables. Truncates to
+ * `max` chips with a "+N" overflow.
+ */
+export function QueryChips({ query, max = 6 }: { query: any; max?: number }) {
+  if (!query || typeof query !== 'object') {
+    return <span style={{ color: '#999' }}>—</span>;
+  }
+  const chips: any[] = [];
+  (query.measures || []).forEach((m: string) => chips.push(<MemberTag key={`m${m}`} member={m} color="green" />));
+  (query.dimensions || []).forEach((d: string) => chips.push(<MemberTag key={`d${d}`} member={d} color="blue" />));
+  (query.timeDimensions || []).forEach((t: any, i: number) =>
+    chips.push(<MemberTag key={`t${i}`} member={`${t.dimension}${t.granularity ? ` · ${t.granularity}` : ''}`} color="geekblue" />));
+  (query.segments || []).forEach((s: string) => chips.push(<MemberTag key={`s${s}`} member={s} />));
+  collectFilterMembers(query.filters).forEach((m, i) => chips.push(<MemberTag key={`f${i}`} member={m} color="orange" />));
+
+  const shown = chips.slice(0, max);
+  const more = chips.length - shown.length;
+  return (
+    <span>
+      {shown.length ? shown : <span style={{ color: '#999' }}>—</span>}
+      {more > 0 ? <Tag>+{more}</Tag> : null}
+      {query.limit != null ? <Tag color="default">LIMIT {query.limit}</Tag> : null}
+    </span>
+  );
 }
 
 /**

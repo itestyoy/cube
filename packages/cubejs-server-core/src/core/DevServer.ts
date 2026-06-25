@@ -138,8 +138,16 @@ export class DevServer {
     // telemetry is not configured so the page still renders.
     // ---------------------------------------------------------------------
     const telemetry = () => this.cubejsServer.telemetryTransport;
-    const telemetryWindow = (req: Request) => {
-      const h = parseInt(String(req.query.windowHours || '24'), 10);
+    // Resolves the analytics time window from the request: an absolute
+    // [from, to) range when both are present, otherwise a relative "last N
+    // hours" (fractional allowed). Transport methods accept either form.
+    const telemetryWindow = (req: Request): number | { from: string; to: string } => {
+      const from = req.query.from ? String(req.query.from) : undefined;
+      const to = req.query.to ? String(req.query.to) : undefined;
+      if (from && to) {
+        return { from, to };
+      }
+      const h = parseFloat(String(req.query.windowHours || '24'));
       return Number.isFinite(h) && h > 0 ? h : 24;
     };
 
@@ -184,7 +192,9 @@ export class DevServer {
         cache,
         apiType: q.apiType ? String(q.apiType) : undefined,
         minDurationMs: num(q.minDurationMs),
-        windowHours: num(q.windowHours),
+        windowHours: q.windowHours ? parseFloat(String(q.windowHours)) : undefined,
+        from: q.from ? String(q.from) : undefined,
+        to: q.to ? String(q.to) : undefined,
       });
       res.json({ enabled: true, rows });
     }));
@@ -313,7 +323,7 @@ export class DevServer {
         };
       });
 
-      res.json({ telemetryEnabled: Boolean(t), windowHours, rows });
+      res.json({ telemetryEnabled: Boolean(t), windowHours: typeof windowHours === 'number' ? windowHours : null, rows });
     }));
 
     // Recent queries accelerated by a given pre-aggregation key.
@@ -428,7 +438,7 @@ export class DevServer {
         fields,
         found: true,
         telemetryEnabled: Boolean(t),
-        windowHours,
+        windowHours: typeof windowHours === 'number' ? windowHours : null,
         preAgg: {
           id: p.id,
           cube: p.cube,
@@ -508,6 +518,84 @@ export class DevServer {
       const t = telemetry();
       const hash = String(req.query.hash || '');
       res.json({ enabled: Boolean(t), rows: t && hash ? await t.getQueriesForHash(hash, telemetryWindow(req)) : [] });
+    }));
+
+    // Time-bucketed series for the Query History charts.
+    app.get('/playground/query-history/timeseries', catchErrors(async (req, res) => {
+      const t = telemetry();
+      res.json({ enabled: Boolean(t), rows: t ? await t.getTimeSeries(telemetryWindow(req)) : [] });
+    }));
+
+    // Pre-aggregation advice: which pre-aggs to REMOVE (defined but never hit)
+    // and which FIELDS to trim (materialized members never queried anywhere).
+    // "What to add" is served by /insights/recommendations.
+    app.get('/playground/insights/pre-agg-advice', catchErrors(async (req, res) => {
+      const window = telemetryWindow(req);
+      const ctx = {
+        authInfo: null,
+        securityContext: {},
+        requestId: getRequestIdFromRequest(req),
+      } as any;
+      const compilerApi = await this.cubejsServer.getCompilerApi(ctx);
+      const defined: any[] = await compilerApi.preAggregations();
+
+      const t = telemetry();
+      const usage = t ? await t.getPreAggUsage(window) : [];
+      const buildStats = t ? await t.getPreAggBuildStats(window) : [];
+      const memberMap = t ? await t.getMemberUsageMap(window) : {};
+
+      const matchStat = (id: string, name: string, stats: any[]) => {
+        const cand = [normKey(id), normKey(name)];
+        return stats.find((s) => {
+          const k = normKey(s.pre_aggregation);
+          return cand.includes(k) || cand.some((c) => c && (k.includes(c) || c.includes(k)));
+        });
+      };
+      const collect = (arr: any): string[] =>
+        Array.isArray(arr)
+          ? arr.map((x: any) => (typeof x === 'string' ? x : x && (x.dimension || x.name))).filter(Boolean)
+          : [];
+
+      const removePreAggs: any[] = [];
+      const trimFields: any[] = [];
+      defined.forEach((p: any) => {
+        const def = p.preAggregation || {};
+        const refs: any = p.references || {};
+        const u = matchStat(p.id, p.preAggregationName, usage);
+        const b = matchStat(p.id, p.preAggregationName, buildStats);
+        const hits = u ? u.query_count : 0;
+
+        if (!hits) {
+          removePreAggs.push({
+            id: p.id,
+            cube: p.cube,
+            name: p.preAggregationName,
+            build_count: b ? b.build_count : 0,
+            avg_build_ms: b ? b.avg_ms : null,
+            reason: b && b.build_count > 0 ? 'Built but never used' : 'No usage and no builds',
+          });
+          return; // a fully-unused pre-agg is a remove candidate, not a trim one
+        }
+
+        const members = [
+          ...collect(refs.measures).map((m) => ({ member: m, kind: 'measure' })),
+          ...collect(refs.dimensions).map((m) => ({ member: m, kind: 'dimension' })),
+          ...collect((refs.timeDimensions || []).map((td: any) => td && td.dimension)).map((m) => ({ member: m, kind: 'timeDimension' })),
+          ...collect(def.measures).map((m) => ({ member: m, kind: 'measure' })),
+          ...collect(def.dimensions).map((m) => ({ member: m, kind: 'dimension' })),
+        ];
+        const seen = new Set<string>();
+        const unused = members.filter((f) => {
+          if (seen.has(f.member)) return false;
+          seen.add(f.member);
+          return !(memberMap[f.member] > 0);
+        });
+        if (unused.length) {
+          trimFields.push({ id: p.id, cube: p.cube, name: p.preAggregationName, fields: unused });
+        }
+      });
+
+      res.json({ enabled: Boolean(t), removePreAggs, trimFields });
     }));
 
     app.get('/playground/db-schema', catchErrors(async (req, res) => {

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useHistory, useParams } from 'react-router-dom';
 import { Card, Col, Descriptions, Empty, PageHeader, Row, Spin, Statistic, Table, Tabs, Tag } from 'antd';
 
-import { CodeBlock, fmtMs, fmtTs, getJson, preAggStatusTag } from '../monitoring/common';
+import { CodeBlock, QueryChips, fmtMs, fmtTs, getJson, preAggStatusTag } from '../monitoring/common';
 
 const { TabPane } = Tabs;
 
@@ -31,7 +31,7 @@ export function PreAggDetailPage() {
     { title: 'Time', dataIndex: 'ts', key: 'ts', render: fmtTs, width: 180 },
     { title: 'API', dataIndex: 'api_type', key: 'api_type', width: 70 },
     { title: 'Duration', dataIndex: 'duration_ms', key: 'duration_ms', render: fmtMs, width: 110, sorter: (a: any, b: any) => (a.duration_ms || 0) - (b.duration_ms || 0) },
-    { title: 'Query', dataIndex: 'query', key: 'query', ellipsis: true, render: (q: any) => <code>{q ? JSON.stringify(q).slice(0, 100) : '—'}</code> },
+    { title: 'Query', dataIndex: 'query', key: 'query', render: (q: any) => <QueryChips query={q} /> },
   ];
 
   const buildColumns = [
@@ -73,7 +73,7 @@ export function PreAggDetailPage() {
       ) : (
         <>
           <Row gutter={16} style={{ marginBottom: 24 }}>
-            <Col span={6}><Card><Statistic title={`Hits (${data.windowHours}h)`} value={p.hits} /></Card></Col>
+            <Col span={6}><Card><Statistic title="Hits" value={p.hits} /></Card></Col>
             <Col span={6}><Card><Statistic title="p50 latency" value={p.p50_ms ?? 0} suffix="ms" /></Card></Col>
             <Col span={6}><Card><Statistic title="Builds" value={p.build_count} /></Card></Col>
             <Col span={6}><Card><Statistic title="Avg build" value={p.avg_build_ms ?? 0} suffix="ms" /></Card></Col>
