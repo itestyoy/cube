@@ -516,7 +516,60 @@ export class DevServer {
     app.get('/playground/insights/recommendations', catchErrors(async (req, res) => {
       const t = telemetry();
       const minAvg = parseInt(String(req.query.minAvgMs || '50'), 10) || 50;
-      res.json({ enabled: Boolean(t), rows: t ? await t.getRecommendations(telemetryWindow(req), minAvg) : [] });
+      const rows = t ? await t.getRecommendations(telemetryWindow(req), minAvg) : [];
+
+      // Match each candidate shape against existing pre-aggregations so the
+      // advice is actionable: extend an existing rollup, create a new one, or
+      // (full coverage) investigate why the existing one didn't match.
+      const ctx = { authInfo: null, securityContext: {}, requestId: getRequestIdFromRequest(req) } as any;
+      const compilerApi = await this.cubejsServer.getCompilerApi(ctx);
+      const defined: any[] = await compilerApi.preAggregations();
+      const canonical = await buildAliasMap(req);
+      const collect = (arr: any): string[] =>
+        Array.isArray(arr) ? arr.map((x: any) => (typeof x === 'string' ? x : x && (x.dimension || x.name))).filter(Boolean) : [];
+      const preAggSets = defined.map((p: any) => {
+        const def = p.preAggregation || {};
+        const refs: any = p.references || {};
+        const members = new Set<string>([
+          ...collect(refs.measures), ...collect(def.measures),
+          ...collect(refs.dimensions), ...collect(def.dimensions),
+          ...collect((refs.timeDimensions || []).map((td: any) => td && td.dimension)),
+          ...(def.timeDimension ? [def.timeDimension] : []),
+        ].map((m) => canonical(m)));
+        return { id: p.id, members };
+      });
+
+      const enriched = rows.map((r: any) => {
+        const shape = r.shape || {};
+        const wanted = Array.from(new Set([
+          ...(shape.measures || []),
+          ...(shape.dimensions || []),
+          ...(shape.timeDimensions || []).map((td: string) => String(td).split(':')[0]),
+          ...(shape.filters || []),
+        ].map((m: string) => canonical(m)).filter(Boolean)));
+        if (!wanted.length) {
+          return { ...r, suggestion: { action: 'create' } };
+        }
+        let best: any = null;
+        preAggSets.forEach((pa) => {
+          const covered = wanted.filter((m) => pa.members.has(m));
+          const coverage = covered.length / wanted.length;
+          if (!best || coverage > best.coverage || (coverage === best.coverage && pa.members.size < best.size)) {
+            best = { id: pa.id, coverage, size: pa.members.size, missing: wanted.filter((m) => !pa.members.has(m)) };
+          }
+        });
+        let suggestion: any;
+        if (!best || best.coverage < 0.5) {
+          suggestion = { action: 'create' };
+        } else if (best.coverage >= 0.999) {
+          suggestion = { action: 'matches', preAgg: best.id };
+        } else {
+          suggestion = { action: 'extend', preAgg: best.id, missing: best.missing, coverage: Math.round(best.coverage * 100) };
+        }
+        return { ...r, suggestion };
+      });
+
+      res.json({ enabled: Boolean(t), rows: enriched });
     }));
 
     app.get('/playground/insights/errors', catchErrors(async (req, res) => {
@@ -678,14 +731,31 @@ export class DevServer {
           ...collect(def.measures).map((m) => ({ member: m, kind: 'measure' })),
           ...collect(def.dimensions).map((m) => ({ member: m, kind: 'dimension' })),
         ];
+        // Fields worth trimming: never used, or used in only a small fraction
+        // of this pre-agg's queries (rarely-used dead weight). Each field keeps
+        // its use count and a 'never' | 'rare' tier so the UI can show why.
+        const rareThreshold = Math.max(1, Math.ceil(hits * 0.05));
         const seen = new Set<string>();
-        const unused = members.filter((f) => {
-          if (seen.has(f.member)) return false;
-          seen.add(f.member);
-          return !(canonUsage[f.member] > 0 || canonUsage[canonical(f.member)] > 0);
-        });
-        if (unused.length) {
-          trimFields.push({ id: p.id, cube: p.cube, name: p.preAggregationName, fields: unused });
+        const trim = members
+          .filter((f) => {
+            if (seen.has(f.member)) return false;
+            seen.add(f.member);
+            return true;
+          })
+          .map((f) => ({ ...f, uses: canonUsage[f.member] || canonUsage[canonical(f.member)] || 0 }))
+          .filter((f) => f.uses < rareThreshold)
+          .map((f) => ({ ...f, tier: f.uses === 0 ? 'never' : 'rare' }))
+          .sort((a, b) => a.uses - b.uses);
+        if (trim.length) {
+          trimFields.push({
+            id: p.id,
+            cube: p.cube,
+            name: p.preAggregationName,
+            hits,
+            fields: trim,
+            neverCount: trim.filter((f) => f.tier === 'never').length,
+            rareCount: trim.filter((f) => f.tier === 'rare').length,
+          });
         }
       });
 

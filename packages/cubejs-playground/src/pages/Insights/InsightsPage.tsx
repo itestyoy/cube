@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useHistory } from 'react-router-dom';
-import { Alert, Button, Col, Radio, Row, Switch, Table, Tabs, Tag } from 'antd';
+import { Alert, Button, Col, Radio, Row, Switch, Table, Tabs, Tag, Tooltip } from 'antd';
 import { ReloadOutlined, ArrowRightOutlined } from '@ant-design/icons';
 
 import { CodeBlock, DEFAULT_RANGE, MemberTag, QueryChips, Range, cacheTag, fmtMs, fmtTs, getJson, rangeParams } from '../monitoring/common';
@@ -179,6 +179,36 @@ export function InsightsPage() {
     { title: 'Avg', dataIndex: 'avg_ms', key: 'avg_ms', width: 90, render: fmtMs },
     { title: 'p95', dataIndex: 'p95_ms', key: 'p95_ms', width: 90, render: fmtMs },
     { title: 'Total time', dataIndex: 'total_ms', key: 'total_ms', width: 110, render: (v: number) => fmtTotal(Number(v)), defaultSortOrder: 'descend' as const, sorter: (a: any, b: any) => Number(a.total_ms) - Number(b.total_ms) },
+    {
+      title: 'Suggestion',
+      key: 'suggestion',
+      width: 280,
+      render: (_: any, r: any) => {
+        const s = r.suggestion || { action: 'create' };
+        const shortName = (id: string) => { const i = String(id).indexOf('.'); return i >= 0 ? String(id).slice(i + 1) : id; };
+        const link = (id: string, text: any) => (
+          <a onClick={(e) => { e.stopPropagation(); history.push(`/pre-agg-monitor/${encodeURIComponent(id)}`); }}>{text}</a>
+        );
+        if (s.action === 'create') {
+          return <Tag color="green">New rollup</Tag>;
+        }
+        if (s.action === 'matches') {
+          return (
+            <Tooltip title="An existing pre-agg covers all these fields but didn't accelerate the query — check granularity / segments / non-additive measures.">
+              <Tag color="orange">Check {link(s.preAgg, shortName(s.preAgg))}</Tag>
+            </Tooltip>
+          );
+        }
+        return (
+          <Tooltip title={`Add to the rollup: ${(s.missing || []).join(', ')}`}>
+            <span>
+              <Tag color="blue">Extend {link(s.preAgg, shortName(s.preAgg))}</Tag>
+              <span style={{ color: '#888' }}>+{(s.missing || []).length} field{(s.missing || []).length === 1 ? '' : 's'}</span>
+            </span>
+          </Tooltip>
+        );
+      },
+    },
     { title: 'Last seen', dataIndex: 'last_seen', key: 'last_seen', width: 170, render: fmtTs },
   ];
 
@@ -309,7 +339,7 @@ export function InsightsPage() {
                 showIcon
                 style={{ marginBottom: 12 }}
                 message="Fields to drop from used pre-aggregations"
-                description="These pre-aggregations are used, but materialize members that are never queried. Removing the listed fields shrinks build time and storage without affecting any query."
+                description="These pre-aggregations are used, but materialize members that are never queried — or queried in under 5% of their queries (rare dead weight). Dropping them shrinks build time and storage with little or no impact. Expand a row to see each field and its usage."
               />
               <Table
                 rowKey={(r: any) => r.id}
@@ -321,8 +351,8 @@ export function InsightsPage() {
                   expandedRowRender: (r: any) => (
                     <span>
                       {r.fields.map((f: any) => (
-                        <Tag key={`${f.kind}:${f.member}`} color="red" style={{ margin: 2 }}>
-                          {f.member} <span style={{ opacity: 0.6 }}>({f.kind})</span>
+                        <Tag key={`${f.kind}:${f.member}`} color={f.tier === 'never' ? 'red' : 'orange'} style={{ margin: 2 }}>
+                          {f.member} <span style={{ opacity: 0.6 }}>({f.kind}, {f.tier === 'never' ? 'never' : `${f.uses}×`})</span>
                         </Tag>
                       ))}
                     </span>
@@ -331,7 +361,13 @@ export function InsightsPage() {
                 columns={[
                   { title: 'Cube', dataIndex: 'cube', key: 'cube', width: 200 },
                   { title: 'Pre-Aggregation', dataIndex: 'name', key: 'name' },
-                  { title: 'Never-used fields', key: 'count', width: 160, render: (_: any, r: any) => <Tag color="red">{r.fields.length}</Tag> },
+                  { title: 'Pre-agg hits', dataIndex: 'hits', key: 'hits', width: 100 },
+                  { title: 'Trim candidates', key: 'count', width: 200, render: (_: any, r: any) => (
+                    <span>
+                      {r.neverCount ? <Tag color="red">{r.neverCount} never</Tag> : null}
+                      {r.rareCount ? <Tag color="orange">{r.rareCount} rare</Tag> : null}
+                    </span>
+                  ) },
                   { title: '', key: 'go', width: 60, render: (_: any, r: any) => <Button type="link" size="small" onClick={(e: any) => { e.stopPropagation(); history.push(`/pre-agg-monitor/${encodeURIComponent(r.id)}`); }}>open</Button> },
                 ]}
               />
