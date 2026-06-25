@@ -212,7 +212,7 @@ export class DevServer {
         securityContext: {},
         requestId: getRequestIdFromRequest(req),
       } as any);
-      const defined = await compilerApi.preAggregations();
+      const defined: any[] = await compilerApi.preAggregations();
 
       const t = telemetry();
       const usage = t ? await t.getPreAggUsage(windowHours) : [];
@@ -290,7 +290,7 @@ export class DevServer {
         securityContext: {},
         requestId: getRequestIdFromRequest(req),
       } as any);
-      const defined = await compilerApi.preAggregations();
+      const defined: any[] = await compilerApi.preAggregations();
       const nk = normKey(id);
       const p = defined.find((x: any) => {
         const xk = normKey(x.id);

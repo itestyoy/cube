@@ -2190,7 +2190,7 @@ class ApiGateway {
           const adapterApi = await this.getAdapterApi(context);
           const response = await adapterApi.executeQuery(finalQuery);
 
-          preAggInfos.push({ used: response.usedPreAggregations || {}, external: Boolean(response.external) });
+          preAggInfos.push({ used: (response as any).usedPreAggregations || {}, external: Boolean((response as any).external) });
 
           const annotation = prepareAnnotation(
             metaConfigResult, normalizedQueries[0]
@@ -2233,7 +2233,7 @@ class ApiGateway {
               sqlQueries[index],
             );
 
-            preAggInfos.push({ used: response.usedPreAggregations || {}, external: Boolean(response.external) });
+            preAggInfos.push({ used: (response as any).usedPreAggregations || {}, external: Boolean((response as any).external) });
 
             return this.prepareResultTransformData(
               context,
