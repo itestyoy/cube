@@ -381,9 +381,20 @@ export class DevServer {
       const builds = allBuilds.filter((bh: any) =>
         cand.some((c) => c && (normKey(bh.pre_aggregation).includes(c) || normKey(bh.target_table).includes(c))));
 
-      // Field-level usage: members this pre-agg materializes, annotated with
-      // how often each is actually queried (0 => dead weight, can be dropped).
-      const memberMap = t ? await t.getMemberUsageMap(windowHours) : {};
+      // Field-level usage: count how often each member appears across the
+      // queries this pre-aggregation actually served (its "Used By" set). A
+      // field never requested by any of those queries is dead weight here.
+      const memberMap: Record<string, number> = {};
+      (queries || []).forEach((qr: any) => {
+        const qq = qr.query || {};
+        const members = [
+          ...(qq.measures || []),
+          ...(qq.dimensions || []),
+          ...(qq.segments || []),
+          ...((qq.timeDimensions || []).map((td: any) => td && td.dimension)),
+        ].filter(Boolean);
+        new Set(members).forEach((m: any) => { memberMap[m] = (memberMap[m] || 0) + 1; });
+      });
       const refs: any = p.references || {};
       const collect = (arr: any): string[] =>
         Array.isArray(arr)

@@ -929,14 +929,12 @@ export class PostgresLogTransport {
     }
     const memberUsage = async (field: 'measures' | 'dimensions') => {
       const { rows } = await this.pool!.query(
-        `SELECT member, count(*)::int AS uses, max(ts) AS last_used
-         FROM (
-           SELECT ts, jsonb_array_elements_text(query->'${field}') AS member
-           FROM ${this.schema}.query_log
-           WHERE jsonb_typeof(query->'${field}') = 'array'
-             AND ts > now() - ($1 || ' hours')::interval
-         ) t
-         GROUP BY member
+        `SELECT m.member, count(*)::int AS uses, max(q.ts) AS last_used
+         FROM ${this.schema}.query_log q
+         CROSS JOIN LATERAL jsonb_array_elements_text(q.query->'${field}') AS m(member)
+         WHERE jsonb_typeof(q.query->'${field}') = 'array'
+           AND q.ts > now() - ($1 || ' hours')::interval
+         GROUP BY m.member
          ORDER BY uses DESC`,
         [windowHours],
       );

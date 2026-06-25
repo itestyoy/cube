@@ -1,5 +1,6 @@
 import { CSSProperties } from 'react';
 import { Tag } from 'antd';
+import styled from 'styled-components';
 import { ThunderboltFilled } from '@ant-design/icons';
 // Prism core must load before the grammar components register on it.
 import 'prismjs';
@@ -22,9 +23,31 @@ export async function getJson(url: string) {
 }
 
 /**
- * Syntax-highlighted, scrollable code block used across the monitoring detail
- * views. Reuses the playground's PrismCode (prismjs) with the sql/json grammars
- * loaded above.
+ * Wraps PrismCode and forces the code to wrap to the container width. The Prism
+ * theme sets `white-space: pre` on `code[class*="language-"]`, which overrides
+ * a parent <pre> — so we override it here (and on the <pre>) and let the block
+ * scroll vertically instead of overflowing the page horizontally.
+ */
+const CodeWrap = styled.div`
+  max-height: 70vh;
+  overflow: auto;
+  border-radius: 4px;
+
+  pre[class*='language-'],
+  code[class*='language-'] {
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+  }
+
+  pre[class*='language-'] {
+    margin: 0;
+  }
+`;
+
+/**
+ * Syntax-highlighted, scrollable, wrapping code block used across the
+ * monitoring detail views. Reuses the playground's PrismCode (prismjs) with the
+ * sql/json grammars loaded above.
  */
 export function CodeBlock({
   code,
@@ -36,18 +59,9 @@ export function CodeBlock({
   style?: CSSProperties;
 }) {
   return (
-    <PrismCode
-      code={code}
-      language={language}
-      style={{
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-        maxHeight: '70vh',
-        overflow: 'auto',
-        margin: 0,
-        ...style,
-      }}
-    />
+    <CodeWrap style={style}>
+      <PrismCode code={code} language={language} />
+    </CodeWrap>
   );
 }
 
