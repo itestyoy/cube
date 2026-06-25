@@ -4,12 +4,14 @@ import {
   Button,
   Card,
   Col,
+  Drawer,
   Row,
   Select,
   Statistic,
   Table,
   Tabs,
   Tag,
+  Tooltip,
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import {
@@ -53,26 +55,28 @@ export function PreAggMonitorPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [enabled, setEnabled] = useState<boolean>(true);
   const [summary, setSummary] = useState<Summary>(null);
-  const [usedBy, setUsedBy] = useState<any[]>([]);
-  const [queryLog, setQueryLog] = useState<any[]>([]);
+  const [catalog, setCatalog] = useState<any[]>([]);
   const [buildHistory, setBuildHistory] = useState<any[]>([]);
   const [queue, setQueue] = useState<any[]>([]);
+
+  // Drill-down: queries accelerated by the selected pre-aggregation.
+  const [selected, setSelected] = useState<any | null>(null);
+  const [drillQueries, setDrillQueries] = useState<any[]>([]);
+  const [drillLoading, setDrillLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const w = `?windowHours=${windowHours}`;
-      const [s, u, q, b, qq] = await Promise.all([
+      const [s, c, b, qq] = await Promise.all([
         getJson(`playground/pre-agg-monitor/summary${w}`),
-        getJson('playground/pre-agg-monitor/used-by'),
-        getJson('playground/pre-agg-monitor/query-log?limit=200'),
+        getJson(`playground/pre-agg-monitor/catalog${w}`),
         getJson(`playground/pre-agg-monitor/build-history${w}`),
         getJson('playground/pre-agg-monitor/queue').catch(() => ({ queue: [] })),
       ]);
       setEnabled(Boolean(s.enabled));
       setSummary(s.summary || null);
-      setUsedBy(u.rows || []);
-      setQueryLog(q.rows || []);
+      setCatalog(c.rows || []);
       setBuildHistory(b.rows || []);
       setQueue(Array.isArray(qq.queue) ? qq.queue : []);
     } finally {
@@ -83,6 +87,32 @@ export function PreAggMonitorPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const openPreAgg = useCallback(
+    async (row: any) => {
+      setSelected(row);
+      setDrillQueries([]);
+      if (!row.usageKey) {
+        return;
+      }
+      setDrillLoading(true);
+      try {
+        const res = await getJson(
+          `playground/pre-agg-monitor/preagg-queries?key=${encodeURIComponent(row.usageKey)}&windowHours=${windowHours}`
+        );
+        setDrillQueries(res.rows || []);
+      } finally {
+        setDrillLoading(false);
+      }
+    },
+    [windowHours]
+  );
+
+  const stats = useMemo(() => {
+    const defined = catalog.length;
+    const used = catalog.filter((r) => r.hits > 0).length;
+    return { defined, used, unused: defined - used };
+  }, [catalog]);
 
   const hitRate = useMemo(() => {
     if (!summary || !summary.total_queries) {
@@ -96,40 +126,59 @@ export function PreAggMonitorPage() {
       buildHistory
         .slice(0, 40)
         .reverse()
-        .map((r, i) => ({
-          name: r.target_table || String(i),
-          duration: r.duration_ms || 0,
-        })),
+        .map((r, i) => ({ name: r.target_table || String(i), duration: r.duration_ms || 0 })),
     [buildHistory]
   );
 
-  const usedByColumns = [
-    { title: 'Pre-Aggregation', dataIndex: 'pre_aggregation', key: 'pre_aggregation' },
-    { title: 'Queries', dataIndex: 'query_count', key: 'query_count', sorter: (a: any, b: any) => a.query_count - b.query_count, defaultSortOrder: 'descend' as const },
-    { title: 'p50', dataIndex: 'p50_ms', key: 'p50_ms', render: fmtMs },
-    { title: 'Last used', dataIndex: 'last_used', key: 'last_used', render: fmtTs },
-  ];
-
-  const queryLogColumns = [
-    { title: 'Time', dataIndex: 'ts', key: 'ts', render: fmtTs, width: 180 },
-    { title: 'API', dataIndex: 'api_type', key: 'api_type', width: 80 },
-    { title: 'Duration', dataIndex: 'duration_ms', key: 'duration_ms', render: fmtMs, sorter: (a: any, b: any) => (a.duration_ms || 0) - (b.duration_ms || 0) },
+  const catalogColumns = [
+    { title: 'Cube', dataIndex: 'cube', key: 'cube', width: 160 },
+    { title: 'Pre-Aggregation', dataIndex: 'name', key: 'name' },
     {
-      title: 'Accelerated',
-      dataIndex: 'queries_with_pre_aggregations',
-      key: 'acc',
-      width: 110,
-      render: (v: number) =>
-        v > 0 ? <Tag color="green">pre-agg</Tag> : <Tag>raw db</Tag>,
+      title: 'Type',
+      key: 'type',
+      width: 150,
+      render: (_: any, r: any) => (
+        <span>
+          {r.type}
+          {r.granularity ? <Tag style={{ marginLeft: 6 }}>{r.granularity}</Tag> : null}
+        </span>
+      ),
     },
     {
-      title: 'Pre-Aggregations',
-      dataIndex: 'used_pre_aggregations',
-      key: 'used',
-      render: (v: any) =>
-        v && Object.keys(v).length
-          ? Object.keys(v).map((k) => <Tag key={k}>{k}</Tag>)
-          : '—',
+      title: 'Status',
+      key: 'status',
+      width: 110,
+      render: (_: any, r: any) =>
+        r.hits > 0 ? (
+          <Tag color="green">used</Tag>
+        ) : r.build_count > 0 ? (
+          <Tag color="orange">built · 0 hits</Tag>
+        ) : (
+          <Tag color="red">unused</Tag>
+        ),
+    },
+    {
+      title: 'Hits',
+      dataIndex: 'hits',
+      key: 'hits',
+      width: 90,
+      defaultSortOrder: 'descend' as const,
+      sorter: (a: any, b: any) => a.hits - b.hits,
+    },
+    { title: 'p50', dataIndex: 'p50_ms', key: 'p50_ms', width: 90, render: fmtMs },
+    { title: 'Last used', dataIndex: 'last_used', key: 'last_used', width: 180, render: fmtTs },
+    {
+      title: 'Builds',
+      key: 'builds',
+      width: 110,
+      render: (_: any, r: any) =>
+        r.build_count > 0 ? (
+          <Tooltip title={`avg ${fmtMs(r.avg_build_ms)} · max ${fmtMs(r.max_build_ms)} · last ${fmtTs(r.last_build)}`}>
+            <span>{r.build_count}×</span>
+          </Tooltip>
+        ) : (
+          '—'
+        ),
     },
   ];
 
@@ -142,24 +191,26 @@ export function PreAggMonitorPage() {
   ];
 
   const queueColumns = [
-    { title: 'Table', dataIndex: ['queryKey', 1], key: 'table', render: (_: any, row: any) => row.preAggregation || JSON.stringify(row.queryKey)?.slice(0, 80) },
+    { title: 'Table', key: 'table', render: (_: any, row: any) => row.preAggregation || (row.queryKey ? JSON.stringify(row.queryKey).slice(0, 80) : '—') },
     { title: 'Status', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color={s === 'active' ? 'blue' : 'default'}>{s}</Tag> },
     { title: 'Request', dataIndex: 'requestId', key: 'requestId' },
+  ];
+
+  const drillColumns = [
+    { title: 'Time', dataIndex: 'ts', key: 'ts', render: fmtTs, width: 180 },
+    { title: 'API', dataIndex: 'api_type', key: 'api_type', width: 70 },
+    { title: 'Duration', dataIndex: 'duration_ms', key: 'duration_ms', render: fmtMs, width: 110, sorter: (a: any, b: any) => (a.duration_ms || 0) - (b.duration_ms || 0) },
+    { title: 'Query', dataIndex: 'query', key: 'query', ellipsis: true, render: (q: any) => <code>{q ? JSON.stringify(q).slice(0, 100) : '—'}</code> },
   ];
 
   return (
     <div style={{ padding: 24 }}>
       <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
         <Col>
-          <h1 style={{ margin: 0 }}>Pre-Aggregations Monitor</h1>
+          <h1 style={{ margin: 0 }}>Pre-Aggregations</h1>
         </Col>
         <Col>
-          <Select
-            value={windowHours}
-            onChange={setWindowHours}
-            options={WINDOW_OPTIONS}
-            style={{ width: 140, marginRight: 8 }}
-          />
+          <Select value={windowHours} onChange={setWindowHours} options={WINDOW_OPTIONS} style={{ width: 140, marginRight: 8 }} />
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
             Refresh
           </Button>
@@ -172,93 +223,103 @@ export function PreAggMonitorPage() {
           showIcon
           style={{ marginBottom: 16 }}
           message="Telemetry store not configured"
-          description="Set CUBEJS_TELEMETRY_DB_URL to enable query log and build history. The live build queue still works without it."
+          description="Set CUBEJS_TELEMETRY_DB_URL to see usage/build stats. The catalog and live build queue still work without it."
         />
       )}
 
-      <div>
-        <Row gutter={16} style={{ marginBottom: 24 }}>
-          <Col span={6}>
-            <Card>
-              <Statistic title={`Queries (${windowHours}h)`} value={summary?.total_queries ?? 0} />
-            </Card>
-          </Col>
-          <Col span={6}>
-            <Card>
-              <Statistic title="Pre-Agg hit rate" value={hitRate} suffix="%" />
-            </Card>
-          </Col>
-          <Col span={6}>
-            <Card>
-              <Statistic title="p50 latency" value={summary?.p50_ms ?? 0} suffix="ms" />
-            </Card>
-          </Col>
-          <Col span={6}>
-            <Card>
-              <Statistic title="p95 latency" value={summary?.p95_ms ?? 0} suffix="ms" />
-            </Card>
-          </Col>
-        </Row>
+      <Row gutter={16} style={{ marginBottom: 24 }}>
+        <Col span={6}>
+          <Card>
+            <Statistic title="Defined pre-aggs" value={stats.defined} />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <Statistic title="Used" value={stats.used} valueStyle={{ color: '#3f8600' }} />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <Statistic title="Unused" value={stats.unused} valueStyle={{ color: stats.unused ? '#cf1322' : undefined }} />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <Statistic title={`Pre-Agg hit rate (${windowHours}h)`} value={hitRate} suffix="%" />
+          </Card>
+        </Col>
+      </Row>
 
-        <Tabs defaultActiveKey="used-by">
-          <TabPane tab="Used By" key="used-by">
-            <Table
-              rowKey={(r: any) => r.pre_aggregation}
-              dataSource={usedBy}
-              columns={usedByColumns}
-              size="small"
-              loading={loading}
-              pagination={{ pageSize: 20 }}
-            />
-          </TabPane>
+      <Tabs defaultActiveKey="catalog">
+        <TabPane tab="Catalog" key="catalog">
+          <Table
+            rowKey={(r: any) => r.id}
+            dataSource={catalog}
+            columns={catalogColumns}
+            size="small"
+            loading={loading}
+            pagination={{ pageSize: 25 }}
+            onRow={(record) => ({ onClick: () => openPreAgg(record), style: { cursor: 'pointer' } })}
+          />
+        </TabPane>
 
-          <TabPane tab="Query Log" key="query-log">
-            <Table
-              rowKey={(r: any) => r.id}
-              dataSource={queryLog}
-              columns={queryLogColumns}
-              size="small"
-              loading={loading}
-              pagination={{ pageSize: 25 }}
-            />
-          </TabPane>
+        <TabPane tab="Build History" key="build-history">
+          {buildChartData.length > 0 && (
+            <div style={{ height: 220, marginBottom: 16 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={buildChartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" hide />
+                  <YAxis unit="ms" />
+                  <RechartsTooltip />
+                  <Bar dataKey="duration" fill="#7A77FF" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+          <Table rowKey={(r: any) => r.id} dataSource={buildHistory} columns={buildColumns} size="small" loading={loading} pagination={{ pageSize: 25 }} />
+        </TabPane>
 
-          <TabPane tab="Build History" key="build-history">
-            {buildChartData.length > 0 && (
-              <div style={{ height: 220, marginBottom: 16 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={buildChartData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" hide />
-                    <YAxis unit="ms" />
-                    <RechartsTooltip />
-                    <Bar dataKey="duration" fill="#7A77FF" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-            <Table
-              rowKey={(r: any) => r.id}
-              dataSource={buildHistory}
-              columns={buildColumns}
-              size="small"
-              loading={loading}
-              pagination={{ pageSize: 25 }}
-            />
-          </TabPane>
+        <TabPane tab={`Build Queue (${queue.length})`} key="queue">
+          <Table rowKey={(r: any, i?: number) => `${r.requestId}-${i}`} dataSource={queue} columns={queueColumns} size="small" loading={loading} pagination={false} />
+        </TabPane>
+      </Tabs>
 
-          <TabPane tab={`Build Queue (${queue.length})`} key="queue">
-            <Table
-              rowKey={(r: any, i?: number) => `${r.requestId}-${i}`}
-              dataSource={queue}
-              columns={queueColumns}
-              size="small"
-              loading={loading}
-              pagination={false}
-            />
-          </TabPane>
-        </Tabs>
-      </div>
+      <Drawer
+        title={selected ? `${selected.cube}.${selected.name}` : ''}
+        width={720}
+        visible={Boolean(selected)}
+        onClose={() => setSelected(null)}
+      >
+        {selected && (
+          <>
+            <Row gutter={16} style={{ marginBottom: 16 }}>
+              <Col span={8}><Statistic title="Hits" value={selected.hits} /></Col>
+              <Col span={8}><Statistic title="p50" value={selected.p50_ms ?? 0} suffix="ms" /></Col>
+              <Col span={8}><Statistic title="Builds" value={selected.build_count} /></Col>
+            </Row>
+            <p>
+              <b>Type:</b> {selected.type}
+              {selected.granularity ? ` · ${selected.granularity}` : ''} ·{' '}
+              <b>external:</b> {String(selected.external)} · <b>scheduledRefresh:</b> {String(selected.scheduledRefresh)}
+            </p>
+            {selected.hits === 0 ? (
+              <Alert
+                type={selected.build_count > 0 ? 'warning' : 'error'}
+                showIcon
+                style={{ marginBottom: 16 }}
+                message={
+                  selected.build_count > 0
+                    ? 'Built but never used in this window — it costs build time without serving queries.'
+                    : 'No usage and no builds in this window — likely a candidate for removal.'
+                }
+              />
+            ) : null}
+            <h4>Queries accelerated by this pre-aggregation</h4>
+            <Table rowKey={(r: any) => r.id} dataSource={drillQueries} columns={drillColumns} size="small" loading={drillLoading} pagination={{ pageSize: 15 }} />
+          </>
+        )}
+      </Drawer>
     </div>
   );
 }

@@ -609,4 +609,78 @@ export class PostgresLogTransport {
     );
     return rows;
   }
+
+  /**
+   * Per-pre-aggregation query usage within a time window, keyed by the
+   * pre-aggregation key as it appears in usedPreAggregations. Used to join
+   * against the defined pre-aggregation catalog (so unused ones show 0 hits).
+   */
+  public async getPreAggUsage(windowHours = 24): Promise<any[]> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return [];
+    }
+    const { rows } = await this.pool.query(
+      `SELECT pre_agg AS pre_aggregation,
+              count(*)::int AS query_count,
+              coalesce(percentile_disc(0.5) within group (order by duration_ms),0)::int  AS p50_ms,
+              coalesce(percentile_disc(0.95) within group (order by duration_ms),0)::int AS p95_ms,
+              max(ts) AS last_used
+       FROM (
+         SELECT ts, duration_ms, jsonb_object_keys(coalesce(used_pre_aggregations,'{}'::jsonb)) AS pre_agg
+         FROM ${this.schema}.query_log
+         WHERE used_pre_aggregations IS NOT NULL
+           AND ts > now() - ($1 || ' hours')::interval
+       ) t
+       GROUP BY pre_agg
+       ORDER BY query_count DESC`,
+      [windowHours],
+    );
+    return rows;
+  }
+
+  /**
+   * Per-pre-aggregation build statistics within a time window.
+   */
+  public async getPreAggBuildStats(windowHours = 24): Promise<any[]> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return [];
+    }
+    const { rows } = await this.pool.query(
+      `SELECT pre_aggregation,
+              count(*)::int AS build_count,
+              coalesce(avg(duration_ms),0)::int AS avg_ms,
+              coalesce(max(duration_ms),0)::int AS max_ms,
+              max(ts) AS last_build
+       FROM ${this.schema}.preagg_build_log
+       WHERE status = 'completed'
+         AND pre_aggregation IS NOT NULL
+         AND ts > now() - ($1 || ' hours')::interval
+       GROUP BY pre_aggregation`,
+      [windowHours],
+    );
+    return rows;
+  }
+
+  /**
+   * Recent queries that were accelerated by a specific pre-aggregation
+   * (matched on the exact key stored in usedPreAggregations).
+   */
+  public async getQueriesForPreAgg(key: string, windowHours = 24, limit = 100): Promise<any[]> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return [];
+    }
+    const { rows } = await this.pool.query(
+      `SELECT id, ts, request_id, api_type, duration_ms, query, sql, generated_sql, external
+       FROM ${this.schema}.query_log
+       WHERE used_pre_aggregations ? $1
+         AND ts > now() - ($2 || ' hours')::interval
+       ORDER BY ts DESC
+       LIMIT $3`,
+      [key, windowHours, Math.min(limit, 500)],
+    );
+    return rows;
+  }
 }

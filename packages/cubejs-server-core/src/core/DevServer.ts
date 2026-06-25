@@ -198,6 +198,74 @@ export class DevServer {
       res.json({ queue: await orchestratorApi.getPreAggregationQueueStates() });
     }));
 
+    // Normalize a pre-aggregation identifier for fuzzy matching between the
+    // defined catalog ids ("Cube.name") and the keys/table names seen in
+    // telemetry (e.g. "cube.name", "dev_pre_aggregations.cube_name_...").
+    const normKey = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    // Catalog of all DEFINED pre-aggregations, left-joined with usage + build
+    // telemetry so pre-aggs with zero hits surface as candidates for removal.
+    app.get('/playground/pre-agg-monitor/catalog', catchErrors(async (req, res) => {
+      const windowHours = telemetryWindow(req);
+      const compilerApi = await this.cubejsServer.getCompilerApi({
+        authInfo: null,
+        securityContext: {},
+        requestId: getRequestIdFromRequest(req),
+      } as any);
+      const defined = await compilerApi.preAggregations();
+
+      const t = telemetry();
+      const usage = t ? await t.getPreAggUsage(windowHours) : [];
+      const builds = t ? await t.getPreAggBuildStats(windowHours) : [];
+
+      const matchStat = (id: string, name: string, stats: any[]) => {
+        const candidates = [normKey(id), normKey(name)];
+        return stats.find((s) => {
+          const k = normKey(s.pre_aggregation);
+          return candidates.includes(k) || candidates.some((c) => c && (k.includes(c) || c.includes(k)));
+        });
+      };
+
+      const rows = defined.map((p: any) => {
+        const def = p.preAggregation || {};
+        const u = matchStat(p.id, p.preAggregationName, usage);
+        const b = matchStat(p.id, p.preAggregationName, builds);
+        return {
+          id: p.id,
+          cube: p.cube,
+          name: p.preAggregationName,
+          type: def.type || 'rollup',
+          granularity: def.granularity || null,
+          external: def.external !== false,
+          scheduledRefresh: Boolean(def.scheduledRefresh),
+          // usage
+          usageKey: u ? u.pre_aggregation : null,
+          hits: u ? u.query_count : 0,
+          p50_ms: u ? u.p50_ms : null,
+          p95_ms: u ? u.p95_ms : null,
+          last_used: u ? u.last_used : null,
+          // builds
+          build_count: b ? b.build_count : 0,
+          avg_build_ms: b ? b.avg_ms : null,
+          max_build_ms: b ? b.max_ms : null,
+          last_build: b ? b.last_build : null,
+        };
+      });
+
+      res.json({ telemetryEnabled: Boolean(t), windowHours, rows });
+    }));
+
+    // Recent queries accelerated by a given pre-aggregation key.
+    app.get('/playground/pre-agg-monitor/preagg-queries', catchErrors(async (req, res) => {
+      const t = telemetry();
+      const key = String(req.query.key || '');
+      if (!t || !key) {
+        res.json({ enabled: Boolean(t), rows: [] });
+        return;
+      }
+      res.json({ enabled: true, rows: await t.getQueriesForPreAgg(key, telemetryWindow(req)) });
+    }));
+
     app.get('/playground/db-schema', catchErrors(async (req, res) => {
       this.cubejsServer.event('Dev Server DB Schema Load');
       const driver = await this.cubejsServer.getDriver({

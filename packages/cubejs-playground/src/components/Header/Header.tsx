@@ -63,7 +63,7 @@ export default function Header({ selectedKeys }: Props) {
           </StyledMenuItem>
 
           <StyledMenuItem key="/pre-agg-monitor">
-            <Link to="/pre-agg-monitor">Pre-Agg Monitor</Link>
+            <Link to="/pre-agg-monitor">Pre-Aggregations</Link>
           </StyledMenuItem>
 
           <StyledMenuItem key="/query-history">
