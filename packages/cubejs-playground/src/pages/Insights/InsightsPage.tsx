@@ -220,7 +220,7 @@ export function InsightsPage() {
 
         <TabPane tab="Recommendations" key="recs">
           <Tabs defaultActiveKey="add" type="card">
-            <TabPane tab="➕ Add pre-aggregation" key="add">
+            <TabPane tab="Add pre-aggregation" key="add">
               <Alert
                 type="warning"
                 showIcon
@@ -239,7 +239,7 @@ export function InsightsPage() {
               />
             </TabPane>
 
-            <TabPane tab={`➖ Remove (${removePreAggs.length})`} key="remove">
+            <TabPane tab={`Remove (${removePreAggs.length})`} key="remove">
               <Alert
                 type="info"
                 showIcon
@@ -264,7 +264,7 @@ export function InsightsPage() {
               />
             </TabPane>
 
-            <TabPane tab={`✂️ Trim fields (${trimFields.length})`} key="trim">
+            <TabPane tab={`Trim fields (${trimFields.length})`} key="trim">
               <Alert
                 type="info"
                 showIcon
