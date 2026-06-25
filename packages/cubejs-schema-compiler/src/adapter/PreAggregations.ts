@@ -1650,10 +1650,17 @@ export class PreAggregations {
         }))
       )].filter(f => !!f);
 
+    // When the query hits a single rollup table, qualify dimension/time-dimension
+    // column references with that table's alias (e.g. `rollup`.`query__app_name`).
+    // This keeps references unambiguous once extra tables (e.g. correlated subquery
+    // joins) are added to the FROM. For rollupJoin (multiple tables) we can't map a
+    // member to its source table here, so we keep the previous unqualified behavior.
+    const singleTableAlias = toJoin.length === 1 ? toJoin[0].alias : null;
+
     const renderedReference = {
       ...(this.measuresRenderedReference(preAggregationForQuery)),
-      ...(this.dimensionsRenderedReference(preAggregationForQuery)),
-      ...(this.timeDimensionsRenderedReference(rollupGranularity, preAggregationForQuery)),
+      ...(this.dimensionsRenderedReference(preAggregationForQuery, singleTableAlias)),
+      ...(this.timeDimensionsRenderedReference(rollupGranularity, preAggregationForQuery, singleTableAlias)),
     };
 
     return this.query.evaluateSymbolSqlWithContext(
@@ -1733,14 +1740,15 @@ export class PreAggregations {
       }));
   }
 
-  private dimensionsRenderedReference(preAggregationForQuery: PreAggregationForQuery): Record<string, string> {
+  private dimensionsRenderedReference(preAggregationForQuery: PreAggregationForQuery, tableAlias: string | null = null): Record<string, string> {
     const dimensions = this.rollupDimensions(preAggregationForQuery);
 
     return Object.fromEntries(dimensions
       .flatMap(path => {
         const dimension = this.query.newDimension(path);
         const dimensionPath = dimension.path();
-        const column = this.query.escapeColumnName(dimension.unescapedAliasName());
+        const rawColumn = this.query.escapeColumnName(dimension.unescapedAliasName());
+        const column = tableAlias ? `${tableAlias}.${rawColumn}` : rawColumn;
         if (dimensionPath === null) {
           return [[path, column]];
         }
@@ -1753,13 +1761,14 @@ export class PreAggregations {
       }));
   }
 
-  private timeDimensionsRenderedReference(rollupGranularity: string, preAggregationForQuery: PreAggregationForQuery): Record<string, string> {
+  private timeDimensionsRenderedReference(rollupGranularity: string, preAggregationForQuery: PreAggregationForQuery, tableAlias: string | null = null): Record<string, string> {
     const timeDimensions = this.rollupTimeDimensions(preAggregationForQuery);
 
     return Object.fromEntries(timeDimensions
       .flatMap(td => {
         const timeDimension = this.query.newTimeDimension(td);
-        const column = this.query.escapeColumnName(timeDimension.unescapedAliasName(rollupGranularity));
+        const rawColumn = this.query.escapeColumnName(timeDimension.unescapedAliasName(rollupGranularity));
+        const column = tableAlias ? `${tableAlias}.${rawColumn}` : rawColumn;
         const memberPath = this.query.cubeEvaluator.pathFromArray(timeDimension.path());
         // Return both full join path and dimension path
         return [
