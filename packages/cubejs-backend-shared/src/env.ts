@@ -1227,6 +1227,20 @@ const variables: Record<string, (...args: any) => any> = {
   ),
 
   /**
+   * BigQuery reservation to run jobs under, e.g.
+   * `projects/PROJECT/locations/LOCATION/reservations/RESERVATION_ID`.
+   * Honors the pre-aggregations prefix, so a separate reservation can be
+   * assigned to pre-aggregation builds via
+   * CUBEJS_PRE_AGGREGATIONS_DB_BQ_RESERVATION.
+   */
+  bigqueryReservation: ({
+    dataSource,
+    preAggregations,
+  }: DataSourceOpts) => (
+    get(keyByDataSource('CUBEJS_DB_BQ_RESERVATION', dataSource, preAggregations)).asString()
+  ),
+
+  /**
    * BigQuery export bucket.
    * @deprecated
    */

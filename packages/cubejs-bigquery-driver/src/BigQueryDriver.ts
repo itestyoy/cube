@@ -47,6 +47,14 @@ interface BigQueryDriverOptions extends BigQueryOptions {
   pollMaxInterval?: number,
 
   /**
+   * BigQuery reservation to run jobs under, e.g.
+   * `projects/PROJECT/locations/LOCATION/reservations/RESERVATION_ID`.
+   * Lets pre-aggregation builds use reserved slots without changing the
+   * billing/storage project.
+   */
+  reservation?: string,
+
+  /**
    * The export bucket CSV file escape symbol.
    */
   exportBucketCsvEscapeSymbol?: string,
@@ -80,6 +88,13 @@ export class BigQueryDriver extends BaseDriver implements DriverInterface {
   protected readonly storage: Storage | null = null;
 
   protected readonly bucket: Bucket | null = null;
+
+  /**
+   * Reservation assigned to every query job issued by this driver instance
+   * (resolved from CUBEJS_DB_BQ_RESERVATION / the pre-aggregations-prefixed
+   * variant). Undefined => on-demand pricing, default behaviour.
+   */
+  protected readonly reservation: string | undefined;
 
   /**
    * Class constructor.
@@ -161,6 +176,10 @@ export class BigQueryDriver extends BaseDriver implements DriverInterface {
       this.storage = new Storage(this.options);
       this.bucket = this.storage.bucket(this.options.exportBucket);
     }
+
+    this.reservation =
+      config.reservation ||
+      getEnv('bigqueryReservation', { dataSource, preAggregations });
   }
 
   /**
@@ -172,6 +191,7 @@ export class BigQueryDriver extends BaseDriver implements DriverInterface {
     return [
       'CUBEJS_DB_BQ_PROJECT_ID',
       'CUBEJS_DB_BQ_KEY_FILE',
+      'CUBEJS_DB_BQ_RESERVATION',
     ];
   }
 
@@ -340,6 +360,7 @@ export class BigQueryDriver extends BaseDriver implements DriverInterface {
       parameterMode: 'positional',
       useLegacySql: false,
       wrapIntegers: true,
+      ...(this.reservation ? { reservation: this.reservation } : {}),
     });
 
     const rowStream = new HydrationStream();
@@ -423,6 +444,9 @@ export class BigQueryDriver extends BaseDriver implements DriverInterface {
     options: any,
     withResults: boolean = true
   ): Promise<T> {
+    if (this.reservation && !bigQueryQuery.reservation) {
+      bigQueryQuery.reservation = this.reservation;
+    }
     const [job] = await this.bigquery.createQueryJob(bigQueryQuery);
     return <any> this.waitForJobResult(job, options, withResults);
   }
