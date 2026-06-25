@@ -160,14 +160,6 @@ RUN yarn policies set-version v1.22.22 && \
 ENV CUBESTORE_SKIP_POST_INSTALL=true
 RUN yarn install --frozen-lockfile
 
-# Bump @google-cloud/bigquery to a version with per-job `reservation` support
-# (added in SDK 8.1.0) at BUILD TIME only — the committed package.json/yarn.lock
-# stay on ^7.7.0. yarn v1 re-resolves just the @google-cloud/bigquery subgraph
-# and updates the in-container package.json + yarn.lock, so the production
-# --frozen-lockfile install below stays consistent. v8's only breaking change
-# is Node >= 18, satisfied by this node:22 image.
-RUN yarn workspace @cubejs-backend/bigquery-driver add @google-cloud/bigquery@^8.1.1
-
 # Copy built native module from previous stage
 # This prevents it from being downloaded/built again
 COPY --from=native-builder /cube/packages/cubejs-backend-native/index.node \
@@ -175,6 +167,19 @@ COPY --from=native-builder /cube/packages/cubejs-backend-native/index.node \
 
 # Build Core Client libraries (workflow line 61)
 RUN yarn build
+
+# Bump @google-cloud/bigquery to a version with per-job `reservation` support
+# (added in SDK 8.1.0) at BUILD TIME only — the committed package.json/yarn.lock
+# stay on ^7.7.0. Done AFTER `yarn build` so the client-core rollup build runs
+# on the pristine frozen tree, and via `sed` + plain `yarn install` (NOT
+# `yarn add`, which aggressively re-resolves and re-hoists unrelated caret
+# deps). yarn v1's reconciling install re-resolves only the bigquery subgraph
+# and keeps every other locked dependency (incl. rollup) pinned, so the driver
+# below compiles against v8 types and the prod --frozen-lockfile install stays
+# consistent. v8's only breaking change is Node >= 18 (image is node:22).
+RUN sed -i 's#"@google-cloud/bigquery": "\^7\.7\.0"#"@google-cloud/bigquery": "^8.1.1"#' \
+      packages/cubejs-bigquery-driver/package.json && \
+    yarn install
 
 # Build other packages (workflow line 63)
 ENV NODE_OPTIONS=--max_old_space_size=4096
