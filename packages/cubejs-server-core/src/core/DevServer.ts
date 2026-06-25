@@ -567,6 +567,39 @@ export class DevServer {
       res.json({ enabled: Boolean(t), measures, dimensions });
     }));
 
+    // Which other members a given member is most often queried alongside.
+    // Computed on canonicalized (view -> cube) member sets so it aligns with
+    // the model's cube members shown in Model Usage.
+    app.get('/playground/insights/cooccurrence', catchErrors(async (req, res) => {
+      const t = telemetry();
+      const member = String(req.query.member || '');
+      if (!t || !member) {
+        res.json({ enabled: Boolean(t), rows: [] });
+        return;
+      }
+      const canonical = await buildAliasMap(req);
+      const sets = await t.getRecentQueryMembers(telemetryWindow(req));
+      const counts: Record<string, number> = {};
+      let total = 0;
+      sets.forEach((raw: string[]) => {
+        const members = Array.from(new Set(raw.map((m) => canonical(m))));
+        if (!members.includes(member)) {
+          return;
+        }
+        total += 1;
+        members.forEach((m) => {
+          if (m !== member) {
+            counts[m] = (counts[m] || 0) + 1;
+          }
+        });
+      });
+      const rows = Object.entries(counts)
+        .map(([m, c]) => ({ member: m, count: c, pct: total ? Math.round((c / total) * 100) : 0 }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 30);
+      res.json({ enabled: true, member, coQueries: total, rows });
+    }));
+
     app.get('/playground/insights/hash-queries', catchErrors(async (req, res) => {
       const t = telemetry();
       const hash = String(req.query.hash || '');

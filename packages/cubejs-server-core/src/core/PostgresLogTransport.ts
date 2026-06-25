@@ -1020,6 +1020,34 @@ export class PostgresLogTransport {
   }
 
   /**
+   * Member sets of recent queries (measures + dimensions + time-dimension
+   * members + segments per query), used to compute member co-occurrence.
+   */
+  public async getRecentQueryMembers(window: number | TimeRange = 24, limit = 3000): Promise<string[][]> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return [];
+    }
+    const { from, to } = this.timeBounds(window);
+    const { rows } = await this.pool.query(
+      `SELECT query FROM ${this.schema}.query_log
+       WHERE query IS NOT NULL AND jsonb_typeof(query) = 'object' AND ts >= $1 AND ts < $2
+       ORDER BY ts DESC
+       LIMIT $3`,
+      [from, to, Math.min(limit, 20000)],
+    );
+    return rows.map((r: any) => {
+      const q = r.query || {};
+      return [
+        ...(Array.isArray(q.measures) ? q.measures : []),
+        ...(Array.isArray(q.dimensions) ? q.dimensions : []),
+        ...(Array.isArray(q.segments) ? q.segments : []),
+        ...(Array.isArray(q.timeDimensions) ? q.timeDimensions.map((t: any) => t && t.dimension) : []),
+      ].filter(Boolean);
+    });
+  }
+
+  /**
    * Recent individual queries for one fingerprint (Top Queries drill-down).
    */
   public async getQueriesForHash(hash: string, window: number | TimeRange = 24, limit = 100): Promise<any[]> {

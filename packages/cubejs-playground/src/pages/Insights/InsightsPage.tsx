@@ -50,9 +50,14 @@ export function InsightsPage() {
   const [hashQueries, setHashQueries] = useState<Record<string, any[]>>({});
   const [hashLoading, setHashLoading] = useState<Record<string, boolean>>({});
 
+  // Lazily-loaded member co-occurrence (Model Usage drill-in).
+  const [cooc, setCooc] = useState<Record<string, any>>({});
+  const [coocLoading, setCoocLoading] = useState<Record<string, boolean>>({});
+
   const load = useCallback(async () => {
     setLoading(true);
     setHashQueries({});
+    setCooc({});
     try {
       const w = rangeParams(range);
       const [t, r, e, mu, adv] = await Promise.all([
@@ -89,6 +94,40 @@ export function InsightsPage() {
     },
     [range, hashQueries]
   );
+
+  const loadCooc = useCallback(
+    (member: string) => {
+      if (!member || cooc[member]) return;
+      setCoocLoading((s) => ({ ...s, [member]: true }));
+      getJson(`playground/insights/cooccurrence?member=${encodeURIComponent(member)}&${rangeParams(range)}`)
+        .then((r) => setCooc((s) => ({ ...s, [member]: r })))
+        .finally(() => setCoocLoading((s) => ({ ...s, [member]: false })));
+    },
+    [range, cooc]
+  );
+
+  const memberExpandable = {
+    onExpand: (expanded: boolean, record: any) => {
+      if (expanded) loadCooc(record.member);
+    },
+    expandedRowRender: (r: any) => {
+      const data = cooc[r.member];
+      if (coocLoading[r.member]) return <span style={{ color: '#999' }}>Loading…</span>;
+      if (!data || !data.rows || !data.rows.length) {
+        return <span style={{ color: '#999' }}>No co-occurring members in this window.</span>;
+      }
+      return (
+        <div>
+          <span style={{ color: '#888', marginRight: 8 }}>Most often queried together ({data.coQueries} queries):</span>
+          {data.rows.map((c: any) => (
+            <Tag key={c.member} style={{ margin: 2 }}>
+              {c.member} <span style={{ opacity: 0.6 }}>{c.pct}%</span>
+            </Tag>
+          ))}
+        </div>
+      );
+    },
+  };
 
   const drillColumns = [
     { title: 'Time', dataIndex: 'ts', key: 'ts', render: fmtTs, width: 180 },
@@ -336,10 +375,10 @@ export function InsightsPage() {
           </div>
           <Tabs defaultActiveKey="measures" type="card">
             <TabPane tab={`Measures (${filteredMeasures.length})`} key="measures">
-              <Table rowKey={(r: any) => r.member} dataSource={filteredMeasures} columns={memberColumns} size="small" loading={loading} pagination={{ defaultPageSize: 25, showSizeChanger: true }} />
+              <Table rowKey={(r: any) => r.member} dataSource={filteredMeasures} columns={memberColumns} size="small" loading={loading} pagination={{ defaultPageSize: 25, showSizeChanger: true }} expandable={memberExpandable} />
             </TabPane>
             <TabPane tab={`Dimensions (${filteredDimensions.length})`} key="dimensions">
-              <Table rowKey={(r: any) => r.member} dataSource={filteredDimensions} columns={memberColumns} size="small" loading={loading} pagination={{ defaultPageSize: 25, showSizeChanger: true }} />
+              <Table rowKey={(r: any) => r.member} dataSource={filteredDimensions} columns={memberColumns} size="small" loading={loading} pagination={{ defaultPageSize: 25, showSizeChanger: true }} expandable={memberExpandable} />
             </TabPane>
           </Tabs>
         </TabPane>
