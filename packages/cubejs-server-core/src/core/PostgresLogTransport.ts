@@ -197,6 +197,16 @@ export class PostgresLogTransport {
     try {
       switch (msg) {
         case 'Load Request Success':
+          // The SQL API emits this from the Rust layer with only the raw SQL
+          // and no pre-aggregation info, and also for non-data statements
+          // (SET SESSION, etc.). We capture the richer 'SQL API Load Success'
+          // event instead, so skip the SQL variant here to avoid duplicates.
+          if (params.apiType === 'sql') {
+            return;
+          }
+          this.recordQuery(params);
+          break;
+        case 'SQL API Load Success':
           this.recordQuery(params);
           break;
         case 'Internal Server Error':

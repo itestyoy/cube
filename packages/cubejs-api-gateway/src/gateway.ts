@@ -2148,6 +2148,11 @@ class ApiGateway {
 
       let slowQuery = false;
 
+      // Pre-aggregation usage per executed query, collected so we can emit a
+      // rich telemetry event for the SQL API (the Rust-side 'Load Request
+      // Success' carries only the raw SQL and no pre-agg info).
+      const preAggInfos: Array<{ used: any; external: boolean }> = [];
+
       const streamResponse = async (sqlQuery) => {
         const q: QueryBody = {
           ...sqlQuery,
@@ -2184,6 +2189,8 @@ class ApiGateway {
         } else {
           const adapterApi = await this.getAdapterApi(context);
           const response = await adapterApi.executeQuery(finalQuery);
+
+          preAggInfos.push({ used: response.usedPreAggregations || {}, external: Boolean(response.external) });
 
           const annotation = prepareAnnotation(
             metaConfigResult, normalizedQueries[0]
@@ -2226,6 +2233,8 @@ class ApiGateway {
               sqlQueries[index],
             );
 
+            preAggInfos.push({ used: response.usedPreAggregations || {}, external: Boolean(response.external) });
+
             return this.prepareResultTransformData(
               context,
               queryType,
@@ -2245,6 +2254,25 @@ class ApiGateway {
           const resultArray = new ResultArrayWrapper(results);
           await res(resultArray);
         }
+      }
+
+      // Emit a rich telemetry event for the SQL API carrying the Cube query and
+      // pre-aggregation usage. Captured by the Postgres telemetry transport
+      // instead of the minimal Rust-side 'Load Request Success' (which only has
+      // the raw SQL and also fires for non-data statements like SET SESSION).
+      if (!request.streaming) {
+        this.log({
+          type: 'SQL API Load Success',
+          query,
+          apiType: 'sql',
+          duration: this.duration(requestStarted),
+          queries: preAggInfos.length,
+          queriesWithPreAggregations: preAggInfos.filter(
+            (p) => p.used && Object.keys(p.used).length
+          ).length,
+          usedPreAggregations: Object.assign({}, ...preAggInfos.map((p) => p.used || {})),
+          external: preAggInfos.some((p) => p.external),
+        }, context);
       }
     } catch (e: any) {
       this.handleError({
