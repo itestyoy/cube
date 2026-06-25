@@ -274,6 +274,38 @@ export class DevServer {
     // telemetry (e.g. "cube.name", "dev_pre_aggregations.cube_name_...").
     const normKey = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+    // Map every VIEW member to its underlying CUBE member via the meta
+    // `aliasMember` field. Queries usually reference view members while
+    // pre-aggregations are defined on cubes; canonicalizing to the cube member
+    // is the correct way to match the two (resolved transitively for views of
+    // views). `canonicalMember` leaves plain cube members untouched.
+    const buildAliasMap = async (req: Request): Promise<(m: string) => string> => {
+      const map: Record<string, string> = {};
+      try {
+        const ctx = { authInfo: null, securityContext: {}, requestId: getRequestIdFromRequest(req) } as any;
+        const compilerApi = await this.cubejsServer.getCompilerApi(ctx);
+        const meta = await compilerApi.metaConfig(ctx, { requestId: getRequestIdFromRequest(req) });
+        const cubes = Array.isArray(meta) ? meta : (meta && meta.cubes) || [];
+        cubes.forEach((c: any) => {
+          const conf = c.config || c;
+          [...(conf.measures || []), ...(conf.dimensions || []), ...(conf.segments || [])].forEach((m: any) => {
+            if (m && m.aliasMember && m.name) {
+              map[m.name] = m.aliasMember;
+            }
+          });
+        });
+      } catch (e) {
+        // best-effort; fall back to identity matching
+      }
+      return (member: string) => {
+        let cur = member;
+        for (let i = 0; i < 5 && map[cur]; i++) {
+          cur = map[cur];
+        }
+        return cur;
+      };
+    };
+
     // Catalog of all DEFINED pre-aggregations, left-joined with usage + build
     // telemetry so pre-aggs with zero hits surface as candidates for removal.
     app.get('/playground/pre-agg-monitor/catalog', catchErrors(async (req, res) => {
@@ -405,6 +437,10 @@ export class DevServer {
       // Field-level usage: count how often each member appears across the
       // queries this pre-aggregation actually served (its "Used By" set). A
       // field never requested by any of those queries is dead weight here.
+      // Count member usage across this pre-agg's served queries, canonicalizing
+      // each queried (often view) member to its underlying cube member so it
+      // lines up with the pre-aggregation's cube-based references.
+      const canonical = await buildAliasMap(req);
       const memberMap: Record<string, number> = {};
       (queries || []).forEach((qr: any) => {
         const qq = qr.query || {};
@@ -414,8 +450,12 @@ export class DevServer {
           ...(qq.segments || []),
           ...((qq.timeDimensions || []).map((td: any) => td && td.dimension)),
         ].filter(Boolean);
-        new Set(members).forEach((m: any) => { memberMap[m] = (memberMap[m] || 0) + 1; });
+        new Set(members).forEach((m: any) => {
+          const c = canonical(m);
+          memberMap[c] = (memberMap[c] || 0) + 1;
+        });
       });
+      const usesOf = (m: string) => memberMap[m] || memberMap[canonical(m)] || 0;
       const refs: any = p.references || {};
       const collect = (arr: any): string[] =>
         Array.isArray(arr)
@@ -429,9 +469,9 @@ export class DevServer {
         ...collect(def.timeDimension ? [def.timeDimension] : []),
       ]);
       const fields = [
-        ...measureMembers.map((m) => ({ member: m, kind: 'measure', uses: memberMap[m] || 0 })),
-        ...dimensionMembers.map((m) => ({ member: m, kind: 'dimension', uses: memberMap[m] || 0 })),
-        ...timeMembers.map((m) => ({ member: m, kind: 'timeDimension', uses: memberMap[m] || 0 })),
+        ...measureMembers.map((m) => ({ member: m, kind: 'measure', uses: usesOf(m) })),
+        ...dimensionMembers.map((m) => ({ member: m, kind: 'dimension', uses: usesOf(m) })),
+        ...timeMembers.map((m) => ({ member: m, kind: 'timeDimension', uses: usesOf(m) })),
       ];
 
       res.json({
@@ -542,7 +582,15 @@ export class DevServer {
       const t = telemetry();
       const usage = t ? await t.getPreAggUsage(window) : [];
       const buildStats = t ? await t.getPreAggBuildStats(window) : [];
-      const memberMap = t ? await t.getMemberUsageMap(window) : {};
+      const rawMemberMap = t ? await t.getMemberUsageMap(window) : {};
+      // Canonicalize query member usage (view members -> cube members) so it
+      // lines up with the cube-based pre-aggregation references.
+      const canonical = await buildAliasMap(req);
+      const canonUsage: Record<string, number> = {};
+      Object.entries(rawMemberMap).forEach(([k, v]) => {
+        const c = canonical(k);
+        canonUsage[c] = (canonUsage[c] || 0) + (v as number);
+      });
 
       const matchStat = (id: string, name: string, stats: any[]) => {
         const cand = [normKey(id), normKey(name)];
@@ -588,7 +636,7 @@ export class DevServer {
         const unused = members.filter((f) => {
           if (seen.has(f.member)) return false;
           seen.add(f.member);
-          return !(memberMap[f.member] > 0);
+          return !(canonUsage[f.member] > 0 || canonUsage[canonical(f.member)] > 0);
         });
         if (unused.length) {
           trimFields.push({ id: p.id, cube: p.cube, name: p.preAggregationName, fields: unused });
