@@ -3,7 +3,7 @@ import { useHistory } from 'react-router-dom';
 import { Alert, Button, Col, Radio, Row, Select, Switch, Table, Tabs, Tag } from 'antd';
 import { ReloadOutlined, ArrowRightOutlined } from '@ant-design/icons';
 
-import { CodeBlock, fmtMs, fmtTs, getJson } from '../monitoring/common';
+import { CodeBlock, cacheTag, fmtMs, fmtTs, getJson } from '../monitoring/common';
 
 const { TabPane } = Tabs;
 
@@ -34,10 +34,6 @@ function shapeSummary(shape: any) {
   );
 }
 
-const expandShape = (r: any) => (
-  <CodeBlock code={JSON.stringify(r.shape || r.sample_query || {}, null, 2)} language="json" />
-);
-
 export function InsightsPage() {
   const history = useHistory();
   const [windowHours, setWindowHours] = useState(24);
@@ -52,8 +48,13 @@ export function InsightsPage() {
   const [measures, setMeasures] = useState<any[]>([]);
   const [dimensions, setDimensions] = useState<any[]>([]);
 
+  // Lazily-loaded individual queries per fingerprint (Top Queries / Recs drill-in).
+  const [hashQueries, setHashQueries] = useState<Record<string, any[]>>({});
+  const [hashLoading, setHashLoading] = useState<Record<string, boolean>>({});
+
   const load = useCallback(async () => {
     setLoading(true);
+    setHashQueries({});
     try {
       const w = `windowHours=${windowHours}`;
       const [t, r, e, mu] = await Promise.all([
@@ -76,6 +77,49 @@ export function InsightsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const loadHash = useCallback(
+    (hash: string) => {
+      if (!hash || hashQueries[hash]) return;
+      setHashLoading((s) => ({ ...s, [hash]: true }));
+      getJson(`playground/insights/hash-queries?hash=${encodeURIComponent(hash)}&windowHours=${windowHours}`)
+        .then((r) => setHashQueries((s) => ({ ...s, [hash]: r.rows || [] })))
+        .finally(() => setHashLoading((s) => ({ ...s, [hash]: false })));
+    },
+    [windowHours, hashQueries]
+  );
+
+  const drillColumns = [
+    { title: 'Time', dataIndex: 'ts', key: 'ts', render: fmtTs, width: 180 },
+    { title: 'API', dataIndex: 'api_type', key: 'api_type', width: 70 },
+    { title: 'Duration', dataIndex: 'duration_ms', key: 'duration_ms', render: fmtMs, width: 110, sorter: (a: any, b: any) => (a.duration_ms || 0) - (b.duration_ms || 0) },
+    { title: 'Cache', key: 'cache', width: 120, render: (_: any, r: any) => cacheTag(r) },
+  ];
+
+  // Expanded row for a fingerprint: its shape + the individual executions,
+  // each clickable through to the full Request detail.
+  const renderHashDetail = (r: any) => (
+    <>
+      <CodeBlock code={JSON.stringify(r.shape || {}, null, 2)} language="json" />
+      <Table
+        style={{ marginTop: 12 }}
+        rowKey={(rec: any) => rec.id}
+        loading={hashLoading[r.query_hash]}
+        dataSource={hashQueries[r.query_hash] || []}
+        columns={drillColumns}
+        size="small"
+        pagination={{ pageSize: 10 }}
+        onRow={(rec: any) => ({ onClick: () => history.push(`/query-history/${rec.id}`), style: { cursor: 'pointer' } })}
+      />
+    </>
+  );
+
+  const hashExpandable = {
+    expandedRowRender: renderHashDetail,
+    onExpand: (expanded: boolean, record: any) => {
+      if (expanded) loadHash(record.query_hash);
+    },
+  };
 
   const topColumns = [
     { title: 'Query (fields)', key: 'shape', render: (_: any, r: any) => shapeSummary(r.shape) },
@@ -168,7 +212,7 @@ export function InsightsPage() {
             size="small"
             loading={loading}
             pagination={{ defaultPageSize: 25, showSizeChanger: true }}
-            expandable={{ expandedRowRender: expandShape }}
+            expandable={hashExpandable}
           />
         </TabPane>
 
@@ -187,7 +231,7 @@ export function InsightsPage() {
             size="small"
             loading={loading}
             pagination={{ defaultPageSize: 25, showSizeChanger: true }}
-            expandable={{ expandedRowRender: expandShape }}
+            expandable={hashExpandable}
           />
         </TabPane>
 
@@ -225,16 +269,14 @@ export function InsightsPage() {
             <Tag color={deadCount ? 'red' : 'green'}>{deadCount} never-used members</Tag>
             <span style={{ color: '#888', marginLeft: 12 }}>Members never queried in this window are candidates for removal from the model.</span>
           </div>
-          <Row gutter={16}>
-            <Col span={12}>
-              <h3>Measures</h3>
-              <Table rowKey={(r: any) => r.member} dataSource={filteredMeasures} columns={memberColumns} size="small" loading={loading} pagination={{ defaultPageSize: 15, showSizeChanger: true }} />
-            </Col>
-            <Col span={12}>
-              <h3>Dimensions</h3>
-              <Table rowKey={(r: any) => r.member} dataSource={filteredDimensions} columns={memberColumns} size="small" loading={loading} pagination={{ defaultPageSize: 15, showSizeChanger: true }} />
-            </Col>
-          </Row>
+          <Tabs defaultActiveKey="measures" type="card">
+            <TabPane tab={`Measures (${filteredMeasures.length})`} key="measures">
+              <Table rowKey={(r: any) => r.member} dataSource={filteredMeasures} columns={memberColumns} size="small" loading={loading} pagination={{ defaultPageSize: 25, showSizeChanger: true }} />
+            </TabPane>
+            <TabPane tab={`Dimensions (${filteredDimensions.length})`} key="dimensions">
+              <Table rowKey={(r: any) => r.member} dataSource={filteredDimensions} columns={memberColumns} size="small" loading={loading} pagination={{ defaultPageSize: 25, showSizeChanger: true }} />
+            </TabPane>
+          </Tabs>
         </TabPane>
       </Tabs>
     </div>
