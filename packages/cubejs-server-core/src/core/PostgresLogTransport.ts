@@ -923,19 +923,36 @@ export class PostgresLogTransport {
    * NOT accelerated — candidates that would benefit from a pre-aggregation.
    * Ranked by total time spent on the data source.
    */
-  public async getRecommendations(window: number | TimeRange = 24, minAvgMs = 50, limit = 100): Promise<any[]> {
+  /**
+   * Pre-aggregation candidates: unaccelerated query shapes whose average
+   * duration is at/above a workload-relative quantile (e.g. p90 of all query
+   * durations in the window) — adaptive instead of a fixed millisecond cutoff.
+   * Returns the resolved threshold (ms) alongside the rows.
+   */
+  public async getRecommendations(
+    window: number | TimeRange = 24,
+    percentile = 0.9,
+    limit = 100,
+  ): Promise<{ thresholdMs: number; percentile: number; rows: any[] }> {
     await this.init();
     if (this.disabled || !this.pool) {
-      return [];
+      return { thresholdMs: 0, percentile, rows: [] };
     }
     const { from, to } = this.timeBounds(window);
+    const p = Math.min(Math.max(percentile, 0), 0.999);
     const { rows } = await this.pool.query(
-      `SELECT query_hash,
+      `WITH thresh AS (
+         SELECT coalesce(percentile_disc($3) within group (order by duration_ms), 0) AS v
+         FROM ${this.schema}.query_log
+         WHERE ts >= $1 AND ts < $2 AND status = 'success'
+       )
+       SELECT query_hash,
               count(*)::int                            AS executions,
               coalesce(round(avg(duration_ms)),0)::int AS avg_ms,
               coalesce(sum(duration_ms),0)::bigint      AS total_ms,
               coalesce(percentile_disc(0.95) within group (order by duration_ms),0)::int AS p95_ms,
               max(ts)                                   AS last_seen,
+              (SELECT v FROM thresh)::int               AS threshold_ms,
               (array_agg(query_shape ORDER BY ts DESC))[1] AS shape,
               (array_agg(query ORDER BY ts DESC))[1]       AS sample_query
        FROM ${this.schema}.query_log
@@ -944,12 +961,12 @@ export class PostgresLogTransport {
          AND coalesce(queries_with_pre_aggregations,0) = 0
          AND ts >= $1 AND ts < $2
        GROUP BY query_hash
-       HAVING coalesce(round(avg(duration_ms)),0) >= $3
+       HAVING avg(duration_ms) >= (SELECT v FROM thresh)
        ORDER BY total_ms DESC
        LIMIT $4`,
-      [from, to, minAvgMs, Math.min(limit, 500)],
+      [from, to, p, Math.min(limit, 500)],
     );
-    return rows;
+    return { thresholdMs: rows[0] ? rows[0].threshold_ms : 0, percentile: p, rows };
   }
 
   /**

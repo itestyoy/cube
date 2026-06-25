@@ -37,6 +37,10 @@ export function InsightsPage() {
   const [enabled, setEnabled] = useState(true);
   const [order, setOrder] = useState<'total' | 'count'>('total');
   const [onlyUnused, setOnlyUnused] = useState(false);
+  // Recommendations "slowness" quantile: a shape is a candidate when its avg
+  // duration is at/above this percentile of all query durations in the window.
+  const [recPct, setRecPct] = useState(0.9);
+  const [recThreshold, setRecThreshold] = useState<number | null>(null);
 
   const [top, setTop] = useState<any[]>([]);
   const [recs, setRecs] = useState<any[]>([]);
@@ -62,7 +66,7 @@ export function InsightsPage() {
       const w = rangeParams(range);
       const [t, r, e, mu, adv] = await Promise.all([
         getJson(`playground/insights/top-queries?${w}&order=${order}`),
-        getJson(`playground/insights/recommendations?${w}`),
+        getJson(`playground/insights/recommendations?${w}&percentile=${recPct}`),
         getJson(`playground/insights/errors?${w}`),
         getJson(`playground/insights/model-usage?${w}`),
         getJson(`playground/insights/pre-agg-advice?${w}`).catch(() => ({ removePreAggs: [], trimFields: [] })),
@@ -70,6 +74,7 @@ export function InsightsPage() {
       setEnabled(Boolean(t.enabled));
       setTop(t.rows || []);
       setRecs(r.rows || []);
+      setRecThreshold(typeof r.thresholdMs === 'number' ? r.thresholdMs : null);
       setErrors(e.rows || []);
       setMeasures(mu.measures || []);
       setDimensions(mu.dimensions || []);
@@ -78,7 +83,7 @@ export function InsightsPage() {
     } finally {
       setLoading(false);
     }
-  }, [range, order]);
+  }, [range, order, recPct]);
 
   useEffect(() => {
     load();
@@ -295,8 +300,25 @@ export function InsightsPage() {
                 showIcon
                 style={{ marginBottom: 12 }}
                 message="Pre-aggregation candidates"
-                description="Frequent / slow query shapes NOT accelerated by any pre-aggregation. Building a rollup over these fields would cut the most data-source time. Expand a row to see the exact fields to include."
+                description="Unaccelerated query shapes whose average duration is at/above the chosen percentile of all queries in the window. Ranked by total data-source time (the time a rollup would save). Expand a row for the exact fields; the Suggestion column says whether to extend an existing rollup or create a new one."
               />
+              <Row align="middle" gutter={8} style={{ marginBottom: 12 }}>
+                <Col style={{ color: '#888' }}>Slowness ≥</Col>
+                <Col>
+                  <Radio.Group value={recPct} onChange={(e: any) => setRecPct(e.target.value)} optionType="button" size="small">
+                    <Radio.Button value={0.5}>p50</Radio.Button>
+                    <Radio.Button value={0.75}>p75</Radio.Button>
+                    <Radio.Button value={0.9}>p90</Radio.Button>
+                    <Radio.Button value={0.95}>p95</Radio.Button>
+                    <Radio.Button value={0.99}>p99</Radio.Button>
+                  </Radio.Group>
+                </Col>
+                {recThreshold != null && (
+                  <Col style={{ color: '#888' }}>
+                    = queries slower than <b>{recThreshold} ms</b>
+                  </Col>
+                )}
+              </Row>
               <Table
                 rowKey={(r: any) => r.query_hash}
                 dataSource={recs}

@@ -515,8 +515,11 @@ export class DevServer {
 
     app.get('/playground/insights/recommendations', catchErrors(async (req, res) => {
       const t = telemetry();
-      const minAvg = parseInt(String(req.query.minAvgMs || '50'), 10) || 50;
-      const rows = t ? await t.getRecommendations(telemetryWindow(req), minAvg) : [];
+      const percentile = req.query.percentile ? parseFloat(String(req.query.percentile)) : 0.9;
+      const rec = t
+        ? await t.getRecommendations(telemetryWindow(req), percentile)
+        : { thresholdMs: 0, percentile, rows: [] };
+      const rows = rec.rows;
 
       // Match each candidate shape against existing pre-aggregations so the
       // advice is actionable: extend an existing rollup, create a new one, or
@@ -569,7 +572,7 @@ export class DevServer {
         return { ...r, suggestion };
       });
 
-      res.json({ enabled: Boolean(t), rows: enriched });
+      res.json({ enabled: Boolean(t), thresholdMs: rec.thresholdMs, percentile: rec.percentile, rows: enriched });
     }));
 
     app.get('/playground/insights/errors', catchErrors(async (req, res) => {
