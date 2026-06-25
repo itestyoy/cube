@@ -12,7 +12,10 @@ import {
   CubeBiPage,
   FrontendIntegrationsPage,
   PreAggMonitorPage,
+  PreAggDetailPage,
   QueryHistoryPage,
+  QueryDetailPage,
+  BuildDetailPage,
 } from './pages';
 import { SecurityContextProvider } from './components/SecurityContext/SecurityContextProvider';
 import { AppContextProvider } from './components/AppContext';
@@ -88,13 +91,33 @@ ReactDOM.render(
         />
         <Route
           key="pre-agg-monitor"
+          exact
           path="/pre-agg-monitor"
           component={PreAggMonitorPage}
         />
         <Route
+          key="pre-agg-detail"
+          exact
+          path="/pre-agg-monitor/:id"
+          component={PreAggDetailPage}
+        />
+        <Route
           key="query-history"
+          exact
           path="/query-history"
           component={QueryHistoryPage}
+        />
+        <Route
+          key="query-detail"
+          exact
+          path="/query-history/:id"
+          component={QueryDetailPage}
+        />
+        <Route
+          key="build-detail"
+          exact
+          path="/builds/:id"
+          component={BuildDetailPage}
         />
       </App>
     </AppContextProvider>

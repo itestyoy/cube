@@ -5,4 +5,7 @@ export * from './Index/IndexPage';
 export * from './CubeBI/CubeBiPage';
 export * from './FrontendIntegrations/FrontendIntegrationsPage';
 export * from './PreAggMonitor/PreAggMonitorPage';
+export * from './PreAggMonitor/PreAggDetailPage';
 export * from './QueryHistory/QueryHistoryPage';
+export * from './QueryHistory/QueryDetailPage';
+export * from './Builds/BuildDetailPage';

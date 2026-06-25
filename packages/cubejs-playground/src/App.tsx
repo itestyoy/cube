@@ -115,7 +115,7 @@ class App extends Component<PropsWithChildren<RouteComponentProps>, AppState> {
         <Root publicUrl="." styles={ROOT_STYLES}>
           <GlobalStyles />
 
-          <Header selectedKeys={[location.pathname]} />
+          <Header selectedKeys={[`/${location.pathname.split('/')[1] || ''}`, location.pathname]} />
 
           <StyledLayoutContent>
             {fatalError ? (

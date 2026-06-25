@@ -266,6 +266,91 @@ export class DevServer {
       res.json({ enabled: true, rows: await t.getQueriesForPreAgg(key, telemetryWindow(req)) });
     }));
 
+    // Single query log row (Query History detail view).
+    app.get('/playground/pre-agg-monitor/query', catchErrors(async (req, res) => {
+      const t = telemetry();
+      const id = parseInt(String(req.query.id || ''), 10);
+      res.json({ row: t && Number.isFinite(id) ? await t.getQueryById(id) : null });
+    }));
+
+    // Single build log row (Build detail view).
+    app.get('/playground/pre-agg-monitor/build', catchErrors(async (req, res) => {
+      const t = telemetry();
+      const id = parseInt(String(req.query.id || ''), 10);
+      res.json({ row: t && Number.isFinite(id) ? await t.getBuildById(id) : null });
+    }));
+
+    // Full detail for a single defined pre-aggregation: definition, indexes,
+    // usage + build stats, recent accelerated queries and recent builds.
+    app.get('/playground/pre-agg-monitor/preagg', catchErrors(async (req, res) => {
+      const id = String(req.query.id || '');
+      const windowHours = telemetryWindow(req);
+      const compilerApi = await this.cubejsServer.getCompilerApi({
+        authInfo: null,
+        securityContext: {},
+        requestId: getRequestIdFromRequest(req),
+      } as any);
+      const defined = await compilerApi.preAggregations();
+      const nk = normKey(id);
+      const p = defined.find((x: any) => {
+        const xk = normKey(x.id);
+        return x.id === id || xk === nk || (nk && (xk.includes(nk) || nk.includes(xk)));
+      });
+      if (!p) {
+        res.json({ found: false });
+        return;
+      }
+
+      const def = p.preAggregation || {};
+      const cand = [normKey(p.id), normKey(p.preAggregationName)];
+      const match = (list: any[]) =>
+        list.find((s) => {
+          const k = normKey(s.pre_aggregation);
+          return cand.includes(k) || cand.some((c) => c && (k.includes(c) || c.includes(k)));
+        });
+
+      const t = telemetry();
+      const usage = t ? await t.getPreAggUsage(windowHours) : [];
+      const buildStats = t ? await t.getPreAggBuildStats(windowHours) : [];
+      const u = match(usage);
+      const b = match(buildStats);
+      const usageKey = u ? u.pre_aggregation : null;
+      const queries = t && usageKey ? await t.getQueriesForPreAgg(usageKey, windowHours) : [];
+      const allBuilds = t ? await t.getBuildHistory(windowHours, 500) : [];
+      const builds = allBuilds.filter((bh: any) =>
+        cand.some((c) => c && (normKey(bh.pre_aggregation).includes(c) || normKey(bh.target_table).includes(c))));
+
+      res.json({
+        found: true,
+        telemetryEnabled: Boolean(t),
+        windowHours,
+        preAgg: {
+          id: p.id,
+          cube: p.cube,
+          name: p.preAggregationName,
+          type: def.type || 'rollup',
+          granularity: def.granularity || null,
+          external: def.external !== false,
+          scheduledRefresh: Boolean(def.scheduledRefresh),
+          refreshKey: p.refreshKey || def.refreshKey || null,
+          definition: def,
+          indexes: p.indexesReferences || null,
+          references: p.references || null,
+          usageKey,
+          hits: u ? u.query_count : 0,
+          p50_ms: u ? u.p50_ms : null,
+          p95_ms: u ? u.p95_ms : null,
+          last_used: u ? u.last_used : null,
+          build_count: b ? b.build_count : 0,
+          avg_build_ms: b ? b.avg_ms : null,
+          max_build_ms: b ? b.max_ms : null,
+          last_build: b ? b.last_build : null,
+        },
+        queries,
+        builds,
+      });
+    }));
+
     app.get('/playground/db-schema', catchErrors(async (req, res) => {
       this.cubejsServer.event('Dev Server DB Schema Load');
       const driver = await this.cubejsServer.getDriver({

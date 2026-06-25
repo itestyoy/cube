@@ -664,6 +664,42 @@ export class PostgresLogTransport {
   }
 
   /**
+   * A single query log row by id (for the Query History detail view).
+   */
+  public async getQueryById(id: number): Promise<any | null> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return null;
+    }
+    const { rows } = await this.pool.query(
+      `SELECT id, ts, request_id, api_type, duration_ms, queries, queries_with_pre_aggregations,
+              used_pre_aggregations, db_type, is_playground, status, error, external, security_context,
+              query, sql, generated_sql
+       FROM ${this.schema}.query_log
+       WHERE id = $1`,
+      [id],
+    );
+    return rows[0] || null;
+  }
+
+  /**
+   * A single pre-aggregation build log row by id (for the Build detail view).
+   */
+  public async getBuildById(id: number): Promise<any | null> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return null;
+    }
+    const { rows } = await this.pool.query(
+      `SELECT id, ts, request_id, target_table, pre_aggregation, build_range_end, duration_ms, status
+       FROM ${this.schema}.preagg_build_log
+       WHERE id = $1`,
+      [id],
+    );
+    return rows[0] || null;
+  }
+
+  /**
    * Recent queries that were accelerated by a specific pre-aggregation
    * (matched on the exact key stored in usedPreAggregations).
    */
