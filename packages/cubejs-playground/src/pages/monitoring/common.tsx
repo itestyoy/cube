@@ -10,6 +10,8 @@ import 'prismjs/themes/prism.css';
 import 'prismjs/components/prism-sql';
 import 'prismjs/components/prism-json';
 
+import { format as formatSql } from 'sql-formatter';
+
 import PrismCode from '../../PrismCode';
 import { playgroundFetch } from '../../shared/helpers';
 
@@ -90,9 +92,17 @@ export function CodeBlock({
   language?: 'json' | 'sql' | 'javascript';
   style?: CSSProperties;
 }) {
+  let pretty = code;
+  if (language === 'sql' && code) {
+    try {
+      pretty = formatSql(code);
+    } catch (e) {
+      pretty = code; // best-effort (e.g. BigQuery backticks the formatter dislikes)
+    }
+  }
   return (
     <CodeWrap style={style}>
-      <PrismCode code={code} language={language} />
+      <PrismCode code={pretty} language={language} />
     </CodeWrap>
   );
 }
