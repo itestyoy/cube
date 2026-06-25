@@ -1,6 +1,15 @@
+import { CSSProperties } from 'react';
 import { Tag } from 'antd';
 import { ThunderboltFilled } from '@ant-design/icons';
+// Prism core must load before the grammar components register on it.
+import 'prismjs';
+// Prism theme + the grammars we render (registered as a side effect on the
+// shared Prism instance used by PrismCode).
+import 'prismjs/themes/prism.css';
+import 'prismjs/components/prism-sql';
+import 'prismjs/components/prism-json';
 
+import PrismCode from '../../PrismCode';
 import { playgroundFetch } from '../../shared/helpers';
 
 export const fmtMs = (v: number | null | undefined) => (v == null ? '—' : `${v} ms`);
@@ -10,6 +19,36 @@ export const fmtTs = (v: string | null | undefined) => (v ? new Date(v).toLocale
 export async function getJson(url: string) {
   const res = await playgroundFetch(url);
   return res.json();
+}
+
+/**
+ * Syntax-highlighted, scrollable code block used across the monitoring detail
+ * views. Reuses the playground's PrismCode (prismjs) with the sql/json grammars
+ * loaded above.
+ */
+export function CodeBlock({
+  code,
+  language = 'json',
+  style,
+}: {
+  code: string;
+  language?: 'json' | 'sql' | 'javascript';
+  style?: CSSProperties;
+}) {
+  return (
+    <PrismCode
+      code={code}
+      language={language}
+      style={{
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        maxHeight: '70vh',
+        overflow: 'auto',
+        margin: 0,
+        ...style,
+      }}
+    />
+  );
 }
 
 /**

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useHistory, useParams } from 'react-router-dom';
 import { Descriptions, Empty, PageHeader, Spin, Tabs, Tag } from 'antd';
 
-import { cacheTag, fmtMs, fmtTs, getJson } from '../monitoring/common';
+import { CodeBlock, cacheTag, fmtMs, fmtTs, getJson } from '../monitoring/common';
 
 const { TabPane } = Tabs;
 
@@ -58,23 +58,21 @@ export function QueryDetailPage() {
 
             <Tabs defaultActiveKey="query">
               <TabPane tab="Query" key="query">
-                <pre style={{ whiteSpace: 'pre-wrap' }}>
-                  {row.query ? JSON.stringify(row.query, null, 2) : '—'}
-                </pre>
+                {row.query ? <CodeBlock code={JSON.stringify(row.query, null, 2)} language="json" /> : '—'}
               </TabPane>
 
               <TabPane tab="SQL" key="sql">
                 {row.sql && (
                   <>
                     <p><b>Inbound SQL</b> (from the client):</p>
-                    <pre style={{ whiteSpace: 'pre-wrap' }}>{row.sql}</pre>
+                    <CodeBlock code={row.sql} language="sql" />
                   </>
                 )}
                 {Array.isArray(row.generated_sql) && row.generated_sql.length > 0 && (
                   <>
-                    <p><b>Generated SQL</b> (sent to the data source):</p>
+                    <p style={{ marginTop: 16 }}><b>Generated SQL</b> (sent to the data source):</p>
                     {row.generated_sql.map((s: string, i: number) => (
-                      <pre key={i} style={{ whiteSpace: 'pre-wrap' }}>{s}</pre>
+                      <CodeBlock key={i} code={s} language="sql" style={{ marginBottom: 8 }} />
                     ))}
                   </>
                 )}
@@ -90,9 +88,9 @@ export function QueryDetailPage() {
                         <Link to={`/pre-agg-monitor/${encodeURIComponent(k)}`}>{k}</Link>
                       </div>
                     ))}
-                    <pre style={{ whiteSpace: 'pre-wrap', marginTop: 12 }}>
-                      {JSON.stringify(row.used_pre_aggregations, null, 2)}
-                    </pre>
+                    <div style={{ marginTop: 12 }}>
+                      <CodeBlock code={JSON.stringify(row.used_pre_aggregations, null, 2)} language="json" />
+                    </div>
                   </div>
                 ) : (
                   <Empty description="Not accelerated — served from the data source." />
@@ -106,9 +104,11 @@ export function QueryDetailPage() {
               )}
 
               <TabPane tab="Security Context" key="security">
-                <pre style={{ whiteSpace: 'pre-wrap' }}>
-                  {row.security_context ? JSON.stringify(row.security_context, null, 2) : '—'}
-                </pre>
+                {row.security_context ? (
+                  <CodeBlock code={JSON.stringify(row.security_context, null, 2)} language="json" />
+                ) : (
+                  '—'
+                )}
               </TabPane>
             </Tabs>
           </>

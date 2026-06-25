@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useHistory, useParams } from 'react-router-dom';
 import { Card, Col, Descriptions, Empty, PageHeader, Row, Spin, Statistic, Table, Tabs } from 'antd';
 
-import { fmtMs, fmtTs, getJson, preAggStatusTag } from '../monitoring/common';
+import { CodeBlock, fmtMs, fmtTs, getJson, preAggStatusTag } from '../monitoring/common';
 
 const { TabPane } = Tabs;
 
@@ -80,12 +80,12 @@ export function PreAggDetailPage() {
             </TabPane>
 
             <TabPane tab="Definition" key="definition">
-              <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(p.definition, null, 2)}</pre>
+              <CodeBlock code={JSON.stringify(p.definition, null, 2)} language="json" />
             </TabPane>
 
             <TabPane tab="Indexes" key="indexes">
               {p.indexes && Object.keys(p.indexes).length ? (
-                <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(p.indexes, null, 2)}</pre>
+                <CodeBlock code={JSON.stringify(p.indexes, null, 2)} language="json" />
               ) : (
                 <Empty description="No indexes defined." />
               )}
@@ -97,7 +97,7 @@ export function PreAggDetailPage() {
                 dataSource={data.queries}
                 columns={queryColumns}
                 size="small"
-                pagination={{ pageSize: 15 }}
+                pagination={{ defaultPageSize: 15, showSizeChanger: true, pageSizeOptions: ["10","15","25","50","100"] }}
                 onRow={(record) => ({ onClick: () => history.push(`/query-history/${record.id}`), style: { cursor: 'pointer' } })}
               />
             </TabPane>
@@ -108,7 +108,7 @@ export function PreAggDetailPage() {
                 dataSource={data.builds}
                 columns={buildColumns}
                 size="small"
-                pagination={{ pageSize: 15 }}
+                pagination={{ defaultPageSize: 15, showSizeChanger: true, pageSizeOptions: ["10","15","25","50","100"] }}
                 onRow={(record) => ({ onClick: () => history.push(`/builds/${record.id}`), style: { cursor: 'pointer' } })}
               />
             </TabPane>

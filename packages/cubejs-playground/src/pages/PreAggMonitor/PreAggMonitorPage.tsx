@@ -179,7 +179,7 @@ export function PreAggMonitorPage() {
             columns={catalogColumns}
             size="small"
             loading={loading}
-            pagination={{ pageSize: 25 }}
+            pagination={{ defaultPageSize: 25, showSizeChanger: true, pageSizeOptions: ["10","15","25","50","100"] }}
             onRow={(record) => ({ onClick: () => history.push(`/pre-agg-monitor/${encodeURIComponent(record.id)}`), style: { cursor: 'pointer' } })}
           />
         </TabPane>
@@ -204,7 +204,7 @@ export function PreAggMonitorPage() {
             columns={buildColumns}
             size="small"
             loading={loading}
-            pagination={{ pageSize: 25 }}
+            pagination={{ defaultPageSize: 25, showSizeChanger: true, pageSizeOptions: ["10","15","25","50","100"] }}
             onRow={(record) => ({ onClick: () => history.push(`/builds/${record.id}`), style: { cursor: 'pointer' } })}
           />
         </TabPane>

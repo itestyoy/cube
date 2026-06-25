@@ -159,7 +159,7 @@ export function QueryHistoryPage() {
         columns={columns}
         size="small"
         loading={loading}
-        pagination={{ pageSize: 25 }}
+        pagination={{ defaultPageSize: 25, showSizeChanger: true, pageSizeOptions: ["10","15","25","50","100"] }}
         onRow={(record) => ({ onClick: () => history.push(`/query-history/${record.id}`), style: { cursor: 'pointer' } })}
       />
     </div>
