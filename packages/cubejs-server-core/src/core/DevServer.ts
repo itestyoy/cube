@@ -129,6 +129,73 @@ export class DevServer {
       });
     }));
 
+    // ---------------------------------------------------------------------
+    // Pre-Aggregations Monitor
+    //
+    // Historical endpoints are backed by the Postgres telemetry transport
+    // (enabled via CUBEJS_TELEMETRY_DB_URL). The live build queue is read
+    // straight from the orchestrator. All return empty/null gracefully when
+    // telemetry is not configured so the page still renders.
+    // ---------------------------------------------------------------------
+    const telemetry = () => this.cubejsServer.telemetryTransport;
+    const telemetryWindow = (req: Request) => {
+      const h = parseInt(String(req.query.windowHours || '24'), 10);
+      return Number.isFinite(h) && h > 0 ? h : 24;
+    };
+
+    app.get('/playground/pre-agg-monitor/summary', catchErrors(async (req, res) => {
+      const t = telemetry();
+      res.json({
+        enabled: Boolean(t),
+        summary: t ? await t.getSummary(telemetryWindow(req)) : null,
+      });
+    }));
+
+    app.get('/playground/pre-agg-monitor/query-log', catchErrors(async (req, res) => {
+      const t = telemetry();
+      const limit = parseInt(String(req.query.limit || '200'), 10) || 200;
+      res.json({ enabled: Boolean(t), rows: t ? await t.getQueryLog(limit) : [] });
+    }));
+
+    app.get('/playground/pre-agg-monitor/used-by', catchErrors(async (req, res) => {
+      const t = telemetry();
+      res.json({ enabled: Boolean(t), rows: t ? await t.getUsedBy() : [] });
+    }));
+
+    app.get('/playground/pre-agg-monitor/build-history', catchErrors(async (req, res) => {
+      const t = telemetry();
+      res.json({ enabled: Boolean(t), rows: t ? await t.getBuildHistory(telemetryWindow(req)) : [] });
+    }));
+
+    app.get('/playground/query-history', catchErrors(async (req, res) => {
+      const t = telemetry();
+      if (!t) {
+        res.json({ enabled: false, rows: [] });
+        return;
+      }
+      const q = req.query;
+      const num = (v: any) => (v != null && v !== '' ? parseInt(String(v), 10) : undefined);
+      const rows = await t.getQueryHistory({
+        limit: num(q.limit),
+        order: q.order === 'top' ? 'top' : 'recent',
+        status: q.status === 'success' || q.status === 'error' ? q.status : undefined,
+        cache: q.cache === 'preagg' || q.cache === 'raw' ? q.cache : undefined,
+        apiType: q.apiType ? String(q.apiType) : undefined,
+        minDurationMs: num(q.minDurationMs),
+        windowHours: num(q.windowHours),
+      });
+      res.json({ enabled: true, rows });
+    }));
+
+    app.get('/playground/pre-agg-monitor/queue', catchErrors(async (req, res) => {
+      const orchestratorApi = await this.cubejsServer.getOrchestratorApi({
+        authInfo: null,
+        securityContext: {},
+        requestId: getRequestIdFromRequest(req),
+      } as any);
+      res.json({ queue: await orchestratorApi.getPreAggregationQueueStates() });
+    }));
+
     app.get('/playground/db-schema', catchErrors(async (req, res) => {
       this.cubejsServer.event('Dev Server DB Schema Load');
       const driver = await this.cubejsServer.getDriver({

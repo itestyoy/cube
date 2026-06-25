@@ -62,6 +62,14 @@ export default function Header({ selectedKeys }: Props) {
             <Link to="/cube-bi">Cube BI</Link>
           </StyledMenuItem>
 
+          <StyledMenuItem key="/pre-agg-monitor">
+            <Link to="/pre-agg-monitor">Pre-Agg Monitor</Link>
+          </StyledMenuItem>
+
+          <StyledMenuItem key="/query-history">
+            <Link to="/query-history">Query History</Link>
+          </StyledMenuItem>
+
           <StyledMenuButton
             key="slack"
             href="https://slack.cube.dev"

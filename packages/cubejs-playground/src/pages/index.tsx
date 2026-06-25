@@ -4,3 +4,5 @@ export * from './Explore/ExplorePage';
 export * from './Index/IndexPage';
 export * from './CubeBI/CubeBiPage';
 export * from './FrontendIntegrations/FrontendIntegrationsPage';
+export * from './PreAggMonitor/PreAggMonitorPage';
+export * from './QueryHistory/QueryHistoryPage';

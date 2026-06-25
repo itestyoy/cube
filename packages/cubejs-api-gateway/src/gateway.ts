@@ -2076,6 +2076,20 @@ class ApiGateway {
             results.filter(
               (r: any) => Object.keys(r.getRootResultObject()[0].usedPreAggregations || {}).length
             ).length,
+          // Names (and target tables) of pre-aggregations that accelerated this
+          // request. Consumed by the Postgres telemetry transport to build the
+          // playground monitoring "Used By" view (requestId is injected by log()).
+          usedPreAggregations: Object.assign(
+            {},
+            ...results.map(
+              (r: any) => r.getRootResultObject()[0].usedPreAggregations || {}
+            )
+          ),
+          // Whether the result was served from external storage (Cube Store) —
+          // used to label the cache type in the Query History view.
+          external: results.some(
+            (r: any) => r.getRootResultObject()[0].external
+          ),
           // Have to omit because data could be processed natively
           // so it is not known at this point
           // queriesWithData:

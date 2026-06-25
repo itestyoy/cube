@@ -11,6 +11,8 @@ import {
   IndexPage,
   CubeBiPage,
   FrontendIntegrationsPage,
+  PreAggMonitorPage,
+  QueryHistoryPage,
 } from './pages';
 import { SecurityContextProvider } from './components/SecurityContext/SecurityContextProvider';
 import { AppContextProvider } from './components/AppContext';
@@ -83,6 +85,16 @@ ReactDOM.render(
           key="frontend-integrations"
           path="/frontend-integrations"
           component={FrontendIntegrationsPage}
+        />
+        <Route
+          key="pre-agg-monitor"
+          path="/pre-agg-monitor"
+          component={PreAggMonitorPage}
+        />
+        <Route
+          key="query-history"
+          path="/query-history"
+          component={QueryHistoryPage}
         />
       </App>
     </AppContextProvider>

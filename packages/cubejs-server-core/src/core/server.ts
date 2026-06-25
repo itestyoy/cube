@@ -33,6 +33,7 @@ import { RefreshScheduler, ScheduledRefreshOptions } from './RefreshScheduler';
 import { OrchestratorApi, OrchestratorApiOptions } from './OrchestratorApi';
 import { CompilerApi, type CompilerApiOptions } from './CompilerApi';
 import { DevServer } from './DevServer';
+import { PostgresLogTransport } from './PostgresLogTransport';
 import { agentCollect } from './agentCollect';
 import { OrchestratorStorage } from './OrchestratorStorage';
 import { createLogger } from './logger';
@@ -155,6 +156,8 @@ export class CubejsServerCore {
 
   protected preAgentLogger: any;
 
+  public telemetryTransport: PostgresLogTransport | undefined;
+
   protected readonly options: ServerCoreInitializedOptions;
 
   protected readonly contextToAppId: ContextToAppIdFn = () => process.env.CUBEJS_APP || 'STANDALONE';
@@ -267,6 +270,8 @@ export class CubejsServerCore {
     };
 
     this.initAgent();
+
+    this.initTelemetryTransport();
 
     if (this.options.devServer && !this.isReadyForQueryProcessing()) {
       this.event('first_server_start');
@@ -424,6 +429,33 @@ export class CubejsServerCore {
         );
       };
     }
+  }
+
+  /**
+   * Install a Postgres logger transport that captures query/pre-aggregation
+   * telemetry for the playground "Pre-Aggregations Monitor" page. Enabled only
+   * when CUBEJS_TELEMETRY_DB_URL is set; otherwise this is a no-op and the
+   * logger chain is left untouched (zero overhead).
+   */
+  protected initTelemetryTransport() {
+    const connectionString = process.env.CUBEJS_TELEMETRY_DB_URL;
+    if (!connectionString) {
+      return;
+    }
+
+    const retentionDays = parseInt(process.env.CUBEJS_TELEMETRY_RETENTION_DAYS || '3', 10);
+    const transport = new PostgresLogTransport(
+      connectionString,
+      process.env.CUBEJS_TELEMETRY_DB_SCHEMA || 'telemetry',
+      Number.isFinite(retentionDays) ? retentionDays : 3,
+    );
+    this.telemetryTransport = transport;
+
+    const oldLogger = this.logger;
+    this.logger = (msg, params) => {
+      oldLogger(msg, params);
+      transport.record(msg, params || {});
+    };
   }
 
   protected async flushAgent() {
