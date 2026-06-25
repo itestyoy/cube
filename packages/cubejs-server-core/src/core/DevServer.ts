@@ -353,10 +353,21 @@ export class DevServer {
       } as any);
       const defined: any[] = await compilerApi.preAggregations();
       const nk = normKey(id);
-      const p = defined.find((x: any) => {
-        const xk = normKey(x.id);
-        return x.id === id || xk === nk || (nk && (xk.includes(nk) || nk.includes(xk)));
-      });
+      // The link may arrive as the defined id ("Cube.name") OR as the
+      // usedPreAggregations key / Cube Store table name (e.g.
+      // "bi_cube_store.query_cohort_retention_rollup"). Resolve strongest first:
+      // exact id, then id contains, then by pre-aggregation NAME contained in
+      // the key (the table name always embeds the pre-agg name).
+      const p =
+        defined.find((x: any) => x.id === id || normKey(x.id) === nk) ||
+        defined.find((x: any) => {
+          const xk = normKey(x.id);
+          return nk && (xk.includes(nk) || nk.includes(xk));
+        }) ||
+        defined.find((x: any) => {
+          const xn = normKey(x.preAggregationName);
+          return xn && nk.includes(xn);
+        });
       if (!p) {
         res.json({ found: false });
         return;
