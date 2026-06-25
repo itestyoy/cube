@@ -906,6 +906,7 @@ export class PostgresLogTransport {
               count(*)::int AS count,
               max(ts)       AS last_seen,
               (array_agg(api_type ORDER BY ts DESC))[1] AS api_type,
+              (array_agg(id ORDER BY ts DESC))[1]       AS sample_id,
               (array_agg(query ORDER BY ts DESC))[1]    AS sample_query
        FROM ${this.schema}.query_log
        WHERE status = 'error' AND error IS NOT NULL

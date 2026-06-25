@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useHistory } from 'react-router-dom';
 import { Alert, Button, Col, Radio, Row, Select, Switch, Table, Tabs, Tag } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { ReloadOutlined, ArrowRightOutlined } from '@ant-design/icons';
 
 import { CodeBlock, fmtMs, fmtTs, getJson } from '../monitoring/common';
 
@@ -38,6 +39,7 @@ const expandShape = (r: any) => (
 );
 
 export function InsightsPage() {
+  const history = useHistory();
   const [windowHours, setWindowHours] = useState(24);
   const [loading, setLoading] = useState(true);
   const [enabled, setEnabled] = useState(true);
@@ -201,6 +203,15 @@ export function InsightsPage() {
               expandedRowRender: (r: any) => (
                 <>
                   <pre style={{ whiteSpace: 'pre-wrap', color: '#c0392b' }}>{r.error}</pre>
+                  {r.sample_id != null && (
+                    <Button
+                      type="link"
+                      style={{ paddingLeft: 0 }}
+                      onClick={() => history.push(`/query-history/${r.sample_id}`)}
+                    >
+                      Open latest failing request <ArrowRightOutlined />
+                    </Button>
+                  )}
                   {r.sample_query ? <CodeBlock code={JSON.stringify(r.sample_query, null, 2)} language="json" /> : null}
                 </>
               ),
