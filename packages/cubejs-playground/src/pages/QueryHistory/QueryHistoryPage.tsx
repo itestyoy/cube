@@ -214,6 +214,23 @@ export function QueryHistoryPage() {
                 {selected.query ? JSON.stringify(selected.query, null, 2) : '—'}
               </pre>
             </TabPane>
+            <TabPane tab="SQL" key="sql">
+              {selected.sql && (
+                <>
+                  <p><b>Inbound SQL</b> (from the client):</p>
+                  <pre style={{ whiteSpace: 'pre-wrap' }}>{selected.sql}</pre>
+                </>
+              )}
+              {Array.isArray(selected.generated_sql) && selected.generated_sql.length > 0 && (
+                <>
+                  <p><b>Generated SQL</b> (sent to the data source):</p>
+                  {selected.generated_sql.map((s: string, i: number) => (
+                    <pre key={i} style={{ whiteSpace: 'pre-wrap' }}>{s}</pre>
+                  ))}
+                </>
+              )}
+              {!selected.sql && !(selected.generated_sql && selected.generated_sql.length) && <p>—</p>}
+            </TabPane>
             <TabPane tab="Pre-Aggregations" key="preaggs">
               {selected.used_pre_aggregations && Object.keys(selected.used_pre_aggregations).length ? (
                 <pre style={{ whiteSpace: 'pre-wrap' }}>

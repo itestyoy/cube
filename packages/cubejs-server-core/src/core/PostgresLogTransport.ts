@@ -36,6 +36,8 @@ type QueryLogRow = {
   error: string | null;
   external: boolean | null;
   securityContext: any;
+  sql: string | null;
+  generatedSql: any;
 };
 
 type BuildLogRow = {
@@ -129,7 +131,9 @@ export class PostgresLogTransport {
             status                        TEXT NOT NULL DEFAULT 'success',
             error                         TEXT,
             external                      BOOLEAN,
-            security_context              JSONB
+            security_context              JSONB,
+            sql                           TEXT,
+            generated_sql                 JSONB
           )
         `);
         await client.query(`
@@ -250,6 +254,8 @@ export class PostgresLogTransport {
       error: null,
       external: typeof params.external === 'boolean' ? params.external : null,
       securityContext: params.securityContext ?? null,
+      sql: typeof params.sql === 'string' ? params.sql : null,
+      generatedSql: params.generatedSql ?? null,
     });
     this.cap(this.queryBuffer);
   }
@@ -270,6 +276,8 @@ export class PostgresLogTransport {
       error: typeof params.error === 'string' ? params.error : (params.error && String(params.error)) || msg,
       external: null,
       securityContext: params.securityContext ?? null,
+      sql: typeof params.sql === 'string' ? params.sql : null,
+      generatedSql: null,
     });
     this.cap(this.queryBuffer);
   }
@@ -423,7 +431,7 @@ export class PostgresLogTransport {
   }
 
   private async insertQueries(rows: QueryLogRow[]): Promise<void> {
-    const cols = 14;
+    const cols = 16;
     const values: any[] = [];
     const tuples = rows.map((r, i) => {
       const base = i * cols;
@@ -442,12 +450,14 @@ export class PostgresLogTransport {
         r.error,
         r.external,
         r.securityContext === null ? null : JSON.stringify(r.securityContext),
+        r.sql,
+        r.generatedSql === null ? null : JSON.stringify(r.generatedSql),
       );
       return `(${Array.from({ length: cols }, (_, k) => `$${base + k + 1}`).join(',')})`;
     });
     await this.pool!.query(
       `INSERT INTO ${this.schema}.query_log
-        (ts, request_id, api_type, duration_ms, queries, queries_with_pre_aggregations, used_pre_aggregations, db_type, is_playground, query, status, error, external, security_context)
+        (ts, request_id, api_type, duration_ms, queries, queries_with_pre_aggregations, used_pre_aggregations, db_type, is_playground, query, status, error, external, security_context, sql, generated_sql)
        VALUES ${tuples.join(',')}`,
       values,
     );
@@ -548,7 +558,8 @@ export class PostgresLogTransport {
 
     const { rows } = await this.pool.query(
       `SELECT id, ts, request_id, api_type, duration_ms, queries, queries_with_pre_aggregations,
-              used_pre_aggregations, db_type, is_playground, status, error, external, security_context, query
+              used_pre_aggregations, db_type, is_playground, status, error, external, security_context,
+              query, sql, generated_sql
        FROM ${this.schema}.query_log
        WHERE ${where.join(' AND ')}
        ORDER BY ${orderBy}

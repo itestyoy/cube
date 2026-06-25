@@ -2272,6 +2272,14 @@ class ApiGateway {
           ).length,
           usedPreAggregations: Object.assign({}, ...preAggInfos.map((p) => p.used || {})),
           external: preAggInfos.some((p) => p.external),
+          // Inbound SQL the client (e.g. Metabase) sent — same value the Rust
+          // 'Load Request Success' carries, linked here to the Cube query and
+          // requestId (the shared span id) in one record.
+          sql: (request.queryKey && request.queryKey.sql) || null,
+          // Generated SQL Cube sent to the data source / Cube Store.
+          generatedSql: sqlQueries
+            .map((q: any) => (Array.isArray(q.sql) ? q.sql[0] : q.sql))
+            .filter(Boolean),
         }, context);
       }
     } catch (e: any) {
