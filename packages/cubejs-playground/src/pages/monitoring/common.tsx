@@ -1,4 +1,4 @@
-import { CSSProperties } from 'react';
+import { CSSProperties, useState } from 'react';
 import { Tag } from 'antd';
 import styled from 'styled-components';
 import { ThunderboltFilled } from '@ant-design/icons';
@@ -171,6 +171,7 @@ function collectFilterMembers(filters: any): string[] {
  * `max` chips with a "+N" overflow.
  */
 export function QueryChips({ query, max = 6 }: { query: any; max?: number }) {
+  const [expanded, setExpanded] = useState(false);
   if (!query || typeof query !== 'object') {
     return <span style={{ color: '#999' }}>—</span>;
   }
@@ -182,12 +183,19 @@ export function QueryChips({ query, max = 6 }: { query: any; max?: number }) {
   (query.segments || []).forEach((s: string) => chips.push(<MemberTag key={`s${s}`} member={s} />));
   collectFilterMembers(query.filters).forEach((m, i) => chips.push(<MemberTag key={`f${i}`} member={m} color="orange" />));
 
-  const shown = chips.slice(0, max);
+  const shown = expanded ? chips : chips.slice(0, max);
   const more = chips.length - shown.length;
+  // Toggle expand inline without triggering the row's navigation onClick.
+  const toggle = (e: any) => { e.stopPropagation(); setExpanded((v) => !v); };
   return (
     <span>
       {shown.length ? shown : <span style={{ color: '#999' }}>—</span>}
-      {more > 0 ? <Tag>+{more}</Tag> : null}
+      {more > 0 ? (
+        <Tag style={{ cursor: 'pointer' }} onClick={toggle}>+{more}</Tag>
+      ) : null}
+      {expanded && chips.length > max ? (
+        <Tag style={{ cursor: 'pointer' }} onClick={toggle}>show less</Tag>
+      ) : null}
       {query.limit != null ? <Tag color="default">LIMIT {query.limit}</Tag> : null}
     </span>
   );
