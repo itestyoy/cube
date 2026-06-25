@@ -526,23 +526,36 @@ export class DevServer {
 
     app.get('/playground/insights/model-usage', catchErrors(async (req, res) => {
       const t = telemetry();
-      const windowHours = telemetryWindow(req);
-      const usedMap = t ? await t.getMemberUsageMap(windowHours) : {};
+      const window = telemetryWindow(req);
+      const rawUsed = t ? await t.getMemberUsageMap(window) : {};
 
-      // Merge with the full model so members that were NEVER queried (dead
-      // model parts / removal candidates) are included with uses = 0.
+      // Canonicalize query members (view -> cube) so usage lines up with the
+      // model's cube members; then list ALL defined CUBE members (skipping
+      // views, which only re-expose cube members) so never-queried members
+      // surface with uses = 0.
+      const canonical = await buildAliasMap(req);
+      const usedMap: Record<string, number> = {};
+      Object.entries(rawUsed).forEach(([k, v]) => {
+        const c = canonical(k);
+        usedMap[c] = (usedMap[c] || 0) + (v as number);
+      });
+
       const ctx = {
         authInfo: null,
         securityContext: {},
         requestId: getRequestIdFromRequest(req),
       } as any;
       const compilerApi = await this.cubejsServer.getCompilerApi(ctx);
-      const meta: any[] = await compilerApi.metaConfig(ctx, { requestId: ctx.requestId });
+      const meta: any = await compilerApi.metaConfig(ctx, { requestId: ctx.requestId });
+      const cubes = Array.isArray(meta) ? meta : (meta && meta.cubes) || [];
 
       const measures: any[] = [];
       const dimensions: any[] = [];
-      meta.forEach((entry: any) => {
+      cubes.forEach((entry: any) => {
         const cube = entry.config || entry;
+        if (cube.type === 'view') {
+          return; // views re-expose cube members; the model = cubes
+        }
         (cube.measures || []).forEach((m: any) =>
           measures.push({ member: m.name, cube: cube.name, type: m.type, uses: usedMap[m.name] || 0 }));
         (cube.dimensions || []).forEach((d: any) =>

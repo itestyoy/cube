@@ -9,10 +9,19 @@ import { Range, WINDOW_OPTIONS } from './common';
  * absolute range chosen with a dual-handle slider over the last 72 hours
  * (−72h … Now). Emits a Range the pages turn into query params.
  */
+const SPANS = [
+  { label: '3d', value: 72 },
+  { label: '7d', value: 168 },
+  { label: '30d', value: 720 },
+];
+
+const fmtAgo = (h: number) => (h === 0 ? 'Now' : h >= 48 ? `-${Math.round(h / 24)}d` : `-${h}h`);
+
 export function TimeWindow({ value, onChange }: { value: Range; onChange: (r: Range) => void }) {
   const [visible, setVisible] = useState(false);
   // Slider value is "hours ago": [olderEdge, newerEdge]; reversed so Now is on
-  // the right. Default mirrors the last-24h window.
+  // the right. `spanH` is the slider's max (widen the range with the buttons).
+  const [spanH, setSpanH] = useState(72);
   const [slider, setSlider] = useState<[number, number]>([24, 0]);
 
   const applySlider = (v: number[]) => {
@@ -22,7 +31,7 @@ export function TimeWindow({ value, onChange }: { value: Range; onChange: (r: Ra
     onChange({
       from: new Date(now - older * 3600 * 1000).toISOString(),
       to: new Date(now - newer * 3600 * 1000).toISOString(),
-      label: newer === 0 ? `Last ${older}h` : `${older}h → ${newer}h ago`,
+      label: newer === 0 ? `Last ${fmtAgo(older).replace('-', '')}` : `${fmtAgo(older)} → ${fmtAgo(newer)}`,
     });
     setVisible(false);
   };
@@ -52,16 +61,34 @@ export function TimeWindow({ value, onChange }: { value: Range; onChange: (r: Ra
           </Button>
         ))}
       </div>
-      <div style={{ color: '#888', fontSize: 12, marginBottom: 4 }}>Custom range (drag the handles)</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+        <span style={{ color: '#888', fontSize: 12 }}>Custom range (drag the handles)</span>
+        <span>
+          {SPANS.map((s) => (
+            <Button
+              key={s.value}
+              size="small"
+              type={spanH === s.value ? 'primary' : 'default'}
+              style={{ marginLeft: 4, padding: '0 8px' }}
+              onClick={() => {
+                setSpanH(s.value);
+                setSlider(([o, n]) => [Math.min(Math.max(o, n), s.value), Math.min(o, n)]);
+              }}
+            >
+              {s.label}
+            </Button>
+          ))}
+        </span>
+      </div>
       <Slider
         range
         reverse
         min={0}
-        max={72}
+        max={spanH}
         step={1}
         value={slider}
-        marks={{ 0: 'Now', 24: '-24h', 48: '-48h', 72: '-72h' }}
-        tipFormatter={(v?: number) => (v === 0 ? 'Now' : `-${v}h`)}
+        marks={{ 0: fmtAgo(0), [Math.round(spanH / 2)]: fmtAgo(Math.round(spanH / 2)), [spanH]: fmtAgo(spanH) }}
+        tipFormatter={(v?: number) => fmtAgo(v || 0)}
         onChange={(v: any) => setSlider(v as [number, number])}
         onAfterChange={(v: any) => applySlider(v as number[])}
       />
