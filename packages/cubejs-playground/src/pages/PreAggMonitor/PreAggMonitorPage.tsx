@@ -6,7 +6,6 @@ import {
   Col,
   Row,
   Select,
-  Spin,
   Statistic,
   Table,
   Tabs,
@@ -177,7 +176,7 @@ export function PreAggMonitorPage() {
         />
       )}
 
-      <Spin spinning={loading}>
+      <div>
         <Row gutter={16} style={{ marginBottom: 24 }}>
           <Col span={6}>
             <Card>
@@ -208,6 +207,7 @@ export function PreAggMonitorPage() {
               dataSource={usedBy}
               columns={usedByColumns}
               size="small"
+              loading={loading}
               pagination={{ pageSize: 20 }}
             />
           </TabPane>
@@ -218,6 +218,7 @@ export function PreAggMonitorPage() {
               dataSource={queryLog}
               columns={queryLogColumns}
               size="small"
+              loading={loading}
               pagination={{ pageSize: 25 }}
             />
           </TabPane>
@@ -241,6 +242,7 @@ export function PreAggMonitorPage() {
               dataSource={buildHistory}
               columns={buildColumns}
               size="small"
+              loading={loading}
               pagination={{ pageSize: 25 }}
             />
           </TabPane>
@@ -251,11 +253,12 @@ export function PreAggMonitorPage() {
               dataSource={queue}
               columns={queueColumns}
               size="small"
+              loading={loading}
               pagination={false}
             />
           </TabPane>
         </Tabs>
-      </Spin>
+      </div>
     </div>
   );
 }

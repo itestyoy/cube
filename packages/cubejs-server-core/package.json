@@ -72,6 +72,7 @@
     "@types/jsonwebtoken": "^9.0.2",
     "@types/node": "^20",
     "@types/node-fetch": "^2.5.7",
+    "@types/pg": "^8.16.0",
     "@types/ramda": "^0.27.34",
     "@types/uuid": "^8.3.0",
     "jest": "^29",

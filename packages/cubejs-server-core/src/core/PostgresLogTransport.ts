@@ -103,13 +103,14 @@ export class PostgresLogTransport {
       // dependency of cubejs-server-core) still start.
       // eslint-disable-next-line global-require
       const { Pool } = require('pg');
-      this.pool = new Pool({
+      const pool: PgPool = new Pool({
         connectionString: this.connectionString,
         max: 4,
         // Keep the monitoring DB from ever stalling Cube startup.
         connectionTimeoutMillis: 5000,
       });
-      const client: PoolClient = await this.pool.connect();
+      this.pool = pool;
+      const client: PoolClient = await pool.connect();
       try {
         await client.query(`CREATE SCHEMA IF NOT EXISTS ${this.schema}`);
         await client.query(`

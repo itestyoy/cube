@@ -175,11 +175,13 @@ export class DevServer {
       }
       const q = req.query;
       const num = (v: any) => (v != null && v !== '' ? parseInt(String(v), 10) : undefined);
+      const status = q.status === 'error' ? 'error' : q.status === 'success' ? 'success' : undefined;
+      const cache = q.cache === 'preagg' ? 'preagg' : q.cache === 'raw' ? 'raw' : undefined;
       const rows = await t.getQueryHistory({
         limit: num(q.limit),
         order: q.order === 'top' ? 'top' : 'recent',
-        status: q.status === 'success' || q.status === 'error' ? q.status : undefined,
-        cache: q.cache === 'preagg' || q.cache === 'raw' ? q.cache : undefined,
+        status,
+        cache,
         apiType: q.apiType ? String(q.apiType) : undefined,
         minDurationMs: num(q.minDurationMs),
         windowHours: num(q.windowHours),

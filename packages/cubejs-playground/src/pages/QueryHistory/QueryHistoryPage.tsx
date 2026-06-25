@@ -8,7 +8,6 @@ import {
   Radio,
   Row,
   Select,
-  Spin,
   Table,
   Tabs,
   Tag,
@@ -177,23 +176,22 @@ export function QueryHistoryPage() {
           <InputNumber
             placeholder="Min ms"
             value={minDuration}
-            onChange={(v) => setMinDuration(v ?? undefined)}
+            onChange={(v) => setMinDuration(typeof v === 'number' ? v : undefined)}
             style={{ width: 110 }}
             min={0}
           />
         </Col>
       </Row>
 
-      <Spin spinning={loading}>
-        <Table
-          rowKey={(r: any) => r.id}
-          dataSource={rows}
-          columns={columns}
-          size="small"
-          pagination={{ pageSize: 25 }}
-          onRow={(record) => ({ onClick: () => setSelected(record), style: { cursor: 'pointer' } })}
-        />
-      </Spin>
+      <Table
+        rowKey={(r: any) => r.id}
+        dataSource={rows}
+        columns={columns}
+        size="small"
+        loading={loading}
+        pagination={{ pageSize: 25 }}
+        onRow={(record) => ({ onClick: () => setSelected(record), style: { cursor: 'pointer' } })}
+      />
 
       <Drawer
         title="Query details"
