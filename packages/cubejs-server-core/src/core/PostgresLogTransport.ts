@@ -1,5 +1,55 @@
 /* eslint-disable no-console */
+import crypto from 'crypto';
 import type { Pool as PgPool, PoolClient } from 'pg';
+
+/**
+ * Normalize a Cube query into a stable "shape" capturing the FIELDS used —
+ * measures, dimensions, time-dimension members + granularity, segments, and
+ * filter members + operators — but NOT concrete values (filter values,
+ * dateRange, limit, order). Two queries over the same fields with different
+ * filter values therefore share one fingerprint: fundamentally the same query.
+ */
+export function normalizeQueryShape(query: any): {
+  measures: string[];
+  dimensions: string[];
+  timeDimensions: string[];
+  segments: string[];
+  filters: string[];
+} | null {
+  if (!query || typeof query !== 'object' || Array.isArray(query)) {
+    return null;
+  }
+  if (
+    !query.measures && !query.dimensions && !query.timeDimensions &&
+    !query.filters && !query.segments
+  ) {
+    // e.g. an inbound-SQL-only payload ({ sql: ... }) — no field shape.
+    return null;
+  }
+  const filterMembers: string[] = [];
+  const walk = (f: any) => {
+    if (!f) return;
+    if (Array.isArray(f)) { f.forEach(walk); return; }
+    if (Array.isArray(f.and)) f.and.forEach(walk);
+    if (Array.isArray(f.or)) f.or.forEach(walk);
+    const member = f.member || f.dimension;
+    if (member) filterMembers.push(`${member}:${f.operator || ''}`);
+  };
+  walk(query.filters || []);
+  return {
+    measures: [...(query.measures || [])].map(String).sort(),
+    dimensions: [...(query.dimensions || [])].map(String).sort(),
+    timeDimensions: (query.timeDimensions || [])
+      .map((t: any) => `${t.dimension}:${t.granularity || ''}`)
+      .sort(),
+    segments: [...(query.segments || [])].map(String).sort(),
+    filters: filterMembers.sort(),
+  };
+}
+
+export function queryFingerprint(shape: any): string {
+  return crypto.createHash('sha1').update(JSON.stringify(shape)).digest('hex').slice(0, 16);
+}
 
 /**
  * Postgres transport for the Cube logger.
@@ -38,6 +88,8 @@ type QueryLogRow = {
   securityContext: any;
   sql: string | null;
   generatedSql: any;
+  queryHash: string | null;
+  queryShape: any;
 };
 
 type BuildLogRow = {
@@ -133,7 +185,9 @@ export class PostgresLogTransport {
             external                      BOOLEAN,
             security_context              JSONB,
             sql                           TEXT,
-            generated_sql                 JSONB
+            generated_sql                 JSONB,
+            query_hash                    TEXT,
+            query_shape                   JSONB
           )
         `);
         await client.query(`
@@ -168,7 +222,9 @@ export class PostgresLogTransport {
             ADD COLUMN IF NOT EXISTS external                      BOOLEAN,
             ADD COLUMN IF NOT EXISTS security_context              JSONB,
             ADD COLUMN IF NOT EXISTS sql                           TEXT,
-            ADD COLUMN IF NOT EXISTS generated_sql                 JSONB
+            ADD COLUMN IF NOT EXISTS generated_sql                 JSONB,
+            ADD COLUMN IF NOT EXISTS query_hash                    TEXT,
+            ADD COLUMN IF NOT EXISTS query_shape                   JSONB
         `);
         await client.query(`
           ALTER TABLE ${this.schema}.preagg_build_log
@@ -179,6 +235,7 @@ export class PostgresLogTransport {
             ADD COLUMN IF NOT EXISTS duration_ms     INTEGER
         `);
         await client.query(`CREATE INDEX IF NOT EXISTS query_log_ts_idx ON ${this.schema}.query_log (ts DESC)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS query_log_hash_idx ON ${this.schema}.query_log (query_hash)`);
         await client.query(`CREATE INDEX IF NOT EXISTS preagg_build_log_ts_idx ON ${this.schema}.preagg_build_log (ts DESC)`);
         await client.query(`CREATE INDEX IF NOT EXISTS preagg_build_log_table_idx ON ${this.schema}.preagg_build_log (target_table)`);
       } finally {
@@ -286,8 +343,23 @@ export class PostgresLogTransport {
       securityContext: params.securityContext ?? null,
       sql: typeof params.sql === 'string' ? params.sql : null,
       generatedSql: params.generatedSql ?? null,
+      ...this.shapeOf(params.query),
     });
     this.cap(this.queryBuffer);
+  }
+
+  /**
+   * Compute the field-level fingerprint of a query for grouping identical
+   * query shapes (different filter values collapse to one). Returns nulls when
+   * the payload has no field shape (e.g. inbound-SQL-only).
+   */
+  private shapeOf(query: any): { queryHash: string | null; queryShape: any } {
+    try {
+      const shape = normalizeQueryShape(query);
+      return shape ? { queryHash: queryFingerprint(shape), queryShape: shape } : { queryHash: null, queryShape: null };
+    } catch (e) {
+      return { queryHash: null, queryShape: null };
+    }
   }
 
   private recordQueryError(msg: string, params: Record<string, any>): void {
@@ -308,6 +380,7 @@ export class PostgresLogTransport {
       securityContext: params.securityContext ?? null,
       sql: typeof params.sql === 'string' ? params.sql : null,
       generatedSql: null,
+      ...this.shapeOf(params.query),
     });
     this.cap(this.queryBuffer);
   }
@@ -461,7 +534,7 @@ export class PostgresLogTransport {
   }
 
   private async insertQueries(rows: QueryLogRow[]): Promise<void> {
-    const cols = 16;
+    const cols = 18;
     const values: any[] = [];
     const tuples = rows.map((r, i) => {
       const base = i * cols;
@@ -482,12 +555,14 @@ export class PostgresLogTransport {
         r.securityContext === null ? null : JSON.stringify(r.securityContext),
         r.sql,
         r.generatedSql === null ? null : JSON.stringify(r.generatedSql),
+        r.queryHash,
+        r.queryShape === null ? null : JSON.stringify(r.queryShape),
       );
       return `(${Array.from({ length: cols }, (_, k) => `$${base + k + 1}`).join(',')})`;
     });
     await this.pool!.query(
       `INSERT INTO ${this.schema}.query_log
-        (ts, request_id, api_type, duration_ms, queries, queries_with_pre_aggregations, used_pre_aggregations, db_type, is_playground, query, status, error, external, security_context, sql, generated_sql)
+        (ts, request_id, api_type, duration_ms, queries, queries_with_pre_aggregations, used_pre_aggregations, db_type, is_playground, query, status, error, external, security_context, sql, generated_sql, query_hash, query_shape)
        VALUES ${tuples.join(',')}`,
       values,
     );
@@ -746,6 +821,160 @@ export class PostgresLogTransport {
        ORDER BY ts DESC
        LIMIT $3`,
       [key, windowHours, Math.min(limit, 500)],
+    );
+    return rows;
+  }
+
+  // ----- Analytics (Insights) -------------------------------------------
+
+  /**
+   * Queries grouped by field-level fingerprint: how heavy each distinct query
+   * shape is. orderBy 'total' (sum duration — biggest cost) or 'count'.
+   */
+  public async getTopQueries(windowHours = 24, orderBy: 'total' | 'count' = 'total', limit = 100): Promise<any[]> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return [];
+    }
+    const order = orderBy === 'count' ? 'executions DESC' : 'total_ms DESC';
+    const { rows } = await this.pool.query(
+      `SELECT query_hash,
+              count(*)::int                                                              AS executions,
+              coalesce(round(avg(duration_ms)),0)::int                                   AS avg_ms,
+              coalesce(percentile_disc(0.95) within group (order by duration_ms),0)::int AS p95_ms,
+              coalesce(sum(duration_ms),0)::bigint                                        AS total_ms,
+              round(100.0 * sum(CASE WHEN coalesce(queries_with_pre_aggregations,0) > 0 THEN 1 ELSE 0 END) / count(*))::int AS hit_rate,
+              sum(CASE WHEN status='error' THEN 1 ELSE 0 END)::int                        AS errors,
+              max(ts)                                                                     AS last_seen,
+              (array_agg(query_shape ORDER BY ts DESC))[1]                                AS shape,
+              (array_agg(query ORDER BY ts DESC))[1]                                      AS sample_query
+       FROM ${this.schema}.query_log
+       WHERE query_hash IS NOT NULL
+         AND ts > now() - ($1 || ' hours')::interval
+       GROUP BY query_hash
+       ORDER BY ${order}
+       LIMIT $2`,
+      [windowHours, Math.min(limit, 500)],
+    );
+    return rows;
+  }
+
+  /**
+   * Pre-aggregation recommendations: frequent/expensive query shapes that were
+   * NOT accelerated — candidates that would benefit from a pre-aggregation.
+   * Ranked by total time spent on the data source.
+   */
+  public async getRecommendations(windowHours = 24, minAvgMs = 50, limit = 100): Promise<any[]> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return [];
+    }
+    const { rows } = await this.pool.query(
+      `SELECT query_hash,
+              count(*)::int                            AS executions,
+              coalesce(round(avg(duration_ms)),0)::int AS avg_ms,
+              coalesce(sum(duration_ms),0)::bigint      AS total_ms,
+              coalesce(percentile_disc(0.95) within group (order by duration_ms),0)::int AS p95_ms,
+              max(ts)                                   AS last_seen,
+              (array_agg(query_shape ORDER BY ts DESC))[1] AS shape,
+              (array_agg(query ORDER BY ts DESC))[1]       AS sample_query
+       FROM ${this.schema}.query_log
+       WHERE query_hash IS NOT NULL
+         AND status = 'success'
+         AND coalesce(queries_with_pre_aggregations,0) = 0
+         AND ts > now() - ($1 || ' hours')::interval
+       GROUP BY query_hash
+       HAVING coalesce(round(avg(duration_ms)),0) >= $2
+       ORDER BY total_ms DESC
+       LIMIT $3`,
+      [windowHours, minAvgMs, Math.min(limit, 500)],
+    );
+    return rows;
+  }
+
+  /**
+   * Errors grouped by message: what is failing and how often.
+   */
+  public async getErrorStats(windowHours = 24, limit = 100): Promise<any[]> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return [];
+    }
+    const { rows } = await this.pool.query(
+      `SELECT error,
+              count(*)::int AS count,
+              max(ts)       AS last_seen,
+              (array_agg(api_type ORDER BY ts DESC))[1] AS api_type,
+              (array_agg(query ORDER BY ts DESC))[1]    AS sample_query
+       FROM ${this.schema}.query_log
+       WHERE status = 'error' AND error IS NOT NULL
+         AND ts > now() - ($1 || ' hours')::interval
+       GROUP BY error
+       ORDER BY count DESC
+       LIMIT $2`,
+      [windowHours, Math.min(limit, 500)],
+    );
+    return rows;
+  }
+
+  /**
+   * Per-member usage across queries: how often each measure / dimension is
+   * actually queried. Members never appearing are dead model parts.
+   */
+  public async getModelUsage(windowHours = 24): Promise<{ measures: any[]; dimensions: any[] }> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return { measures: [], dimensions: [] };
+    }
+    const memberUsage = async (field: 'measures' | 'dimensions') => {
+      const { rows } = await this.pool!.query(
+        `SELECT member, count(*)::int AS uses, max(ts) AS last_used
+         FROM (
+           SELECT ts, jsonb_array_elements_text(query->'${field}') AS member
+           FROM ${this.schema}.query_log
+           WHERE jsonb_typeof(query->'${field}') = 'array'
+             AND ts > now() - ($1 || ' hours')::interval
+         ) t
+         GROUP BY member
+         ORDER BY uses DESC`,
+        [windowHours],
+      );
+      return rows;
+    };
+    const [measures, dimensions] = await Promise.all([memberUsage('measures'), memberUsage('dimensions')]);
+    return { measures, dimensions };
+  }
+
+  /**
+   * Aggregate usage count per member (measure or dimension) as a flat map,
+   * used to flag unused fields inside a pre-aggregation's definition.
+   */
+  public async getMemberUsageMap(windowHours = 24): Promise<Record<string, number>> {
+    const { measures, dimensions } = await this.getModelUsage(windowHours);
+    const map: Record<string, number> = {};
+    [...measures, ...dimensions].forEach((r: any) => {
+      map[r.member] = (map[r.member] || 0) + r.uses;
+    });
+    return map;
+  }
+
+  /**
+   * Recent individual queries for one fingerprint (Top Queries drill-down).
+   */
+  public async getQueriesForHash(hash: string, windowHours = 24, limit = 100): Promise<any[]> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return [];
+    }
+    const { rows } = await this.pool.query(
+      `SELECT id, ts, request_id, api_type, duration_ms, status, external,
+              queries_with_pre_aggregations, used_pre_aggregations, query
+       FROM ${this.schema}.query_log
+       WHERE query_hash = $1
+         AND ts > now() - ($2 || ' hours')::interval
+       ORDER BY ts DESC
+       LIMIT $3`,
+      [hash, windowHours, Math.min(limit, 500)],
     );
     return rows;
   }

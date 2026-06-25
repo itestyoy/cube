@@ -198,6 +198,67 @@ export class DevServer {
       res.json({ queue: await orchestratorApi.getPreAggregationQueueStates() });
     }));
 
+    // Best-effort partition state per pre-aggregation: total / ready / building.
+    // Heavy orchestrator calls, so it's a separate endpoint the catalog merges
+    // in lazily; any failure degrades to an empty map (UI shows "—").
+    app.get('/playground/pre-agg-monitor/partitions-state', catchErrors(async (req, res) => {
+      const ctx = {
+        authInfo: null,
+        securityContext: {},
+        requestId: getRequestIdFromRequest(req),
+      } as any;
+      const state: Record<string, { total: number | null; ready: number | null; building: number }> = {};
+      try {
+        const compilerApi = await this.cubejsServer.getCompilerApi(ctx);
+        const defined: any[] = await compilerApi.preAggregations();
+
+        // Currently building/queued partitions, matched to a pre-agg by table name.
+        const orchestratorApi = await this.cubejsServer.getOrchestratorApi(ctx);
+        const queueRaw = await orchestratorApi.getPreAggregationQueueStates();
+        const queue: any[] = Array.isArray(queueRaw) ? queueRaw : Object.values(queueRaw || {});
+        const buildingFor = (cand: string[]) =>
+          queue.filter((item: any) => {
+            const table = item?.query?.newVersionEntry?.table_name || item?.query?.preAggregation?.tableName || '';
+            const k = normKey(table);
+            return cand.some((c) => c && k.includes(c));
+          }).length;
+
+        // Total partitions that should exist (cacheOnly avoids triggering builds).
+        // eslint-disable-next-line global-require
+        const { RefreshScheduler } = require('./RefreshScheduler');
+        const scheduler = new RefreshScheduler(this.cubejsServer);
+        let partInfo: any[] = [];
+        try {
+          partInfo = await scheduler.preAggregationPartitions(ctx, {
+            metadata: {},
+            timezones: ['UTC'],
+            preAggregations: defined.map((p: any) => ({ id: p.id, cacheOnly: true })),
+          });
+        } catch (e) {
+          partInfo = [];
+        }
+        const totalById: Record<string, number> = {};
+        partInfo.forEach((entry: any) => {
+          const id = entry?.preAggregation?.preAggregationId || entry?.preAggregation?.id;
+          if (id) totalById[normKey(id)] = (entry.partitions || []).length;
+        });
+
+        defined.forEach((p: any) => {
+          const cand = [normKey(p.id), normKey(p.preAggregationName)];
+          const total = cand.map((c) => totalById[c]).find((v) => v != null);
+          const building = buildingFor(cand);
+          state[p.id] = {
+            total: total != null ? total : null,
+            ready: total != null ? Math.max(0, total - building) : null,
+            building,
+          };
+        });
+      } catch (e) {
+        // Degrade gracefully — catalog still renders without partition columns.
+      }
+      res.json({ state });
+    }));
+
     // Normalize a pre-aggregation identifier for fuzzy matching between the
     // defined catalog ids ("Cube.name") and the keys/table names seen in
     // telemetry (e.g. "cube.name", "dev_pre_aggregations.cube_name_...").
@@ -320,7 +381,29 @@ export class DevServer {
       const builds = allBuilds.filter((bh: any) =>
         cand.some((c) => c && (normKey(bh.pre_aggregation).includes(c) || normKey(bh.target_table).includes(c))));
 
+      // Field-level usage: members this pre-agg materializes, annotated with
+      // how often each is actually queried (0 => dead weight, can be dropped).
+      const memberMap = t ? await t.getMemberUsageMap(windowHours) : {};
+      const refs: any = p.references || {};
+      const collect = (arr: any): string[] =>
+        Array.isArray(arr)
+          ? arr.map((x: any) => (typeof x === 'string' ? x : x && (x.dimension || x.name))).filter(Boolean)
+          : [];
+      const uniq = (xs: string[]) => Array.from(new Set(xs));
+      const measureMembers = uniq([...collect(refs.measures), ...collect(def.measures)]);
+      const dimensionMembers = uniq([...collect(refs.dimensions), ...collect(def.dimensions)]);
+      const timeMembers = uniq([
+        ...collect((refs.timeDimensions || []).map((td: any) => td && td.dimension)),
+        ...collect(def.timeDimension ? [def.timeDimension] : []),
+      ]);
+      const fields = [
+        ...measureMembers.map((m) => ({ member: m, kind: 'measure', uses: memberMap[m] || 0 })),
+        ...dimensionMembers.map((m) => ({ member: m, kind: 'dimension', uses: memberMap[m] || 0 })),
+        ...timeMembers.map((m) => ({ member: m, kind: 'timeDimension', uses: memberMap[m] || 0 })),
+      ];
+
       res.json({
+        fields,
         found: true,
         telemetryEnabled: Boolean(t),
         windowHours,
@@ -349,6 +432,60 @@ export class DevServer {
         queries,
         builds,
       });
+    }));
+
+    // ----- Insights (query analytics) -------------------------------------
+    app.get('/playground/insights/top-queries', catchErrors(async (req, res) => {
+      const t = telemetry();
+      const order = req.query.order === 'count' ? 'count' : 'total';
+      res.json({ enabled: Boolean(t), rows: t ? await t.getTopQueries(telemetryWindow(req), order) : [] });
+    }));
+
+    app.get('/playground/insights/recommendations', catchErrors(async (req, res) => {
+      const t = telemetry();
+      const minAvg = parseInt(String(req.query.minAvgMs || '50'), 10) || 50;
+      res.json({ enabled: Boolean(t), rows: t ? await t.getRecommendations(telemetryWindow(req), minAvg) : [] });
+    }));
+
+    app.get('/playground/insights/errors', catchErrors(async (req, res) => {
+      const t = telemetry();
+      res.json({ enabled: Boolean(t), rows: t ? await t.getErrorStats(telemetryWindow(req)) : [] });
+    }));
+
+    app.get('/playground/insights/model-usage', catchErrors(async (req, res) => {
+      const t = telemetry();
+      const windowHours = telemetryWindow(req);
+      const usedMap = t ? await t.getMemberUsageMap(windowHours) : {};
+
+      // Merge with the full model so members that were NEVER queried (dead
+      // model parts / removal candidates) are included with uses = 0.
+      const ctx = {
+        authInfo: null,
+        securityContext: {},
+        requestId: getRequestIdFromRequest(req),
+      } as any;
+      const compilerApi = await this.cubejsServer.getCompilerApi(ctx);
+      const meta: any[] = await compilerApi.metaConfig(ctx, { requestId: ctx.requestId });
+
+      const measures: any[] = [];
+      const dimensions: any[] = [];
+      meta.forEach((entry: any) => {
+        const cube = entry.config || entry;
+        (cube.measures || []).forEach((m: any) =>
+          measures.push({ member: m.name, cube: cube.name, type: m.type, uses: usedMap[m.name] || 0 }));
+        (cube.dimensions || []).forEach((d: any) =>
+          dimensions.push({ member: d.name, cube: cube.name, type: d.type, uses: usedMap[d.name] || 0 }));
+      });
+      measures.sort((a, b) => b.uses - a.uses);
+      dimensions.sort((a, b) => b.uses - a.uses);
+
+      res.json({ enabled: Boolean(t), measures, dimensions });
+    }));
+
+    app.get('/playground/insights/hash-queries', catchErrors(async (req, res) => {
+      const t = telemetry();
+      const hash = String(req.query.hash || '');
+      res.json({ enabled: Boolean(t), rows: t && hash ? await t.getQueriesForHash(hash, telemetryWindow(req)) : [] });
     }));
 
     app.get('/playground/db-schema', catchErrors(async (req, res) => {

@@ -39,6 +39,7 @@ export function PreAggMonitorPage() {
   const [catalog, setCatalog] = useState<any[]>([]);
   const [buildHistory, setBuildHistory] = useState<any[]>([]);
   const [queue, setQueue] = useState<any[]>([]);
+  const [partState, setPartState] = useState<Record<string, any>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,6 +64,18 @@ export function PreAggMonitorPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Partition state is a heavier orchestrator call — fetch it independently so
+  // the catalog renders immediately and the columns fill in when ready.
+  const loadPartState = useCallback(() => {
+    getJson('playground/pre-agg-monitor/partitions-state')
+      .then((r) => setPartState(r.state || {}))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadPartState();
+  }, [loadPartState]);
 
   const stats = useMemo(() => {
     const defined = catalog.length;
@@ -124,6 +137,25 @@ export function PreAggMonitorPage() {
           '—'
         ),
     },
+    {
+      title: 'Partitions',
+      key: 'partitions',
+      width: 120,
+      render: (_: any, r: any) => {
+        const s = partState[r.id];
+        if (!s || s.total == null) {
+          return s && s.building > 0 ? <Tag color="blue">{s.building} building</Tag> : '—';
+        }
+        return (
+          <Tooltip title={`${s.ready} ready / ${s.total} total${s.building ? ` · ${s.building} building` : ''}`}>
+            <span>
+              {s.ready}/{s.total}
+              {s.building > 0 ? <Tag color="blue" style={{ marginLeft: 6 }}>{s.building}⟳</Tag> : null}
+            </span>
+          </Tooltip>
+        );
+      },
+    },
   ];
 
   const buildColumns = [
@@ -148,7 +180,7 @@ export function PreAggMonitorPage() {
         </Col>
         <Col>
           <Select value={windowHours} onChange={setWindowHours} options={WINDOW_OPTIONS} style={{ width: 140, marginRight: 8 }} />
-          <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
+          <Button icon={<ReloadOutlined />} onClick={() => { load(); loadPartState(); }} loading={loading}>
             Refresh
           </Button>
         </Col>

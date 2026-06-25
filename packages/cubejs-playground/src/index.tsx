@@ -16,6 +16,7 @@ import {
   QueryHistoryPage,
   QueryDetailPage,
   BuildDetailPage,
+  InsightsPage,
 } from './pages';
 import { SecurityContextProvider } from './components/SecurityContext/SecurityContextProvider';
 import { AppContextProvider } from './components/AppContext';
@@ -118,6 +119,12 @@ ReactDOM.render(
           exact
           path="/builds/:id"
           component={BuildDetailPage}
+        />
+        <Route
+          key="insights"
+          exact
+          path="/insights"
+          component={InsightsPage}
         />
       </App>
     </AppContextProvider>

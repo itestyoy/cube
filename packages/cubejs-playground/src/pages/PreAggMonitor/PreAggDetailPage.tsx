@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useHistory, useParams } from 'react-router-dom';
-import { Card, Col, Descriptions, Empty, PageHeader, Row, Spin, Statistic, Table, Tabs } from 'antd';
+import { Card, Col, Descriptions, Empty, PageHeader, Row, Spin, Statistic, Table, Tabs, Tag } from 'antd';
 
 import { CodeBlock, fmtMs, fmtTs, getJson, preAggStatusTag } from '../monitoring/common';
 
@@ -39,6 +39,20 @@ export function PreAggDetailPage() {
     { title: 'Target table', dataIndex: 'target_table', key: 'target_table' },
     { title: 'Range end', dataIndex: 'build_range_end', key: 'build_range_end' },
     { title: 'Build time', dataIndex: 'duration_ms', key: 'duration_ms', render: fmtMs, width: 120, sorter: (a: any, b: any) => (a.duration_ms || 0) - (b.duration_ms || 0) },
+  ];
+
+  const fieldColumns = [
+    { title: 'Member', dataIndex: 'member', key: 'member' },
+    { title: 'Kind', dataIndex: 'kind', key: 'kind', width: 130, render: (k: string) => <Tag>{k}</Tag> },
+    {
+      title: 'Uses',
+      dataIndex: 'uses',
+      key: 'uses',
+      width: 140,
+      defaultSortOrder: 'ascend' as const,
+      sorter: (a: any, b: any) => a.uses - b.uses,
+      render: (v: number) => (v > 0 ? v : <Tag color="red">never used</Tag>),
+    },
   ];
 
   return (
@@ -89,6 +103,20 @@ export function PreAggDetailPage() {
               ) : (
                 <Empty description="No indexes defined." />
               )}
+            </TabPane>
+
+            <TabPane tab={`Fields (${(data.fields || []).length})`} key="fields">
+              <p style={{ color: '#888' }}>
+                Members this pre-aggregation materializes, annotated with how often each is queried.
+                <b> never-used</b> fields are dead weight — dropping them shrinks build time and storage.
+              </p>
+              <Table
+                rowKey={(r: any) => `${r.kind}:${r.member}`}
+                dataSource={data.fields || []}
+                columns={fieldColumns}
+                size="small"
+                pagination={false}
+              />
             </TabPane>
 
             <TabPane tab={`Used By (${data.queries.length})`} key="used-by">

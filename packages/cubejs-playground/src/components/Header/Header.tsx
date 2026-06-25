@@ -70,6 +70,10 @@ export default function Header({ selectedKeys }: Props) {
             <Link to="/query-history">Query History</Link>
           </StyledMenuItem>
 
+          <StyledMenuItem key="/insights">
+            <Link to="/insights">Insights</Link>
+          </StyledMenuItem>
+
           <StyledMenuButton
             key="slack"
             href="https://slack.cube.dev"

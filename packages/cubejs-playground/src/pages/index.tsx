@@ -9,3 +9,4 @@ export * from './PreAggMonitor/PreAggDetailPage';
 export * from './QueryHistory/QueryHistoryPage';
 export * from './QueryHistory/QueryDetailPage';
 export * from './Builds/BuildDetailPage';
+export * from './Insights/InsightsPage';
