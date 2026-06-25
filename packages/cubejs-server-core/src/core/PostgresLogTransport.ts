@@ -148,6 +148,36 @@ export class PostgresLogTransport {
             status          TEXT NOT NULL
           )
         `);
+        // Idempotent migrations so a pre-existing table (created by an earlier
+        // build) gains any columns added later. CREATE TABLE IF NOT EXISTS does
+        // not alter existing tables, so without this newer columns would be
+        // missing and inserts would fail.
+        await client.query(`
+          ALTER TABLE ${this.schema}.query_log
+            ADD COLUMN IF NOT EXISTS request_id                    TEXT,
+            ADD COLUMN IF NOT EXISTS api_type                      TEXT,
+            ADD COLUMN IF NOT EXISTS duration_ms                   INTEGER,
+            ADD COLUMN IF NOT EXISTS queries                       INTEGER,
+            ADD COLUMN IF NOT EXISTS queries_with_pre_aggregations INTEGER,
+            ADD COLUMN IF NOT EXISTS used_pre_aggregations         JSONB,
+            ADD COLUMN IF NOT EXISTS db_type                       JSONB,
+            ADD COLUMN IF NOT EXISTS is_playground                 BOOLEAN,
+            ADD COLUMN IF NOT EXISTS query                         JSONB,
+            ADD COLUMN IF NOT EXISTS status                        TEXT NOT NULL DEFAULT 'success',
+            ADD COLUMN IF NOT EXISTS error                         TEXT,
+            ADD COLUMN IF NOT EXISTS external                      BOOLEAN,
+            ADD COLUMN IF NOT EXISTS security_context              JSONB,
+            ADD COLUMN IF NOT EXISTS sql                           TEXT,
+            ADD COLUMN IF NOT EXISTS generated_sql                 JSONB
+        `);
+        await client.query(`
+          ALTER TABLE ${this.schema}.preagg_build_log
+            ADD COLUMN IF NOT EXISTS request_id      TEXT,
+            ADD COLUMN IF NOT EXISTS target_table    TEXT,
+            ADD COLUMN IF NOT EXISTS pre_aggregation TEXT,
+            ADD COLUMN IF NOT EXISTS build_range_end TEXT,
+            ADD COLUMN IF NOT EXISTS duration_ms     INTEGER
+        `);
         await client.query(`CREATE INDEX IF NOT EXISTS query_log_ts_idx ON ${this.schema}.query_log (ts DESC)`);
         await client.query(`CREATE INDEX IF NOT EXISTS preagg_build_log_ts_idx ON ${this.schema}.preagg_build_log (ts DESC)`);
         await client.query(`CREATE INDEX IF NOT EXISTS preagg_build_log_table_idx ON ${this.schema}.preagg_build_log (target_table)`);
