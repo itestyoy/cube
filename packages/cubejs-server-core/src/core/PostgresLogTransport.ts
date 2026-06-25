@@ -5,9 +5,10 @@ import type { Pool as PgPool, PoolClient } from 'pg';
 /**
  * Normalize a Cube query into a stable "shape" capturing the FIELDS used —
  * measures, dimensions, time-dimension members + granularity, segments, and
- * filter members + operators — but NOT concrete values (filter values,
- * dateRange, limit, order). Two queries over the same fields with different
- * filter values therefore share one fingerprint: fundamentally the same query.
+ * filter members — but NOT operators or concrete values (filter values/operators,
+ * dateRange, limit, order). The operator doesn't change whether a pre-aggregation
+ * can serve the query, so two queries that filter the same field with different
+ * operators/values share one fingerprint: fundamentally the same query.
  */
 export function normalizeQueryShape(query: any): {
   measures: string[];
@@ -33,7 +34,7 @@ export function normalizeQueryShape(query: any): {
     if (Array.isArray(f.and)) f.and.forEach(walk);
     if (Array.isArray(f.or)) f.or.forEach(walk);
     const member = f.member || f.dimension;
-    if (member) filterMembers.push(`${member}:${f.operator || ''}`);
+    if (member) filterMembers.push(String(member));
   };
   walk(query.filters || []);
   return {
@@ -43,7 +44,7 @@ export function normalizeQueryShape(query: any): {
       .map((t: any) => `${t.dimension}:${t.granularity || ''}`)
       .sort(),
     segments: [...(query.segments || [])].map(String).sort(),
-    filters: filterMembers.sort(),
+    filters: Array.from(new Set(filterMembers)).sort(),
   };
 }
 
