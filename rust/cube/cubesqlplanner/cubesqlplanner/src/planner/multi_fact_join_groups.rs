@@ -1,3 +1,4 @@
+use crate::cube_bridge::join_hints::JoinHintItem;
 use crate::planner::collectors::{
     collect_join_hints, collect_multiplied_measures, has_multi_stage_members,
 };
@@ -5,7 +6,7 @@ use crate::planner::filter::FilterItem;
 use crate::planner::join_hints::JoinHints;
 use crate::planner::planners::JoinTreeBuilder;
 use crate::planner::query_tools::JoinKey;
-use crate::planner::query_tools::QueryTools;
+use crate::planner::state::State;
 use crate::planner::JoinTree;
 use crate::planner::MemberSymbol;
 use cubenativeutils::CubeError;
@@ -149,7 +150,7 @@ impl MeasuresJoinHints {
 /// are cheap lookups at render time.
 #[derive(Clone)]
 pub struct MultiFactJoinGroups {
-    query_tools: Rc<QueryTools>,
+    query_tools: Rc<State>,
     measures_join_hints: MeasuresJoinHints,
     groups: Vec<(Rc<JoinTree>, Vec<Rc<MemberSymbol>>)>,
     /// cube_name → join path from root, computed from the first group (shared for dimensions).
@@ -162,7 +163,7 @@ impl MultiFactJoinGroups {
     /// Builds the join trees from `measures_join_hints` and groups
     /// measures by the resulting `JoinKey`.
     pub fn try_new(
-        query_tools: Rc<QueryTools>,
+        query_tools: Rc<State>,
         measures_join_hints: MeasuresJoinHints,
     ) -> Result<Self, CubeError> {
         let groups = Self::build_groups(&query_tools, &measures_join_hints)?;
@@ -184,7 +185,7 @@ impl MultiFactJoinGroups {
     }
 
     fn build_groups(
-        query_tools: &Rc<QueryTools>,
+        query_tools: &Rc<State>,
         hints: &MeasuresJoinHints,
     ) -> Result<Vec<(Rc<JoinTree>, Vec<Rc<MemberSymbol>>)>, CubeError> {
         let join_tree_builder = JoinTreeBuilder::new(query_tools.clone());
@@ -207,7 +208,12 @@ impl MultiFactJoinGroups {
                 .measure_hints
                 .iter()
                 .map(|mh| -> Result<_, CubeError> {
-                    let (key, join_tree) = resolve(&mh.hints)?;
+                    let measure_hints = if mh.hints.is_empty() {
+                        Self::fallback_hints_for_measure(query_tools, &mh.measure)?
+                    } else {
+                        mh.hints.clone()
+                    };
+                    let (key, join_tree) = resolve(&measure_hints)?;
                     Ok((vec![mh.measure.clone()], key, join_tree))
                 })
                 .collect::<Result<Vec<_>, _>>()?
@@ -228,6 +234,27 @@ impl MultiFactJoinGroups {
             .into_iter()
             .map(|key| grouped.remove(&key).unwrap())
             .collect())
+    }
+
+    /// Hints to use for a measure whose own hint set resolved to empty.
+    /// Seeds the measure's owning cube when it is a real, joinable cube;
+    /// returns empty for views (resolved via the query's other members).
+    fn fallback_hints_for_measure(
+        query_tools: &Rc<State>,
+        measure: &Rc<MemberSymbol>,
+    ) -> Result<JoinHints, CubeError> {
+        let cube_name = measure.cube_name();
+        let is_view = query_tools
+            .cube_evaluator()
+            .cube_from_path(cube_name.clone())
+            .ok()
+            .and_then(|cube| cube.static_data().is_view)
+            .unwrap_or(false);
+        if is_view {
+            Ok(JoinHints::new())
+        } else {
+            Ok(JoinHints::from_items(vec![JoinHintItem::Single(cube_name)]))
+        }
     }
 
     pub fn measures_join_hints(&self) -> &MeasuresJoinHints {

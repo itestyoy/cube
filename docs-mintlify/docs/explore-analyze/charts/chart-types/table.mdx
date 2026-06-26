@@ -74,7 +74,17 @@ The URL must be publicly accessible without authentication.
 
 ### Inline bars
 
-Display a numeric column as a proportional bar by setting **Display as** to **Bar**. Bars scale relative to the max value in the column. Columns with negative values will split the bar in both directions.
+Display a numeric column as a proportional in-cell bar. In the column's per-column section on the **Style** tab, use the **Display as** control to add a bar. Each bar's length reflects the value's magnitude within the column's range.
+
+| Option | Description |
+|---|---|
+| **Display as** | Choose **Value**, **Bar**, or both. Checking **Bar** reveals the bar options below; keeping **Value** checked shows the number alongside the bar (uncheck it for a bar-only cell). |
+| **Positive bar color** | Fill color for non-negative bars |
+| **Negative bar color** | Fill color for negative bars (used when the column contains both positive and negative values) |
+| **Bar scale** | **Auto** anchors each bar at zero and scales to the column's largest value, so even the smallest value still shows a bar; **Manual** scales against the bounds you set |
+| **Lower / Higher bound** | The minimum and maximum (in the column's raw units) used when **Bar scale** is **Manual**. Pre-filled to match the Auto range, so switching modes doesn't shift the bars. |
+
+When a column contains both positive and negative values, bars are drawn in both directions from a centered zero baseline — positive values to the right, negative to the left — using the positive and negative bar colors. Values outside the scale are clamped to a full or empty bar, but the displayed number is always the true value.
 
 {/* TODO screenshot: table with inline bar column (hidden — replace this comment with <Frame><img src="..." /></Frame> when image is ready) */}
 
@@ -117,17 +127,40 @@ To make a background transparent, open the color picker and clear the hex value.
 
 {/* TODO screenshot: conditional formatting panel with a condition configured (hidden — replace this comment with <Frame><img src="..." /></Frame> when image is ready) */}
 
-### Gradient color scale
+### Color scale
 
-The **Color scale** tab applies a gradient across a column based on value ranges. Configure a minimum color, a midpoint color (optional), and a maximum color. The gradient is applied across all visible rows.
+A **color scale** (heat map) tints each cell of a numeric column with a gradient based on where its value falls in the column's range. It is a rule type in the **Formatting** tab, alongside conditional formatting — switch a rule between **Conditional formatting** and **Color scale** with the **Type** selector inside the rule.
 
-<Warning>
-If you don't set a mapping value for the scale, the gradient applies across visible rows only. This can produce unexpected results when row limits or pagination are active.
-</Warning>
+To add one quickly, open the menu next to **Add rule** and pick a color-scale preset:
 
-Use the **Treat as zero** toggle to handle null values in the gradient calculation.
+- **Outstanding values** — a two-color scale that highlights the highest values.
+- **Divergent values** — a three-color scale that distinguishes low, middle, and high values.
+- **Traffic light gradient** — a red–yellow–green three-color scale.
 
-{/* TODO screenshot: table with gradient color scale applied to a numeric column (hidden — replace this comment with <Frame><img src="..." /></Frame> when image is ready) */}
+A color scale requires a **numeric source column**. For non-numeric columns (strings, dates, booleans), the **Scale** type is disabled — use conditional formatting instead.
+
+Configure the gradient with three stops, laid out top-to-bottom to mirror the column:
+
+- **Start** (low end) — anchored at the column **Minimum** by default, or a custom **Number** or **Percentile**.
+- **Center** (optional middle) — **Disabled** by default, which produces a two-color gradient. Enable it for a three-color gradient anchored at the **Midpoint**, **Average**, **Median**, or a custom **Number** / **Percentile**.
+- **End** (high end) — anchored at the column **Maximum** by default, or a custom **Number** or **Percentile**.
+
+Each stop has its own color. The anchor determines *which value* in the column the stop's color is pinned to:
+
+- **Minimum** / **Maximum** — the lowest / highest value in the column.
+- **Midpoint** — the halfway point of the range, i.e. `(minimum + maximum) / 2`. Independent of how the values are distributed.
+- **Average** — the mean of all values (sensitive to outliers).
+- **Median** — the middle value when sorted (robust to outliers).
+- **Number** — a fixed value you enter.
+- **Percentile** — a value at the given percentile (e.g. `90` = the 90th percentile).
+
+For the computed anchors (Minimum, Maximum, Midpoint, Average, Median), the dropdown previews the resolved value from your data.
+
+Use **Reverse color scale** to swap the Start and End colors. **Treat nulls as zero** is on by default, coloring null/blank cells as zero; turn it off to leave them uncolored.
+
+The scale is normalized **per column** — each targeted column uses its own value range.
+
+{/* TODO screenshot: table with a color scale applied to a numeric column (hidden — replace this comment with <Frame><img src="..." /></Frame> when image is ready) */}
 
 ## Totals
 

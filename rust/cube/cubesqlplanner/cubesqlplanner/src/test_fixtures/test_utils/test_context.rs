@@ -1,5 +1,6 @@
-use crate::cube_bridge::base_query_options::{BaseQueryOptions, MaskedMemberItem};
+use crate::cube_bridge::base_query_options::{BaseQueryOptions, FilterValue, MaskedMemberItem};
 use crate::cube_bridge::join_hints::JoinHintItem;
+use crate::cube_bridge::options_member::OptionsMember;
 use crate::logical_plan::PreAggregationUsage;
 #[cfg(feature = "integration-postgres")]
 use crate::logical_plan::{PreAggregation, PreAggregationSource, PreAggregationTable};
@@ -8,8 +9,8 @@ use crate::physical_plan::sql_nodes::SqlNodesFactory;
 use crate::physical_plan::{SqlEvaluatorVisitor, VisitorContext};
 use crate::planner::filter::base_segment::BaseSegment;
 use crate::planner::filter::Filter;
-use crate::planner::query_tools::QueryTools;
 use crate::planner::sql_templates::PlanSqlTemplates;
+use crate::planner::state::State;
 use crate::planner::top_level_planner::TopLevelPlanner;
 use crate::planner::{GranularityHelper, QueryProperties, QueryPropertiesCompiler};
 use crate::planner::{MemberSymbol, TimeDimensionSymbol};
@@ -24,7 +25,7 @@ use std::rc::Rc;
 /// Test context providing query tools and symbol creation helpers
 pub struct TestContext {
     schema: MockSchema,
-    query_tools: Rc<QueryTools>,
+    query_tools: Rc<State>,
     security_context: Rc<dyn crate::cube_bridge::security_context::SecurityContext>,
     /// Custom SQL templates carried over through `for_options` so that
     /// timezone-driven `MockBaseTools` rebuilds (e.g. when the caller
@@ -50,7 +51,7 @@ impl TestContext {
         let security_context: Rc<dyn crate::cube_bridge::security_context::SecurityContext> =
             Rc::new(MockSecurityContext);
 
-        let query_tools = QueryTools::try_new(
+        let query_tools = State::try_new(
             evaluator,
             security_context.clone(),
             Rc::new(base_tools),
@@ -170,7 +171,7 @@ impl TestContext {
         let security_context: Rc<dyn crate::cube_bridge::security_context::SecurityContext> =
             Rc::new(MockSecurityContext);
 
-        let query_tools = QueryTools::try_new(
+        let query_tools = State::try_new(
             evaluator,
             security_context.clone(),
             Rc::new(base_tools),
@@ -191,7 +192,7 @@ impl TestContext {
     }
 
     #[allow(dead_code)]
-    pub fn query_tools(&self) -> &Rc<QueryTools> {
+    pub fn query_tools(&self) -> &Rc<State> {
         &self.query_tools
     }
 
@@ -205,21 +206,21 @@ impl TestContext {
     #[allow(dead_code)]
     pub fn create_symbol(&self, member_path: &str) -> Result<Rc<MemberSymbol>, CubeError> {
         self.query_tools
-            .evaluator_compiler()
+            .compiler()
             .borrow_mut()
             .add_auto_resolved_member_evaluator(member_path.to_string())
     }
 
     pub fn create_dimension(&self, path: &str) -> Result<Rc<MemberSymbol>, CubeError> {
         self.query_tools
-            .evaluator_compiler()
+            .compiler()
             .borrow_mut()
             .add_dimension_evaluator(path.to_string())
     }
 
     pub fn create_measure(&self, path: &str) -> Result<Rc<MemberSymbol>, CubeError> {
         self.query_tools
-            .evaluator_compiler()
+            .compiler()
             .borrow_mut()
             .add_measure_evaluator(path.to_string())
     }
@@ -236,7 +237,7 @@ impl TestContext {
             .query_tools
             .cube_evaluator()
             .segment_by_path(path.to_string())?;
-        let mut compiler = self.query_tools.evaluator_compiler().borrow_mut();
+        let mut compiler = self.query_tools.compiler().borrow_mut();
         let expression = compiler.compile_sql_call(&cube_name, definition.sql()?)?;
         let cube_symbol = compiler.add_cube_table_evaluator(cube_name.clone(), vec![])?;
         drop(compiler);
@@ -249,7 +250,7 @@ impl TestContext {
         path: &str,
         granularity: Option<&str>,
     ) -> Result<Rc<MemberSymbol>, CubeError> {
-        let mut compiler = self.query_tools.evaluator_compiler().borrow_mut();
+        let mut compiler = self.query_tools.compiler().borrow_mut();
         let base_symbol = compiler.add_dimension_evaluator(path.to_string())?;
         let granularity = granularity.map(|g| g.to_string());
         let granularity_obj = GranularityHelper::make_granularity_obj(
@@ -270,7 +271,11 @@ impl TestContext {
     pub fn evaluate_symbol(&self, symbol: &Rc<MemberSymbol>) -> Result<String, CubeError> {
         let nodes_factory = SqlNodesFactory::default();
         let cube_ref_evaluator = Rc::new(nodes_factory.cube_ref_evaluator());
-        let visitor = SqlEvaluatorVisitor::new(self.query_tools.clone(), cube_ref_evaluator, None);
+        let visitor = SqlEvaluatorVisitor::new(
+            self.query_tools.query_tools().clone(),
+            cube_ref_evaluator,
+            None,
+        );
         let base_tools = self.query_tools.base_tools();
         let driver_tools = base_tools.driver_tools(false)?;
         let templates = PlanSqlTemplates::try_new(driver_tools, false)?;
@@ -292,7 +297,11 @@ impl TestContext {
         nodes_factory.set_ungrouped(false);
         nodes_factory.set_group_by_members(group_by_members.into_iter().collect());
         let cube_ref_evaluator = Rc::new(nodes_factory.cube_ref_evaluator());
-        let visitor = SqlEvaluatorVisitor::new(self.query_tools.clone(), cube_ref_evaluator, None);
+        let visitor = SqlEvaluatorVisitor::new(
+            self.query_tools.query_tools().clone(),
+            cube_ref_evaluator,
+            None,
+        );
         let base_tools = self.query_tools.base_tools();
         let driver_tools = base_tools.driver_tools(false)?;
         let templates = PlanSqlTemplates::try_new(driver_tools, false)?;
@@ -339,6 +348,17 @@ impl TestContext {
     ///
     /// Panics if YAML cannot be parsed.
     pub fn create_query_options_from_yaml(&self, yaml: &str) -> Rc<dyn BaseQueryOptions> {
+        self.create_query_options_from_yaml_with_segments(yaml, vec![])
+    }
+
+    /// Like `create_query_options_from_yaml`, but appends extra (typically
+    /// member-expression) segments that can't be expressed as YAML member
+    /// names — e.g. the constant `1 = 0` `rlsAccessDenied` segment RBAC injects.
+    pub fn create_query_options_from_yaml_with_segments(
+        &self,
+        yaml: &str,
+        extra_segments: Vec<OptionsMember>,
+    ) -> Rc<dyn BaseQueryOptions> {
         let yaml_options: YamlBaseQueryOptions = serde_yaml::from_str(yaml)
             .unwrap_or_else(|e| panic!("Failed to parse YAML query options: {}", e));
 
@@ -352,10 +372,14 @@ impl TestContext {
             .map(|d| members_from_strings(d))
             .filter(|d| !d.is_empty());
 
-        let segments = yaml_options
-            .segments
-            .map(|s| members_from_strings(s))
-            .filter(|s| !s.is_empty());
+        let segments = {
+            let mut segments = yaml_options
+                .segments
+                .map(|s| members_from_strings(s))
+                .unwrap_or_default();
+            segments.extend(extra_segments);
+            Some(segments).filter(|s| !s.is_empty())
+        };
 
         let order = yaml_options
             .order
@@ -419,6 +443,9 @@ impl TestContext {
                 .ungrouped(yaml_options.ungrouped)
                 .export_annotated_sql(yaml_options.export_annotated_sql.unwrap_or(false))
                 .pre_aggregation_query(yaml_options.pre_aggregation_query)
+                .use_original_sql_pre_aggregations_in_pre_aggregation(
+                    yaml_options.use_original_sql_pre_aggregations_in_pre_aggregation,
+                )
                 .total_query(yaml_options.total_query)
                 .cubestore_support_multistage(yaml_options.cubestore_support_multistage)
                 .disable_external_pre_aggregations(
@@ -436,7 +463,15 @@ impl TestContext {
     }
 
     pub fn create_query_properties(&self, yaml: &str) -> Result<Rc<QueryProperties>, CubeError> {
-        let options = self.create_query_options_from_yaml(yaml);
+        self.create_query_properties_with_segments(yaml, vec![])
+    }
+
+    pub fn create_query_properties_with_segments(
+        &self,
+        yaml: &str,
+        extra_segments: Vec<OptionsMember>,
+    ) -> Result<Rc<QueryProperties>, CubeError> {
+        let options = self.create_query_options_from_yaml_with_segments(yaml, extra_segments);
         QueryPropertiesCompiler::new(self.query_tools.clone()).build(options)
     }
 
@@ -461,7 +496,15 @@ impl TestContext {
         &self,
         query: &str,
     ) -> Result<(String, Vec<PreAggregationUsage>), cubenativeutils::CubeError> {
-        let options = self.create_query_options_from_yaml(query);
+        self.build_sql_with_used_pre_aggregations_with_segments(query, vec![])
+    }
+
+    pub fn build_sql_with_used_pre_aggregations_with_segments(
+        &self,
+        query: &str,
+        extra_segments: Vec<OptionsMember>,
+    ) -> Result<(String, Vec<PreAggregationUsage>), cubenativeutils::CubeError> {
+        let options = self.create_query_options_from_yaml_with_segments(query, extra_segments);
         let ctx = self.for_options(options.as_ref())?;
         let request = QueryPropertiesCompiler::new(ctx.query_tools.clone()).build(options)?;
         let planner = TopLevelPlanner::new(request, ctx.query_tools.clone(), true);
@@ -688,17 +731,22 @@ impl TestContext {
     }
 
     #[cfg(feature = "integration-postgres")]
-    fn inline_params(sql: &str, params: &[String]) -> String {
+    fn inline_params(sql: &str, params: &[FilterValue]) -> String {
         let mut result = sql.to_string();
         for (i, param) in params.iter().enumerate().rev() {
             let placeholder = format!("${}", i + 1);
-            let escaped = param.replace('\'', "''");
-            result = result.replace(&placeholder, &format!("'{}'", escaped));
+            // `Null` must inline as the bare SQL keyword; every other variant is
+            // rendered through its canonical string form and quoted.
+            let literal = match param.to_param_string() {
+                Some(value) => format!("'{}'", value.replace('\'', "''")),
+                None => "NULL".to_string(),
+            };
+            result = result.replace(&placeholder, &literal);
         }
         result
     }
 
-    pub fn build_filter_sql(&self, yaml: &str) -> Result<(String, Vec<String>), CubeError> {
+    pub fn build_filter_sql(&self, yaml: &str) -> Result<(String, Vec<FilterValue>), CubeError> {
         let props = self.create_query_properties(yaml)?;
 
         let filter = Filter {
@@ -713,7 +761,7 @@ impl TestContext {
 
         let nodes_factory = SqlNodesFactory::default();
         let context = Rc::new(VisitorContext::new(
-            self.query_tools.clone(),
+            self.query_tools.query_tools().clone(),
             &nodes_factory,
             None,
         ));
@@ -729,10 +777,10 @@ impl TestContext {
     pub fn build_base_filter_sql(
         &self,
         base_filter: &Rc<crate::planner::filter::base_filter::BaseFilter>,
-    ) -> Result<(String, Vec<String>), CubeError> {
+    ) -> Result<(String, Vec<FilterValue>), CubeError> {
         let nodes_factory = SqlNodesFactory::default();
         let context = Rc::new(VisitorContext::new(
-            self.query_tools.clone(),
+            self.query_tools.query_tools().clone(),
             &nodes_factory,
             None,
         ));
@@ -740,11 +788,11 @@ impl TestContext {
         let driver_tools = base_tools.driver_tools(false)?;
         let templates = PlanSqlTemplates::try_new(driver_tools, false)?;
 
-        let visitor = context.make_visitor(self.query_tools.clone());
+        let visitor = context.make_visitor(self.query_tools.query_tools().clone());
         let sql = base_filter.to_sql(
             &visitor,
             context.node_processor(),
-            self.query_tools.clone(),
+            self.query_tools.query_tools().clone(),
             &templates,
             context.filters_context(),
         )?;

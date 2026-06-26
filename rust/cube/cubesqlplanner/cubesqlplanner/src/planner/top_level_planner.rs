@@ -1,6 +1,6 @@
 use super::planners::multi_stage::PlanningScope;
 use super::planners::QueryPlanner;
-use super::query_tools::QueryTools;
+use super::state::State;
 use super::QueryProperties;
 use crate::logical_plan::OriginalSqlCollector;
 use crate::logical_plan::PreAggregationOptimizer;
@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 pub struct TopLevelPlanner {
-    query_tools: Rc<QueryTools>,
+    query_tools: Rc<State>,
     request: Rc<QueryProperties>,
     cubestore_support_multistage: bool,
 }
@@ -20,7 +20,7 @@ pub struct TopLevelPlanner {
 impl TopLevelPlanner {
     pub fn new(
         request: Rc<QueryProperties>,
-        query_tools: Rc<QueryTools>,
+        query_tools: Rc<State>,
         cubestore_support_multistage: bool,
     ) -> Self {
         Self {
@@ -50,11 +50,19 @@ impl TopLevelPlanner {
         };
 
         let templates = self.query_tools.plan_sql_templates(is_external)?;
-
         let physical_plan_builder =
-            PhysicalPlanBuilder::new(self.query_tools.clone(), templates.clone());
-        let original_sql_pre_aggregations = if !self.request.is_pre_aggregation_query() {
-            OriginalSqlCollector::new(self.query_tools.clone()).collect(&optimized_plan)?
+            PhysicalPlanBuilder::new(self.query_tools.query_tools().clone(), templates.clone());
+
+        // Substitute a cube's base SQL with its `originalSql` pre-aggregation table when:
+        // reading (regular query), or building a rollup that opted in via
+        // `useOriginalSqlPreAggregationsInPreAggregation`.
+        let original_sql_pre_aggregations = if !self.request.is_pre_aggregation_query()
+            || self
+                .request
+                .use_original_sql_pre_aggregations_in_pre_aggregation()
+        {
+            OriginalSqlCollector::new(self.query_tools.query_tools().clone())
+                .collect(&optimized_plan)?
         } else {
             HashMap::new()
         };

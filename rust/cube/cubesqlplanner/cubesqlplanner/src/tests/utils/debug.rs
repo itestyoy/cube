@@ -1,9 +1,11 @@
+use crate::cube_bridge::base_query_options::FilterValue;
 use crate::planner::filter::{
     BaseFilter, FilterGroup, FilterGroupOperator, FilterItem, FilterOperator,
 };
 use crate::planner::DebugSql;
 use crate::test_fixtures::cube_bridge::MockSchema;
 use crate::test_fixtures::test_utils::TestContext;
+use cubenativeutils::CubeError;
 
 #[test]
 fn test_dimension_basic() {
@@ -135,11 +137,12 @@ fn test_filter_simple_collapsed() {
     let symbol = ctx.create_symbol("visitors.source").unwrap();
 
     let filter = BaseFilter::try_new(
-        ctx.query_tools().clone(),
+        ctx.query_tools().query_tools().clone(),
         symbol,
         crate::planner::filter::base_filter::FilterType::Dimension,
         FilterOperator::Equal,
-        Some(vec![Some("google".to_string())]),
+        Some(vec![FilterValue::Str("google".to_string())]),
+        None,
     )
     .unwrap();
 
@@ -154,16 +157,64 @@ fn test_filter_simple_expanded() {
     let symbol = ctx.create_symbol("visitors.source").unwrap();
 
     let filter = BaseFilter::try_new(
-        ctx.query_tools().clone(),
+        ctx.query_tools().query_tools().clone(),
         symbol,
         crate::planner::filter::base_filter::FilterType::Dimension,
         FilterOperator::Equal,
-        Some(vec![Some("google".to_string())]),
+        Some(vec![FilterValue::Str("google".to_string())]),
+        None,
     )
     .unwrap();
 
     let sql = filter.debug_sql(true);
     assert_eq!(sql, "source equals: ['google']");
+}
+
+#[test]
+fn test_filter_bool_and_num_values_unquoted() -> Result<(), CubeError> {
+    let schema = MockSchema::from_yaml_file("common/visitors.yaml");
+    let ctx = TestContext::new(schema)?;
+    let symbol = ctx.create_symbol("visitors.id")?;
+
+    // Booleans and numbers render bare; only strings are quoted.
+    let filter = BaseFilter::try_new(
+        ctx.query_tools().query_tools().clone(),
+        symbol,
+        crate::planner::filter::base_filter::FilterType::Dimension,
+        FilterOperator::In,
+        Some(vec![
+            FilterValue::Num(42.0),
+            FilterValue::Bool(true),
+            FilterValue::Str("google".to_string()),
+        ]),
+        None,
+    )?;
+
+    let sql = filter.debug_sql(false);
+    assert_eq!(sql, "{visitors.id} in: [42, true, 'google']");
+
+    Ok(())
+}
+
+#[test]
+fn test_filter_null_value_renders_null() -> Result<(), CubeError> {
+    let schema = MockSchema::from_yaml_file("common/visitors.yaml");
+    let ctx = TestContext::new(schema)?;
+    let symbol = ctx.create_symbol("visitors.source")?;
+
+    let filter = BaseFilter::try_new(
+        ctx.query_tools().query_tools().clone(),
+        symbol,
+        crate::planner::filter::base_filter::FilterType::Dimension,
+        FilterOperator::Equal,
+        Some(vec![FilterValue::Null]),
+        None,
+    )?;
+
+    let sql = filter.debug_sql(false);
+    assert_eq!(sql, "{visitors.source} equals: [NULL]");
+
+    Ok(())
 }
 
 #[test]
@@ -174,20 +225,22 @@ fn test_filter_group_and_collapsed() {
     let id_symbol = ctx.create_symbol("visitors.id").unwrap();
 
     let filter1 = BaseFilter::try_new(
-        ctx.query_tools().clone(),
+        ctx.query_tools().query_tools().clone(),
         source_symbol,
         crate::planner::filter::base_filter::FilterType::Dimension,
         FilterOperator::Equal,
-        Some(vec![Some("google".to_string())]),
+        Some(vec![FilterValue::Str("google".to_string())]),
+        None,
     )
     .unwrap();
 
     let filter2 = BaseFilter::try_new(
-        ctx.query_tools().clone(),
+        ctx.query_tools().query_tools().clone(),
         id_symbol,
         crate::planner::filter::base_filter::FilterType::Dimension,
         FilterOperator::Gt,
-        Some(vec![Some("100".to_string())]),
+        Some(vec![FilterValue::Str("100".to_string())]),
+        None,
     )
     .unwrap();
 

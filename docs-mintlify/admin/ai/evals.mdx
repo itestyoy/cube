@@ -3,14 +3,6 @@ title: Evals
 description: Benchmark your agent's answers against a known-correct ground truth and track accuracy across data-model and agent changes.
 ---
 
-<Warning>
-
-Evals are currently in preview, and the user experience and file format may
-still change. Reach out to the [Cube support team](/admin/account-billing/support)
-to activate this feature for your account.
-
-</Warning>
-
 Evals let you benchmark your agent's answers against a known-correct ground
 truth, on any branch. You author a set of questions, each with the SQL or
 [certified query](/admin/ai/certified-queries) that represents the right
@@ -18,11 +10,11 @@ answer, run your agent against them, and get a per-question pass/fail plus an
 accuracy score for the run — so you can see, objectively, whether a data-model
 or agent change made the agent better or worse.
 
-You'll find evals in the model IDE under the **Evaluate** tab, with two
-sub-tabs: **Evaluations** (runs) and **Questions** (the benchmark set).
+You'll find evals in the model IDE under the **Evals** tab, with two
+sub-tabs: **Evals** (runs) and **Questions** (the benchmark set).
 
 <Frame>
-  <img src="https://lgo0ecceic.ucarecd.net/758a417c-1fd5-43b1-a264-34516080bca9/" alt="Evaluation run results showing the question list with pass/fail icons and a selected question's detail with the agent's SQL next to the ground truth SQL" />
+  <img src="https://lgo0ecceic.ucarecd.net/758a417c-1fd5-43b1-a264-34516080bca9/" alt="Eval run results showing the question list with pass/fail icons and a selected question's detail with the agent's SQL next to the ground truth SQL" />
 </Frame>
 
 ## Concepts
@@ -30,20 +22,26 @@ sub-tabs: **Evaluations** (runs) and **Questions** (the benchmark set).
 | Term | What it is |
 |------|------------|
 | **Question** | A natural-language question plus its **ground truth** (the correct answer, as SQL or a certified-query reference). Authored as code in your data model. |
-| **Evaluation (run)** | One execution of the agent against the whole question set, on a specific branch and agent. |
+| **Eval (run)** | One execution of the agent against the whole question set, on a specific branch and agent. |
 | **Result** | The agent's answer to a single question in a run, graded against that question's ground truth. |
 | **Accuracy** | `passed / total` for a run, shown as `NN% (passed/total)`. |
 
 ## Authoring benchmark questions
 
 Questions live in your [data model repository](/admin/ai#agent-configuration),
-versioned and branched like the rest of it — under `agents/eval_questions/*.yml`.
+versioned and branched like the rest of it. You can keep them in a single
+top-level `agents/eval_questions.yml` file — the simplest place to start — or
+split them across any number of `agents/eval_questions/*.yml` files as your set
+grows. The parser picks up both and merges every file's `eval_questions` list
+into one set, so you can move from one file to many at any time without changing
+anything else.
+
 Each file has a top-level `eval_questions` list. A question needs a unique
 `name`, a `question`, and exactly one ground truth: a `certifiedQuery`
 reference **or** inline `sql`.
 
 ```yaml
-# agents/eval_questions/revenue.yml
+# agents/eval_questions.yml
 eval_questions:
   - name: revenue_by_quarter
     question: What was our revenue by quarter over the last two years?
@@ -68,15 +66,15 @@ eval_questions:
 
 <Note>
 
-While in preview, the **Questions** tab is a read-only view of these files. To
-add or edit questions, edit the YAML in the IDE — there's no in-product
-question editor yet.
+The **Questions** tab is a read-only view of these files. To add or edit
+questions, edit the YAML in the IDE — there's no in-product question editor
+yet.
 
 </Note>
 
-## Running an evaluation
+## Running an eval
 
-On the **Evaluations** tab, click **New evaluation** and choose:
+On the **Evals** tab, click **Run eval** and choose:
 
 - **Branch** — which branch's data model and agent configuration to run
   against. Defaults to the active branch.
@@ -87,7 +85,7 @@ background. The run list shows live progress and then the outcome:
 
 | Column | Meaning |
 |--------|---------|
-| **Evaluation name** | When the run was created. |
+| **Eval run** | When the run was created. |
 | **Environment** | Where it ran — **dev** (your personal dev-mode branch, shown as "*Name* Dev Mode"), **staging**, or **prod** (the deploy branch, e.g. `master` or `main`). |
 | **Agent** | The agent used. |
 | **Execution status** | Running, Completed, or Failed. |
@@ -140,10 +138,8 @@ Verdicts:
 | **review** | Nothing to compare automatically — the question has no ground truth, or the agent didn't run a query. Compare manually. |
 | **error** | The agent run failed, the ground-truth query failed, or a referenced certified query wasn't found. |
 
-## Preview limitations
+## Limitations
 
-- Evals must be activated for your account by the
-  [Cube support team](/admin/account-billing/support).
 - Questions are authored as code only; the **Questions** tab is read-only.
 - Very large question sets can be slow to run.
 - Grading is execution-based on the result set; it does not semantically judge

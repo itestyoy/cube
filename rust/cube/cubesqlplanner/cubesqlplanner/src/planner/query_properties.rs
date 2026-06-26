@@ -6,8 +6,10 @@
 //! For inputs that originate from `BaseQueryOptions`, see
 //! [`QueryPropertiesCompiler`](super::query_properties_compiler).
 
-use super::query_tools::QueryTools;
+use super::state::State;
 use super::MemberSymbol;
+use crate::cube_bridge::base_query_options::FilterValue;
+use crate::logical_plan::LogicalSubqueryJoinItem;
 use crate::planner::collectors::{collect_multiplied_measures, has_multi_stage_members};
 use crate::planner::filter::tree_ops;
 use crate::planner::filter::{Filter, FilterGroup, FilterItem, FilterOperator};
@@ -134,7 +136,7 @@ impl FullKeyAggregateMeasures {
 #[derive(Clone, TypedBuilder)]
 #[builder(build_method(into = Result<Rc<QueryProperties>, CubeError>))]
 pub struct QueryProperties {
-    query_tools: Rc<QueryTools>,
+    query_tools: Rc<State>,
     #[builder(default)]
     measures: Vec<Rc<MemberSymbol>>,
     #[builder(default)]
@@ -165,6 +167,10 @@ pub struct QueryProperties {
     ungrouped: bool,
     #[builder(default)]
     pre_aggregation_query: bool,
+    /// When building a rollup pre-aggregation, source it from the cube's
+    /// `originalSql` pre-aggregation table instead of the raw cube SQL.
+    #[builder(default)]
+    use_original_sql_pre_aggregations_in_pre_aggregation: bool,
     #[builder(default)]
     total_query: bool,
     #[builder(default = Rc::new(JoinHints::new()))]
@@ -175,6 +181,10 @@ pub struct QueryProperties {
     disable_external_pre_aggregations: bool,
     #[builder(default)]
     pre_aggregation_id: Option<String>,
+    /// Query-level joins against opaque sub-queries, from the SQL API
+    /// `subqueryJoins`. Folded into the query's `LogicalJoin` source.
+    #[builder(default)]
+    subquery_joins: Vec<LogicalSubqueryJoinItem>,
     #[builder(setter(skip), default)]
     multi_fact_join_groups: OnceCell<MultiFactJoinGroups>,
 }
@@ -204,6 +214,10 @@ impl From<QueryProperties> for Result<Rc<QueryProperties>, CubeError> {
 impl QueryProperties {
     pub fn allow_multi_stage(&self) -> bool {
         self.allow_multi_stage
+    }
+
+    pub fn subquery_joins(&self) -> &Vec<LogicalSubqueryJoinItem> {
+        &self.subquery_joins
     }
 
     // Push every entry of `dimensions_filters` into matching `case`
@@ -342,6 +356,10 @@ impl QueryProperties {
 
     pub fn is_pre_aggregation_query(&self) -> bool {
         self.pre_aggregation_query
+    }
+
+    pub fn use_original_sql_pre_aggregations_in_pre_aggregation(&self) -> bool {
+        self.use_original_sql_pre_aggregations_in_pre_aggregation
     }
 
     pub fn disable_external_pre_aggregations(&self) -> bool {
@@ -913,6 +931,8 @@ impl QueryProperties {
                             FilterOperator::BeforeOrOnDate,
                             to_value,
                             itm.use_raw_values(),
+                            self.query_tools.query_tools().clone(),
+                            None,
                         )?));
                     }
                     other => new_filters.push(other.clone()),
@@ -938,6 +958,8 @@ impl QueryProperties {
                             FilterOperator::AfterOrOnDate,
                             from_value,
                             itm.use_raw_values(),
+                            self.query_tools.query_tools().clone(),
+                            None,
                         )?));
                     }
                     other => new_filters.push(other.clone()),
@@ -956,7 +978,10 @@ impl QueryProperties {
         right_interval: Option<String>,
     ) -> Result<(), CubeError> {
         let operator = FilterOperator::RegularRollingWindowDateRange;
-        let values = vec![left_interval.clone(), right_interval.clone()];
+        let values = vec![
+            FilterValue::from(left_interval),
+            FilterValue::from(right_interval),
+        ];
         self.time_dimensions_filters = self.change_date_range_filter_impl(
             member_name,
             &self.time_dimensions_filters,
@@ -975,7 +1000,7 @@ impl QueryProperties {
         granularity: &String,
     ) -> Result<(), CubeError> {
         let operator = FilterOperator::ToDateRollingWindowDateRange;
-        let values = vec![Some(granularity.clone())];
+        let values = vec![FilterValue::Str(granularity.clone())];
         self.time_dimensions_filters = self.change_date_range_filter_impl(
             member_name,
             &self.time_dimensions_filters,
@@ -995,7 +1020,7 @@ impl QueryProperties {
         new_to: String,
     ) -> Result<(), CubeError> {
         let operator = FilterOperator::InDateRange;
-        let replacement_values = vec![Some(new_from), Some(new_to)];
+        let replacement_values = vec![FilterValue::Str(new_from), FilterValue::Str(new_to)];
         self.time_dimensions_filters = self.change_date_range_filter_impl(
             member_name,
             &self.time_dimensions_filters,
@@ -1017,7 +1042,7 @@ impl QueryProperties {
         new_to: String,
     ) -> Result<(), CubeError> {
         let operator = FilterOperator::InDateRange;
-        let replacement_values = vec![Some(new_from), Some(new_to)];
+        let replacement_values = vec![FilterValue::Str(new_from), FilterValue::Str(new_to)];
         self.time_dimensions_filters = self.change_date_range_filter_impl(
             member_name,
             &self.time_dimensions_filters,
@@ -1036,8 +1061,8 @@ impl QueryProperties {
         filters: &[FilterItem],
         operator: &FilterOperator,
         use_raw_values: Option<bool>,
-        additional_values: &Vec<Option<String>>,
-        replacement_values: &Option<Vec<Option<String>>>,
+        additional_values: &Vec<FilterValue>,
+        replacement_values: &Option<Vec<FilterValue>>,
     ) -> Result<Vec<FilterItem>, CubeError> {
         let mut result = Vec::new();
         for item in filters.iter() {
@@ -1067,7 +1092,15 @@ impl QueryProperties {
                         };
                         values.extend(additional_values.iter().cloned());
                         let use_raw_values = use_raw_values.unwrap_or(itm.use_raw_values());
-                        itm.change_operator(operator.clone(), values, use_raw_values)?
+                        itm.change_operator(
+                            operator.clone(),
+                            values,
+                            use_raw_values,
+                            self.query_tools.query_tools().clone(),
+                            // FIXME: late compilation — only needed to recompile a
+                            // to_date rolling-window granularity here.
+                            Some(&mut self.query_tools.compiler().borrow_mut()),
+                        )?
                     } else {
                         itm.clone()
                     };
@@ -1119,11 +1152,13 @@ impl PartialEq for QueryProperties {
             ungrouped,
             ignore_cumulative,
             pre_aggregation_query,
+            use_original_sql_pre_aggregations_in_pre_aggregation,
             total_query,
             allow_multi_stage,
             disable_external_pre_aggregations,
             pre_aggregation_id,
             query_join_hints,
+            subquery_joins,
             // Not part of semantic equality:
             query_tools: _,
             multi_fact_join_groups: _,
@@ -1143,10 +1178,26 @@ impl PartialEq for QueryProperties {
             && *ungrouped == other.ungrouped
             && *ignore_cumulative == other.ignore_cumulative
             && *pre_aggregation_query == other.pre_aggregation_query
+            && *use_original_sql_pre_aggregations_in_pre_aggregation
+                == other.use_original_sql_pre_aggregations_in_pre_aggregation
             && *total_query == other.total_query
             && *allow_multi_stage == other.allow_multi_stage
             && *disable_external_pre_aggregations == other.disable_external_pre_aggregations
             && *pre_aggregation_id == other.pre_aggregation_id
             && *query_join_hints == other.query_join_hints
+            // Sub-query joins compared semantically: the request triple
+            // (`sql`, `alias`, `join_type`) plus the compiled ON condition
+            // (`on_sql` via `SqlCall::struct_eq`), so two joins differing
+            // only in their ON are not equal.
+            && subquery_joins.len() == other.subquery_joins.len()
+            && subquery_joins
+                .iter()
+                .zip(other.subquery_joins.iter())
+                .all(|(a, b)| {
+                    a.sql == b.sql
+                        && a.alias == b.alias
+                        && a.join_type == b.join_type
+                        && a.on_sql.struct_eq(&b.on_sql)
+                })
     }
 }

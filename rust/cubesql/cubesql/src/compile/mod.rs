@@ -3071,6 +3071,40 @@ limit
     }
 
     #[tokio::test]
+    async fn test_where_filter_timezone() {
+        init_testing_logger();
+
+        let query_plan = convert_select_to_query_plan(
+            "SELECT customer_gender
+                FROM KibanaSampleDataEcommerce
+                WHERE order_date <= CAST('2025-01-01 00:00:00 America/Los_Angeles' AS TIMESTAMP)
+                GROUP BY 1"
+                .to_string(),
+            DatabaseProtocol::PostgreSQL,
+        )
+        .await;
+
+        let cube_scan = query_plan.as_logical_plan().find_cube_scan();
+
+        assert_eq!(
+            cube_scan.request.dimensions,
+            Some(vec!["KibanaSampleDataEcommerce.customer_gender".to_string()])
+        );
+
+        // Timezone offset (America/Los_Angeles is UTC-8 in January) must be
+        // applied while converting the literal to the UTC value sent to Cube.
+        assert_eq!(
+            cube_scan.request.filters,
+            Some(vec![V1LoadRequestQueryFilterItem {
+                member: Some("KibanaSampleDataEcommerce.order_date".to_string()),
+                operator: Some("beforeOrOnDate".to_string()),
+                values: Some(vec!["2025-01-01T08:00:00.000Z".to_string()]),
+                ..Default::default()
+            }])
+        );
+    }
+
+    #[tokio::test]
     async fn test_where_filter_simple() {
         init_testing_logger();
 
@@ -16928,6 +16962,51 @@ LIMIT {{ limit }}{% endif %}"#.to_string(),
         let sql = logical_plan.find_cube_scan_wrapped_sql().wrapped_sql.sql;
         assert!(!sql.contains("EXTRACT(EPOCH"));
         assert!(sql.contains("unix_timestamp"));
+    }
+
+    #[tokio::test]
+    async fn test_extract_epoch_diff_pushdown() {
+        if !Rewriter::sql_push_down_enabled() {
+            return;
+        }
+        init_testing_logger();
+
+        // EXTRACT(EPOCH FROM (a - b)) — epoch of a timestamp difference.
+        let query = "
+            SELECT customer_gender,
+                   AVG(EXTRACT(EPOCH FROM (order_date - last_mod)) / 86400) AS avg_days
+            FROM KibanaSampleDataEcommerce
+            GROUP BY 1
+        ";
+
+        // Generic (no dedicated template) keeps EXTRACT(EPOCH FROM (a - b)).
+        let query_plan =
+            convert_select_to_query_plan(query.to_string(), DatabaseProtocol::PostgreSQL).await;
+        let logical_plan = query_plan.as_logical_plan();
+        let sql = logical_plan.find_cube_scan_wrapped_sql().wrapped_sql.sql;
+        assert!(sql.contains("EXTRACT(epoch"));
+
+        // Snowflake-style: epoch of a difference is rendered as a seconds diff.
+        let query_plan = convert_select_to_query_plan_customized(
+            query.to_string(),
+            DatabaseProtocol::PostgreSQL,
+            vec![
+                (
+                    "expressions/extract".to_string(),
+                    "EXTRACT({{ date_part }} FROM {{ expr }})".to_string(),
+                ),
+                (
+                    "expressions/extract_epoch_diff".to_string(),
+                    "TIMESTAMPDIFF(MICROSECOND, {{ right }}, {{ left }}) / 1000000".to_string(),
+                ),
+            ],
+        )
+        .await;
+
+        let logical_plan = query_plan.as_logical_plan();
+        let sql = logical_plan.find_cube_scan_wrapped_sql().wrapped_sql.sql;
+        assert!(!sql.to_uppercase().contains("EXTRACT(EPOCH"));
+        assert!(sql.contains("TIMESTAMPDIFF(MICROSECOND,"));
     }
 
     #[tokio::test]

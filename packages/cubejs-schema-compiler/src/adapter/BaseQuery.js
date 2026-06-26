@@ -1451,6 +1451,7 @@ export class BaseQuery {
       ungrouped: this.options.ungrouped,
       exportAnnotatedSql: exportAnnotatedSql === true,
       preAggregationQuery: this.options.preAggregationQuery,
+      useOriginalSqlPreAggregationsInPreAggregation: this.options.useOriginalSqlPreAggregationsInPreAggregation,
       preAggregationId: this.options.preAggregationId || null,
       totalQuery: this.options.totalQuery,
       joinHints: this.options.joinHints,
@@ -1459,6 +1460,7 @@ export class BaseQuery {
       convertTzForRawTimeDimension: !!this.options.convertTzForRawTimeDimension,
       maskedMembers: this.options.maskedMembers,
       memberToAlias: this.options.memberToAlias,
+      subqueryJoins: this.options.subqueryJoins,
     };
 
     try {
@@ -1508,6 +1510,7 @@ export class BaseQuery {
       securityContext: this.contextSymbols.securityContext,
       cubestoreSupportMultistage: this.options.cubestoreSupportMultistage ?? getEnv('cubeStoreRollingWindowJoin'),
       disableExternalPreAggregations: !!this.options.disableExternalPreAggregations,
+      subqueryJoins: this.options.subqueryJoins,
     };
 
     const buildResult = nativeBuildSqlAndParams(queryParams);
@@ -2306,6 +2309,11 @@ export class BaseQuery {
       multiStageDimensions: withQuery.multiStageDimensions,
       multiStageTimeDimensions: withQuery.multiStageTimeDimensions,
       filters: withQuery.filters,
+      // Propagate SQL API member aliases so dimension columns produced by this stage
+      // match how the outer aggregate (and renderedReference) reference them. Without it
+      // the stage names columns with full internal aliases while the consumer references
+      // them by memberToAlias, producing `invalid identifier` errors.
+      memberToAlias: this.options.memberToAlias,
       // TODO do we need it?
       multiStageQuery: true, // !!fromDimensions.find(d => this.newDimension(d).isMultiStage())
       disableExternalPreAggregations: true,
@@ -2328,6 +2336,8 @@ export class BaseQuery {
       multiStageTimeDimensions: withQuery.multiStageTimeDimensions,
       filters: withQuery.filters,
       segments: withQuery.segments,
+      // See note above: keep member aliases consistent across multi-stage CTEs.
+      memberToAlias: this.options.memberToAlias,
       from: fromSql && {
         sql: fromSql,
         alias: `${withQuery.alias}_join`,
@@ -6928,7 +6938,7 @@ export class BaseQuery {
         PERCENTILECONT: 'PERCENTILE_CONT({{ args_concat }})',
       },
       statements: {
-        select: '{% if ctes %} WITH \n' +
+        select: '{% if ctes %} WITH {% if recursive %}RECURSIVE {% endif %}\n' +
           '{{ ctes | join(\',\n\') }}\n' +
           '{% endif %}' +
           'SELECT {% if distinct %}DISTINCT {% endif %}' +
@@ -7498,6 +7508,16 @@ export class BaseQuery {
       convertTz: this.convertTz.bind(this),
       urlEncode: this.urlEncode.bind(this)
     };
+  }
+
+  // Invoked from the native planner to compile a member's `sql` function: runs
+  // it under recording proxies and returns the produced template plus the
+  // dependencies it touched. The recording logic is a standalone, stateless
+  // module so it can be unit-tested in isolation.
+  compileMemberSql(sqlFn, securityContext, argNames) {
+    // eslint-disable-next-line global-require
+    const { compileMemberSql } = require('./MemberSqlTemplateCompiler');
+    return compileMemberSql(sqlFn, argNames, securityContext, this.sqlUtilsForRust());
   }
 
   contextSymbolsProxy(symbols) {

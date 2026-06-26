@@ -3,6 +3,7 @@ use super::{
     MultiStageMemberQueryPlanner, MultiStageMemberType, MultiStageQueryDescription, PlanningScope,
     RollingWindowDescription, TimeSeriesDescription,
 };
+use crate::cube_bridge::base_query_options::FilterValue;
 use crate::cube_bridge::measure_definition::RollingWindow;
 use crate::logical_plan::*;
 use crate::planner::apply_static_filter_to_symbol;
@@ -12,7 +13,7 @@ use crate::planner::filter::base_filter::FilterType;
 use crate::planner::filter::BaseFilter;
 use crate::planner::filter::FilterItem;
 use crate::planner::filter::FilterOperator;
-use crate::planner::query_tools::QueryTools;
+use crate::planner::state::State;
 use crate::planner::symbols::AggregationType;
 use crate::planner::Case;
 use crate::planner::CaseSwitchDefinition;
@@ -38,7 +39,7 @@ use std::rc::Rc;
 /// `(member, state)` so the same multi-stage subquery isn't
 /// emitted twice.
 pub struct MultiStageQueryPlanner {
-    query_tools: Rc<QueryTools>,
+    query_tools: Rc<State>,
     query_properties: Rc<QueryProperties>,
     // The initial multi-stage CTE state. Shared immutably; any mutation goes
     // through `as_ref().clone()` on the consumer side. Used both as the entry
@@ -49,7 +50,7 @@ pub struct MultiStageQueryPlanner {
 
 impl MultiStageQueryPlanner {
     pub fn try_new(
-        query_tools: Rc<QueryTools>,
+        query_tools: Rc<State>,
         query_properties: Rc<QueryProperties>,
     ) -> Result<Self, CubeError> {
         let root_state = Self::build_root_state(&query_tools, &query_properties)?;
@@ -66,7 +67,7 @@ impl MultiStageQueryPlanner {
     // builder skips default_order — this value is only ever used as a state
     // container, never planned directly.
     fn build_root_state(
-        query_tools: &Rc<QueryTools>,
+        query_tools: &Rc<State>,
         query_properties: &Rc<QueryProperties>,
     ) -> Result<Rc<QueryProperties>, CubeError> {
         QueryProperties::builder()
@@ -424,11 +425,12 @@ impl MultiStageQueryPlanner {
             if let Some(values) = values {
                 if !values.is_empty() {
                     let filter = BaseFilter::try_new(
-                        self.query_tools.clone(),
+                        self.query_tools.query_tools().clone(),
                         switch_member.clone(),
                         FilterType::Dimension,
                         FilterOperator::Equal,
-                        Some(values.into_iter().map(Some).collect_vec()),
+                        Some(values.into_iter().map(FilterValue::Str).collect_vec()),
+                        None,
                     )?;
                     state.add_dimension_filter(FilterItem::Item(filter));
                 }
