@@ -1085,4 +1085,26 @@ export class PostgresLogTransport {
     );
     return rows;
   }
+
+  /**
+   * All individual failing requests for one error message (Errors drill-down) —
+   * the Errors tab groups by message, this lists every occurrence behind it.
+   */
+  public async getQueriesForError(error: string, window: number | TimeRange = 24, limit = 200): Promise<any[]> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return [];
+    }
+    const { from, to } = this.timeBounds(window);
+    const { rows } = await this.pool.query(
+      `SELECT id, ts, request_id, api_type, duration_ms, status, query
+       FROM ${this.schema}.query_log
+       WHERE status = 'error' AND error = $3
+         AND ts >= $1 AND ts < $2
+       ORDER BY ts DESC
+       LIMIT $4`,
+      [from, to, error, Math.min(limit, 1000)],
+    );
+    return rows;
+  }
 }

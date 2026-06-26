@@ -1,31 +1,33 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useHistory } from 'react-router-dom';
 import { Alert, Button, Col, Radio, Row, Switch, Table, Tabs, Tag, Tooltip } from 'antd';
-import { ReloadOutlined, ArrowRightOutlined } from '@ant-design/icons';
+import { ReloadOutlined } from '@ant-design/icons';
 
-import { CodeBlock, DEFAULT_RANGE, MemberTag, QueryChips, Range, cacheTag, fmtMs, fmtTs, getJson, rangeParams } from '../monitoring/common';
+import { CodeBlock, DEFAULT_RANGE, MemberTag, QueryChips, Range, ShapeChips, cacheTag, fmtMs, fmtTs, getJson, rangeParams } from '../monitoring/common';
 import { TimeWindow } from '../monitoring/TimeWindow';
 
 const { TabPane } = Tabs;
 
 const fmtTotal = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`);
 
-// Render a fingerprint shape as member chips (measures / dimensions / time /
-// filters), truncated, mirroring the table chip style.
-function shapeSummary(shape: any) {
-  if (!shape) return <span style={{ color: '#999' }}>—</span>;
-  const chips: any[] = [];
-  (shape.measures || []).forEach((m: string) => chips.push(<MemberTag key={`m${m}`} member={m} color="green" />));
-  (shape.dimensions || []).forEach((d: string) => chips.push(<MemberTag key={`d${d}`} member={d} color="blue" />));
-  (shape.timeDimensions || []).forEach((t: string, i: number) =>
-    chips.push(<MemberTag key={`t${i}`} member={String(t).replace(':', ' · ')} color="geekblue" />));
-  (shape.filters || []).forEach((f: string, i: number) => chips.push(<MemberTag key={`f${i}`} member={f} color="orange" />));
-  const shown = chips.slice(0, 6);
-  const more = chips.length - shown.length;
+const shortName = (id: string) => { const i = String(id).indexOf('.'); return i >= 0 ? String(id).slice(i + 1) : id; };
+
+// "Extend <preAgg> +N fields" suggestion where "+N fields" expands inline to
+// show exactly which members to add, in the same chip style as everywhere else.
+function ExtendSuggestion({ s, onOpen }: { s: any; onOpen: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const missing: string[] = s.missing || [];
+  const toggle = (e: any) => { e.stopPropagation(); setOpen((v) => !v); };
   return (
     <span>
-      {shown.length ? shown : <span style={{ color: '#999' }}>—</span>}
-      {more > 0 ? <Tag>+{more}</Tag> : null}
+      <Tag color="blue">
+        Extend{' '}
+        <a onClick={(e) => { e.stopPropagation(); onOpen(s.preAgg); }}>{shortName(s.preAgg)}</a>
+      </Tag>
+      {open ? missing.map((m) => <MemberTag key={m} member={m} color="blue" />) : null}
+      <Tag style={{ cursor: 'pointer', borderStyle: 'dashed' }} onClick={toggle}>
+        {open ? 'show less' : `+${missing.length} field${missing.length === 1 ? '' : 's'}`}
+      </Tag>
     </span>
   );
 }
@@ -58,10 +60,15 @@ export function InsightsPage() {
   const [cooc, setCooc] = useState<Record<string, any>>({});
   const [coocLoading, setCoocLoading] = useState<Record<string, boolean>>({});
 
+  // Lazily-loaded individual failing requests per error message (Errors drill-in).
+  const [errorQueries, setErrorQueries] = useState<Record<string, any[]>>({});
+  const [errorQueriesLoading, setErrorQueriesLoading] = useState<Record<string, boolean>>({});
+
   const load = useCallback(async () => {
     setLoading(true);
     setHashQueries({});
     setCooc({});
+    setErrorQueries({});
     try {
       const w = rangeParams(range);
       const [t, r, e, mu, adv] = await Promise.all([
@@ -109,6 +116,17 @@ export function InsightsPage() {
         .finally(() => setCoocLoading((s) => ({ ...s, [member]: false })));
     },
     [range, cooc]
+  );
+
+  const loadErrorQueries = useCallback(
+    (error: string) => {
+      if (!error || errorQueries[error]) return;
+      setErrorQueriesLoading((s) => ({ ...s, [error]: true }));
+      getJson(`playground/insights/error-queries?error=${encodeURIComponent(error)}&${rangeParams(range)}`)
+        .then((r) => setErrorQueries((s) => ({ ...s, [error]: r.rows || [] })))
+        .finally(() => setErrorQueriesLoading((s) => ({ ...s, [error]: false })));
+    },
+    [range, errorQueries]
   );
 
   const memberExpandable = {
@@ -168,7 +186,7 @@ export function InsightsPage() {
   };
 
   const topColumns = [
-    { title: 'Query (fields)', key: 'shape', render: (_: any, r: any) => shapeSummary(r.shape) },
+    { title: 'Query (fields)', key: 'shape', render: (_: any, r: any) => <ShapeChips shape={r.shape} /> },
     { title: 'Executions', dataIndex: 'executions', key: 'executions', width: 110, sorter: (a: any, b: any) => a.executions - b.executions },
     { title: 'Avg', dataIndex: 'avg_ms', key: 'avg_ms', width: 90, render: fmtMs },
     { title: 'p95', dataIndex: 'p95_ms', key: 'p95_ms', width: 90, render: fmtMs },
@@ -179,7 +197,7 @@ export function InsightsPage() {
   ];
 
   const recColumns = [
-    { title: 'Query (fields)', key: 'shape', render: (_: any, r: any) => shapeSummary(r.shape) },
+    { title: 'Query (fields)', key: 'shape', render: (_: any, r: any) => <ShapeChips shape={r.shape} /> },
     { title: 'Executions', dataIndex: 'executions', key: 'executions', width: 110, sorter: (a: any, b: any) => a.executions - b.executions },
     { title: 'Avg', dataIndex: 'avg_ms', key: 'avg_ms', width: 90, render: fmtMs },
     { title: 'p95', dataIndex: 'p95_ms', key: 'p95_ms', width: 90, render: fmtMs },
@@ -190,28 +208,21 @@ export function InsightsPage() {
       width: 280,
       render: (_: any, r: any) => {
         const s = r.suggestion || { action: 'create' };
-        const shortName = (id: string) => { const i = String(id).indexOf('.'); return i >= 0 ? String(id).slice(i + 1) : id; };
-        const link = (id: string, text: any) => (
-          <a onClick={(e) => { e.stopPropagation(); history.push(`/pre-agg-monitor/${encodeURIComponent(id)}`); }}>{text}</a>
-        );
+        const openPreAgg = (id: string) => history.push(`/pre-agg-monitor/${encodeURIComponent(id)}`);
         if (s.action === 'create') {
           return <Tag color="green">New rollup</Tag>;
         }
         if (s.action === 'matches') {
           return (
             <Tooltip title="An existing pre-agg covers all these fields but didn't accelerate the query — check granularity / segments / non-additive measures.">
-              <Tag color="orange">Check {link(s.preAgg, shortName(s.preAgg))}</Tag>
+              <Tag color="orange">
+                Check{' '}
+                <a onClick={(e) => { e.stopPropagation(); openPreAgg(s.preAgg); }}>{shortName(s.preAgg)}</a>
+              </Tag>
             </Tooltip>
           );
         }
-        return (
-          <Tooltip title={`Add to the rollup: ${(s.missing || []).join(', ')}`}>
-            <span>
-              <Tag color="blue">Extend {link(s.preAgg, shortName(s.preAgg))}</Tag>
-              <span style={{ color: '#888' }}>+{(s.missing || []).length} field{(s.missing || []).length === 1 ? '' : 's'}</span>
-            </span>
-          </Tooltip>
-        );
+        return <ExtendSuggestion s={s} onOpen={openPreAgg} />;
       },
     },
     { title: 'Last seen', dataIndex: 'last_seen', key: 'last_seen', width: 170, render: fmtTs },
@@ -371,13 +382,13 @@ export function InsightsPage() {
                 pagination={{ defaultPageSize: 15, showSizeChanger: true }}
                 expandable={{
                   expandedRowRender: (r: any) => (
-                    <span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
                       {r.fields.map((f: any) => (
-                        <Tag key={`${f.kind}:${f.member}`} color={f.tier === 'never' ? 'red' : 'orange'} style={{ margin: 2 }}>
+                        <Tag key={`${f.kind}:${f.member}`} color={f.tier === 'never' ? 'red' : 'orange'} style={{ margin: 0 }}>
                           {f.member} <span style={{ opacity: 0.6 }}>({f.kind}, {f.tier === 'never' ? 'never' : `${f.uses}×`})</span>
                         </Tag>
                       ))}
-                    </span>
+                    </div>
                   ),
                 }}
                 columns={[
@@ -406,19 +417,24 @@ export function InsightsPage() {
             loading={loading}
             pagination={{ defaultPageSize: 25, showSizeChanger: true }}
             expandable={{
+              onExpand: (expanded: boolean, record: any) => {
+                if (expanded) loadErrorQueries(record.error);
+              },
               expandedRowRender: (r: any) => (
                 <>
                   <pre style={{ whiteSpace: 'pre-wrap', color: '#c0392b' }}>{r.error}</pre>
-                  {r.sample_id != null && (
-                    <Button
-                      type="link"
-                      style={{ paddingLeft: 0 }}
-                      onClick={() => history.push(`/query-history/${r.sample_id}`)}
-                    >
-                      Open latest failing request <ArrowRightOutlined />
-                    </Button>
-                  )}
-                  {r.sample_query ? <CodeBlock code={JSON.stringify(r.sample_query, null, 2)} language="json" /> : null}
+                  <div style={{ color: '#888', margin: '4px 0 8px' }}>
+                    All {r.count} failing request{r.count === 1 ? '' : 's'} (newest first) — click a row to open it:
+                  </div>
+                  <Table
+                    rowKey={(rec: any) => rec.id}
+                    loading={errorQueriesLoading[r.error]}
+                    dataSource={errorQueries[r.error] || []}
+                    columns={drillColumns}
+                    size="small"
+                    pagination={{ pageSize: 10 }}
+                    onRow={(rec: any) => ({ onClick: () => history.push(`/query-history/${rec.id}`), style: { cursor: 'pointer' } })}
+                  />
                 </>
               ),
             }}

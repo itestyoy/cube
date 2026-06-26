@@ -662,6 +662,12 @@ export class DevServer {
       res.json({ enabled: Boolean(t), rows: t && hash ? await t.getQueriesForHash(hash, telemetryWindow(req)) : [] });
     }));
 
+    app.get('/playground/insights/error-queries', catchErrors(async (req, res) => {
+      const t = telemetry();
+      const error = String(req.query.error || '');
+      res.json({ enabled: Boolean(t), rows: t && error ? await t.getQueriesForError(error, telemetryWindow(req)) : [] });
+    }));
+
     // Time-bucketed series for the Query History charts.
     app.get('/playground/query-history/timeseries', catchErrors(async (req, res) => {
       const t = telemetry();

@@ -166,12 +166,37 @@ function collectFilterMembers(filters: any): string[] {
 }
 
 /**
+ * A truncating chip list with an inline "+N" toggle that expands every chip in
+ * place (and a "show less" to collapse). The toggle calls stopPropagation so it
+ * never triggers a parent row's navigation onClick. Used everywhere chips can
+ * overflow — query shapes, suggestion fields, etc. — so expand works the same
+ * in every table.
+ */
+export function ChipList({ chips, max = 6, extra }: { chips: any[]; max?: number; extra?: any }) {
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? chips : chips.slice(0, max);
+  const more = chips.length - shown.length;
+  const toggle = (e: any) => { e.stopPropagation(); setExpanded((v) => !v); };
+  return (
+    <span>
+      {shown.length ? shown : <span style={{ color: '#999' }}>—</span>}
+      {more > 0 ? (
+        <Tag style={{ cursor: 'pointer' }} onClick={toggle}>+{more}</Tag>
+      ) : null}
+      {expanded && chips.length > max ? (
+        <Tag style={{ cursor: 'pointer' }} onClick={toggle}>show less</Tag>
+      ) : null}
+      {extra}
+    </span>
+  );
+}
+
+/**
  * Render a Cube query as compact chips (measures / dimensions / time dims /
  * filters) instead of raw JSON — clearer at a glance in tables. Truncates to
- * `max` chips with a "+N" overflow.
+ * `max` chips with an expandable "+N" overflow.
  */
 export function QueryChips({ query, max = 6 }: { query: any; max?: number }) {
-  const [expanded, setExpanded] = useState(false);
   if (!query || typeof query !== 'object') {
     return <span style={{ color: '#999' }}>—</span>;
   }
@@ -183,22 +208,25 @@ export function QueryChips({ query, max = 6 }: { query: any; max?: number }) {
   (query.segments || []).forEach((s: string) => chips.push(<MemberTag key={`s${s}`} member={s} />));
   collectFilterMembers(query.filters).forEach((m, i) => chips.push(<MemberTag key={`f${i}`} member={m} color="orange" />));
 
-  const shown = expanded ? chips : chips.slice(0, max);
-  const more = chips.length - shown.length;
-  // Toggle expand inline without triggering the row's navigation onClick.
-  const toggle = (e: any) => { e.stopPropagation(); setExpanded((v) => !v); };
   return (
-    <span>
-      {shown.length ? shown : <span style={{ color: '#999' }}>—</span>}
-      {more > 0 ? (
-        <Tag style={{ cursor: 'pointer' }} onClick={toggle}>+{more}</Tag>
-      ) : null}
-      {expanded && chips.length > max ? (
-        <Tag style={{ cursor: 'pointer' }} onClick={toggle}>show less</Tag>
-      ) : null}
-      {query.limit != null ? <Tag color="default">LIMIT {query.limit}</Tag> : null}
-    </span>
+    <ChipList chips={chips} max={max} extra={query.limit != null ? <Tag color="default">LIMIT {query.limit}</Tag> : null} />
   );
+}
+
+/**
+ * Render a fingerprint shape (the normalized query: measures / dimensions /
+ * time dims as `dimension:granularity` / filter member names) as expandable
+ * chips. Mirrors QueryChips so Top Queries / Recommendations look identical.
+ */
+export function ShapeChips({ shape, max = 6 }: { shape: any; max?: number }) {
+  if (!shape) return <span style={{ color: '#999' }}>—</span>;
+  const chips: any[] = [];
+  (shape.measures || []).forEach((m: string) => chips.push(<MemberTag key={`m${m}`} member={m} color="green" />));
+  (shape.dimensions || []).forEach((d: string) => chips.push(<MemberTag key={`d${d}`} member={d} color="blue" />));
+  (shape.timeDimensions || []).forEach((t: string, i: number) =>
+    chips.push(<MemberTag key={`t${i}`} member={String(t).replace(':', ' · ')} color="geekblue" />));
+  (shape.filters || []).forEach((f: string, i: number) => chips.push(<MemberTag key={`f${i}`} member={f} color="orange" />));
+  return <ChipList chips={chips} max={max} />;
 }
 
 /**
