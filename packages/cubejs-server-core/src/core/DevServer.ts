@@ -19,6 +19,7 @@ import type { BaseDriver } from '@cubejs-backend/query-orchestrator';
 import { CubejsServerCore } from './server';
 import { ExternalDbTypeFn, ServerCoreInitializedOptions, DatabaseType } from './types';
 import DriverDependencies from './DriverDependencies';
+import { buildRecommendations, RollupDef, WorkloadShape } from './RecommendationEngine';
 
 const repo = {
   owner: 'cube-js',
@@ -304,6 +305,33 @@ export class DevServer {
         }
         return cur;
       };
+    };
+
+    // Additivity map: measures that can be rolled up across dimensions not in
+    // the rollup. Keyed by canonical (cube) member; view measures resolve to
+    // their source measure. Used by the recommendation engine's coverage check.
+    const ADDITIVE_TYPES = new Set(['sum', 'count', 'countDistinctApprox', 'min', 'max']);
+    const buildAdditiveMap = async (req: Request, canonical: (m: string) => string): Promise<(m: string) => boolean> => {
+      const additive: Record<string, boolean> = {};
+      try {
+        const ctx = { authInfo: null, securityContext: {}, requestId: getRequestIdFromRequest(req) } as any;
+        const compilerApi = await this.cubejsServer.getCompilerApi(ctx);
+        const meta = await compilerApi.metaConfig(ctx, { requestId: getRequestIdFromRequest(req) });
+        const cubes = Array.isArray(meta) ? meta : (meta && meta.cubes) || [];
+        cubes.forEach((c: any) => {
+          const conf = c.config || c;
+          (conf.measures || []).forEach((m: any) => {
+            if (m && m.name) {
+              const key = canonical(m.aliasMember || m.name);
+              additive[key] = ADDITIVE_TYPES.has(m.aggType || m.type);
+            }
+          });
+        });
+      } catch (e) {
+        // best-effort; default to additive (permissive) when meta is unavailable
+      }
+      // Unknown measures default to additive=true (don't over-restrict matching).
+      return (member: string) => additive[member] ?? additive[canonical(member)] ?? true;
     };
 
     // Catalog of all DEFINED pre-aggregations, left-joined with usage + build
@@ -617,66 +645,83 @@ export class DevServer {
       res.json({ enabled: Boolean(t), rows: t ? await t.getTopQueries(telemetryWindow(req), order) : [] });
     }));
 
+    // Unified recommendation engine (Action Center): turns the workload + the
+    // defined pre-aggs into a single ranked list of create / edit / fix / drop
+    // actions. Granularity- and additivity-aware (see RecommendationEngine).
     app.get('/playground/insights/recommendations', catchErrors(async (req, res) => {
       const t = telemetry();
-      const percentile = req.query.percentile ? parseFloat(String(req.query.percentile)) : 0.9;
-      const rec = t
-        ? await t.getRecommendations(telemetryWindow(req), percentile)
-        : { thresholdMs: 0, percentile, rows: [] };
-      const rows = rec.rows;
+      if (!t) {
+        res.json({ enabled: false, thresholds: null, actions: [] });
+        return;
+      }
+      const window = telemetryWindow(req);
+      const slownessPct = req.query.percentile ? parseFloat(String(req.query.percentile)) : 0.9;
+      const rarityPct = req.query.rarityPct ? parseFloat(String(req.query.rarityPct)) : 0.1;
 
-      // Match each candidate shape against existing pre-aggregations so the
-      // advice is actionable: extend an existing rollup, create a new one, or
-      // (full coverage) investigate why the existing one didn't match.
       const ctx = { authInfo: null, securityContext: {}, requestId: getRequestIdFromRequest(req) } as any;
       const compilerApi = await this.cubejsServer.getCompilerApi(ctx);
-      const defined: any[] = await compilerApi.preAggregations();
       const canonical = await buildAliasMap(req);
+      const additive = await buildAdditiveMap(req, canonical);
+
+      const [defined, topRows, usage, buildStats, rawMemberMap] = await Promise.all([
+        compilerApi.preAggregations(),
+        t.getTopQueries(window, 'total', 500),
+        t.getPreAggUsage(window),
+        t.getPreAggBuildStats(window),
+        t.getMemberUsageMap(window),
+      ]);
+
+      // Canonicalize member usage so it lines up with cube-based rollup refs.
+      const memberUsage: Record<string, number> = {};
+      Object.entries(rawMemberMap).forEach(([k, v]) => {
+        const c = canonical(k);
+        memberUsage[c] = (memberUsage[c] || 0) + (v as number);
+      });
+
       const collect = (arr: any): string[] =>
         Array.isArray(arr) ? arr.map((x: any) => (typeof x === 'string' ? x : x && (x.dimension || x.name))).filter(Boolean) : [];
-      const preAggSets = defined.map((p: any) => {
+      const matchStat = (id: string, name: string, stats: any[]) => {
+        const cand = [normKey(id), normKey(name)];
+        return stats.find((s) => {
+          const k = normKey(s.pre_aggregation);
+          return cand.includes(k) || cand.some((c) => c && (k.includes(c) || c.includes(k)));
+        });
+      };
+
+      const rollups: RollupDef[] = (defined as any[]).map((p: any) => {
         const def = p.preAggregation || {};
         const refs: any = p.references || {};
-        const members = new Set<string>([
-          ...collect(refs.measures), ...collect(def.measures),
-          ...collect(refs.dimensions), ...collect(def.dimensions),
-          ...collect((refs.timeDimensions || []).map((td: any) => td && td.dimension)),
-          ...(def.timeDimension ? [def.timeDimension] : []),
-        ].map((m) => canonical(m)));
-        return { id: p.id, members };
+        const u = matchStat(p.id, p.preAggregationName, usage);
+        const b = matchStat(p.id, p.preAggregationName, buildStats);
+        const timeDimensions = collect((refs.timeDimensions || []).map((td: any) => td && td.dimension))
+          .map((d) => canonical(d) + (def.granularity ? `:${def.granularity}` : ''));
+        if (def.timeDimension) timeDimensions.push(canonical(def.timeDimension) + (def.granularity ? `:${def.granularity}` : ''));
+        return {
+          id: p.id,
+          cube: p.cube,
+          name: p.preAggregationName,
+          dimensions: new Set([...collect(refs.dimensions), ...collect(def.dimensions)].map(canonical)),
+          measures: new Set([...collect(refs.measures), ...collect(def.measures)].map(canonical)),
+          timeDimensions,
+          granularity: def.granularity || null,
+          hits: u ? u.query_count : 0,
+          buildCount: b ? b.build_count : 0,
+          avgBuildMs: b ? b.avg_ms : null,
+        };
       });
 
-      const enriched = rows.map((r: any) => {
-        const shape = r.shape || {};
-        const wanted = Array.from(new Set([
-          ...(shape.measures || []),
-          ...(shape.dimensions || []),
-          ...(shape.timeDimensions || []).map((td: string) => String(td).split(':')[0]),
-          ...(shape.filters || []),
-        ].map((m: string) => canonical(m)).filter(Boolean)));
-        if (!wanted.length) {
-          return { ...r, suggestion: { action: 'create' } };
-        }
-        let best: any = null;
-        preAggSets.forEach((pa) => {
-          const covered = wanted.filter((m) => pa.members.has(m));
-          const coverage = covered.length / wanted.length;
-          if (!best || coverage > best.coverage || (coverage === best.coverage && pa.members.size < best.size)) {
-            best = { id: pa.id, coverage, size: pa.members.size, missing: wanted.filter((m) => !pa.members.has(m)) };
-          }
-        });
-        let suggestion: any;
-        if (!best || best.coverage < 0.5) {
-          suggestion = { action: 'create' };
-        } else if (best.coverage >= 0.999) {
-          suggestion = { action: 'matches', preAgg: best.id };
-        } else {
-          suggestion = { action: 'extend', preAgg: best.id, missing: best.missing, coverage: Math.round(best.coverage * 100) };
-        }
-        return { ...r, suggestion };
-      });
+      const shapes: WorkloadShape[] = (topRows as any[]).map((r: any) => ({
+        queryHash: r.query_hash,
+        shape: r.shape || { measures: [], dimensions: [], timeDimensions: [], filters: [] },
+        executions: r.executions || 0,
+        avgMs: r.avg_ms || 0,
+        totalMs: Number(r.total_ms) || 0,
+        hitRate: r.hit_rate || 0,
+        lastSeen: r.last_seen || null,
+      }));
 
-      res.json({ enabled: Boolean(t), thresholdMs: rec.thresholdMs, percentile: rec.percentile, rows: enriched });
+      const out = buildRecommendations({ shapes, rollups, memberUsage, canonical, additive, slownessPct, rarityPct });
+      res.json({ enabled: true, ...out });
     }));
 
     app.get('/playground/insights/errors', catchErrors(async (req, res) => {

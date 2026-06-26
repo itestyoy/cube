@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useHistory } from 'react-router-dom';
-import { Alert, Button, Col, Radio, Row, Switch, Table, Tabs, Tag, Tooltip } from 'antd';
+import { Alert, Button, Col, Radio, Row, Switch, Table, Tabs, Tag } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 
-import { CodeBlock, DEFAULT_RANGE, MemberTag, QueryChips, Range, ShapeChips, cacheTag, fmtMs, fmtTs, getJson, rangeParams } from '../monitoring/common';
+import { ChipList, CodeBlock, DEFAULT_RANGE, MemberTag, QueryChips, Range, ShapeChips, cacheTag, fmtMs, fmtTs, getJson, rangeParams } from '../monitoring/common';
 import { TimeWindow } from '../monitoring/TimeWindow';
 
 const { TabPane } = Tabs;
@@ -12,24 +12,23 @@ const fmtTotal = (ms: number) => fmtMs(ms);
 
 const shortName = (id: string) => { const i = String(id).indexOf('.'); return i >= 0 ? String(id).slice(i + 1) : id; };
 
-// "Extend <preAgg> +N fields" suggestion where "+N fields" expands inline to
-// show exactly which members to add, in the same chip style as everywhere else.
-function ExtendSuggestion({ s, onOpen }: { s: any; onOpen: (id: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const missing: string[] = s.missing || [];
-  const toggle = (e: any) => { e.stopPropagation(); setOpen((v) => !v); };
-  return (
-    <span>
-      <Tag color="blue">
-        Extend{' '}
-        <a onClick={(e) => { e.stopPropagation(); onOpen(s.preAgg); }}>{shortName(s.preAgg)}</a>
-      </Tag>
-      {open ? missing.map((m) => <MemberTag key={m} member={m} color="blue" />) : null}
-      <Tag style={{ cursor: 'pointer', borderStyle: 'dashed' }} onClick={toggle}>
-        {open ? 'show less' : `+${missing.length} field${missing.length === 1 ? '' : 's'}`}
-      </Tag>
-    </span>
-  );
+const ACTION_META: Record<string, { color: string; label: string }> = {
+  create: { color: 'green', label: 'New rollup' },
+  edit: { color: 'blue', label: 'Edit rollup' },
+  fix: { color: 'orange', label: 'Fix rollup' },
+  drop: { color: 'red', label: 'Drop rollup' },
+};
+
+// The member diff an action proposes: +added (green/blue) and −removed (red),
+// all expandable via the shared ChipList so long diffs don't flood the row.
+function ActionChange({ a }: { a: any }) {
+  const chips: any[] = [];
+  (a.add || []).forEach((m: any) =>
+    chips.push(<MemberTag key={`+${m.member}`} member={`+ ${m.member}`} color={m.kind === 'measure' ? 'green' : 'blue'} />));
+  (a.remove || []).forEach((m: any) =>
+    chips.push(<MemberTag key={`-${m.member}`} member={`− ${m.member}${m.uses ? ` (${m.uses}×)` : ''}`} color="red" />));
+  if (!chips.length) return <span style={{ color: '#999' }}>—</span>;
+  return <ChipList chips={chips} max={6} />;
 }
 
 export function InsightsPage() {
@@ -39,18 +38,20 @@ export function InsightsPage() {
   const [enabled, setEnabled] = useState(true);
   const [order, setOrder] = useState<'total' | 'count'>('total');
   const [onlyUnused, setOnlyUnused] = useState(false);
-  // Recommendations "slowness" quantile: a shape is a candidate when its avg
-  // duration is at/above this percentile of all query durations in the window.
+  // Recommendation engine knobs (quantile-based, no magic thresholds):
+  // slowness = a shape is a candidate when avg duration ≥ this percentile of
+  // the workload; rarity = a rollup member counts as dead weight below this
+  // percentile of member usage.
   const [recPct, setRecPct] = useState(0.9);
-  const [recThreshold, setRecThreshold] = useState<number | null>(null);
+  const [rarityPct, setRarityPct] = useState(0.1);
+  const [actionType, setActionType] = useState<'all' | 'create' | 'edit' | 'fix' | 'drop'>('all');
 
   const [top, setTop] = useState<any[]>([]);
-  const [recs, setRecs] = useState<any[]>([]);
+  const [actions, setActions] = useState<any[]>([]);
+  const [thresholds, setThresholds] = useState<any | null>(null);
   const [errors, setErrors] = useState<any[]>([]);
   const [measures, setMeasures] = useState<any[]>([]);
   const [dimensions, setDimensions] = useState<any[]>([]);
-  const [removePreAggs, setRemovePreAggs] = useState<any[]>([]);
-  const [trimFields, setTrimFields] = useState<any[]>([]);
 
   // Lazily-loaded individual queries per fingerprint (Top Queries / Recs drill-in).
   const [hashQueries, setHashQueries] = useState<Record<string, any[]>>({});
@@ -71,26 +72,23 @@ export function InsightsPage() {
     setErrorQueries({});
     try {
       const w = rangeParams(range);
-      const [t, r, e, mu, adv] = await Promise.all([
+      const [t, r, e, mu] = await Promise.all([
         getJson(`playground/insights/top-queries?${w}&order=${order}`),
-        getJson(`playground/insights/recommendations?${w}&percentile=${recPct}`),
+        getJson(`playground/insights/recommendations?${w}&percentile=${recPct}&rarityPct=${rarityPct}`),
         getJson(`playground/insights/errors?${w}`),
         getJson(`playground/insights/model-usage?${w}`),
-        getJson(`playground/insights/pre-agg-advice?${w}`).catch(() => ({ removePreAggs: [], trimFields: [] })),
       ]);
       setEnabled(Boolean(t.enabled));
       setTop(t.rows || []);
-      setRecs(r.rows || []);
-      setRecThreshold(typeof r.thresholdMs === 'number' ? r.thresholdMs : null);
+      setActions(r.actions || []);
+      setThresholds(r.thresholds || null);
       setErrors(e.rows || []);
       setMeasures(mu.measures || []);
       setDimensions(mu.dimensions || []);
-      setRemovePreAggs(adv.removePreAggs || []);
-      setTrimFields(adv.trimFields || []);
     } finally {
       setLoading(false);
     }
-  }, [range, order, recPct]);
+  }, [range, order, recPct, rarityPct]);
 
   useEffect(() => {
     load();
@@ -196,37 +194,96 @@ export function InsightsPage() {
     { title: 'Last seen', dataIndex: 'last_seen', key: 'last_seen', width: 170, render: fmtTs },
   ];
 
-  const recColumns = [
-    { title: 'Query (fields)', key: 'shape', render: (_: any, r: any) => <ShapeChips shape={r.shape} /> },
-    { title: 'Executions', dataIndex: 'executions', key: 'executions', width: 110, sorter: (a: any, b: any) => a.executions - b.executions },
-    { title: 'Avg', dataIndex: 'avg_ms', key: 'avg_ms', width: 90, render: fmtMs },
-    { title: 'p95', dataIndex: 'p95_ms', key: 'p95_ms', width: 90, render: fmtMs },
-    { title: 'Total time', dataIndex: 'total_ms', key: 'total_ms', width: 110, render: (v: number) => fmtTotal(Number(v)), defaultSortOrder: 'descend' as const, sorter: (a: any, b: any) => Number(a.total_ms) - Number(b.total_ms) },
+  const actionColumns = [
     {
-      title: 'Suggestion',
-      key: 'suggestion',
-      width: 280,
-      render: (_: any, r: any) => {
-        const s = r.suggestion || { action: 'create' };
-        const openPreAgg = (id: string) => history.push(`/pre-agg-monitor/${encodeURIComponent(id)}`);
-        if (s.action === 'create') {
-          return <Tag color="green">New rollup</Tag>;
-        }
-        if (s.action === 'matches') {
-          return (
-            <Tooltip title="An existing pre-agg covers all these fields but didn't accelerate the query — check granularity / segments / non-additive measures.">
-              <Tag color="orange">
-                Check{' '}
-                <a onClick={(e) => { e.stopPropagation(); openPreAgg(s.preAgg); }}>{shortName(s.preAgg)}</a>
-              </Tag>
-            </Tooltip>
-          );
-        }
-        return <ExtendSuggestion s={s} onOpen={openPreAgg} />;
+      title: 'Action',
+      key: 'type',
+      width: 130,
+      render: (_: any, a: any) => {
+        const m = ACTION_META[a.type] || { color: 'default', label: a.type };
+        return <Tag color={m.color}>{m.label}</Tag>;
       },
     },
-    { title: 'Last seen', dataIndex: 'last_seen', key: 'last_seen', width: 170, render: fmtTs },
+    {
+      title: 'Target',
+      key: 'target',
+      width: 260,
+      render: (_: any, a: any) =>
+        a.rollup ? (
+          <a onClick={(e) => { e.stopPropagation(); history.push(`/pre-agg-monitor/${encodeURIComponent(a.rollup)}`); }}>
+            <span style={{ opacity: 0.55 }}>{a.cube} · </span>{shortName(a.rollup)}
+          </a>
+        ) : (
+          <span><span style={{ opacity: 0.55 }}>{a.cube} · </span>{a.proposedName || 'new rollup'}{a.granularity ? ` · ${a.granularity}` : ''}</span>
+        ),
+    },
+    { title: 'Change', key: 'change', render: (_: any, a: any) => <ActionChange a={a} /> },
+    {
+      title: 'Impact',
+      key: 'impact',
+      width: 150,
+      render: (_: any, a: any) =>
+        a.benefitMs ? (
+          <span>
+            <b>{fmtTotal(Number(a.benefitMs))}</b>
+            <div style={{ color: '#888', fontSize: 12 }}>{a.shapesCovered} shape(s) · {a.executions}×</div>
+          </span>
+        ) : <span style={{ color: '#999' }}>—</span>,
+    },
+    {
+      title: 'Confidence',
+      dataIndex: 'confidence',
+      key: 'confidence',
+      width: 110,
+      render: (v: number) => <Tag color={v >= 0.8 ? 'green' : v >= 0.4 ? 'orange' : 'default'}>{Math.round((v || 0) * 100)}%</Tag>,
+    },
+    {
+      title: 'Score',
+      dataIndex: 'score',
+      key: 'score',
+      width: 100,
+      defaultSortOrder: 'descend' as const,
+      sorter: (a: any, b: any) => (a.score || 0) - (b.score || 0),
+      render: (v: number) => Math.round(v || 0).toLocaleString(),
+    },
   ];
+
+  // Expanded action row: the human explanation + (when it ties to a workload
+  // shape) the individual queries behind it, clickable through to detail.
+  const renderActionDetail = (a: any) => (
+    <div>
+      <div style={{ marginBottom: 8 }}>{a.detail}</div>
+      {a.reason ? <Tag color="orange" style={{ marginBottom: 8 }}>reason: {a.reason}</Tag> : null}
+      {a.sampleHash ? (
+        <Table
+          rowKey={(rec: any) => rec.id}
+          loading={hashLoading[a.sampleHash]}
+          dataSource={hashQueries[a.sampleHash] || []}
+          columns={drillColumns}
+          size="small"
+          pagination={{ pageSize: 10 }}
+          onRow={(rec: any) => ({ onClick: () => history.push(`/query-history/${rec.id}`), style: { cursor: 'pointer' } })}
+        />
+      ) : null}
+    </div>
+  );
+
+  const actionExpandable = {
+    expandedRowRender: renderActionDetail,
+    onExpand: (expanded: boolean, a: any) => {
+      if (expanded && a.sampleHash) loadHash(a.sampleHash);
+    },
+  };
+
+  const filteredActions = useMemo(
+    () => (actionType === 'all' ? actions : actions.filter((a) => a.type === actionType)),
+    [actions, actionType]
+  );
+  const actionCounts = useMemo(() => {
+    const c: Record<string, number> = { create: 0, edit: 0, fix: 0, drop: 0 };
+    actions.forEach((a) => { c[a.type] = (c[a.type] || 0) + 1; });
+    return c;
+  }, [actions]);
 
   const errorColumns = [
     { title: 'Error', dataIndex: 'error', key: 'error', ellipsis: true, render: (e: string) => <code style={{ color: '#c0392b' }}>{e}</code> },
@@ -303,109 +360,58 @@ export function InsightsPage() {
           />
         </TabPane>
 
-        <TabPane tab="Recommendations" key="recs">
-          <Tabs defaultActiveKey="add" type="card">
-            <TabPane tab="Add pre-aggregation" key="add">
-              <Alert
-                type="warning"
-                showIcon
-                style={{ marginBottom: 12 }}
-                message="Pre-aggregation candidates"
-                description="Unaccelerated query shapes whose average duration is at/above the chosen percentile of all queries in the window. Ranked by total data-source time (the time a rollup would save). Expand a row for the exact fields; the Suggestion column says whether to extend an existing rollup or create a new one."
-              />
-              <Row align="middle" gutter={8} style={{ marginBottom: 12 }}>
-                <Col style={{ color: '#888' }}>Slowness ≥</Col>
-                <Col>
-                  <Radio.Group value={recPct} onChange={(e: any) => setRecPct(e.target.value)} optionType="button" size="small">
-                    <Radio.Button value={0.5}>p50</Radio.Button>
-                    <Radio.Button value={0.75}>p75</Radio.Button>
-                    <Radio.Button value={0.9}>p90</Radio.Button>
-                    <Radio.Button value={0.95}>p95</Radio.Button>
-                    <Radio.Button value={0.99}>p99</Radio.Button>
-                  </Radio.Group>
-                </Col>
-                {recThreshold != null && (
-                  <Col style={{ color: '#888' }}>
-                    = queries slower than <b>{fmtMs(recThreshold)}</b>
-                  </Col>
-                )}
-              </Row>
-              <Table
-                rowKey={(r: any) => r.query_hash}
-                dataSource={recs}
-                columns={recColumns}
-                size="small"
-                loading={loading}
-                pagination={{ defaultPageSize: 25, showSizeChanger: true }}
-                expandable={hashExpandable}
-              />
-            </TabPane>
-
-            <TabPane tab={`Remove (${removePreAggs.length})`} key="remove">
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginBottom: 12 }}
-                message="Unused pre-aggregations"
-                description="Defined pre-aggregations with no queries in this window. Those marked 'Built but never used' cost build time and storage for nothing — candidates for removal."
-              />
-              <Table
-                rowKey={(r: any) => r.id}
-                dataSource={removePreAggs}
-                size="small"
-                loading={loading}
-                pagination={{ defaultPageSize: 25, showSizeChanger: true }}
-                onRow={(rec: any) => ({ onClick: () => history.push(`/pre-agg-monitor/${encodeURIComponent(rec.id)}`), style: { cursor: 'pointer' } })}
-                columns={[
-                  { title: 'Cube', dataIndex: 'cube', key: 'cube', width: 200 },
-                  { title: 'Pre-Aggregation', dataIndex: 'name', key: 'name' },
-                  { title: 'Builds', dataIndex: 'build_count', key: 'build_count', width: 90, render: (v: number) => v || '—' },
-                  { title: 'Avg build', dataIndex: 'avg_build_ms', key: 'avg_build_ms', width: 110, render: fmtMs },
-                  { title: 'Reason', dataIndex: 'reason', key: 'reason', render: (v: string) => <Tag color={v?.startsWith('Built') ? 'orange' : 'red'}>{v}</Tag> },
-                ]}
-              />
-            </TabPane>
-
-            <TabPane tab={`Trim fields (${trimFields.length})`} key="trim">
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginBottom: 12 }}
-                message="Fields to drop from used pre-aggregations"
-                description="These pre-aggregations are used, but materialize members that are never queried — or queried in under 5% of their queries (rare dead weight). Dropping them shrinks build time and storage with little or no impact. Expand a row to see each field and its usage."
-              />
-              <Table
-                rowKey={(r: any) => r.id}
-                dataSource={trimFields}
-                size="small"
-                loading={loading}
-                pagination={{ defaultPageSize: 15, showSizeChanger: true }}
-                expandable={{
-                  expandedRowRender: (r: any) => (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
-                      {r.fields.map((f: any) => (
-                        <Tag key={`${f.kind}:${f.member}`} color={f.tier === 'never' ? 'red' : 'orange'} style={{ margin: 0 }}>
-                          {f.member} <span style={{ opacity: 0.6 }}>({f.kind}, {f.tier === 'never' ? 'never' : `${f.uses}×`})</span>
-                        </Tag>
-                      ))}
-                    </div>
-                  ),
-                }}
-                columns={[
-                  { title: 'Cube', dataIndex: 'cube', key: 'cube', width: 200 },
-                  { title: 'Pre-Aggregation', dataIndex: 'name', key: 'name' },
-                  { title: 'Pre-agg hits', dataIndex: 'hits', key: 'hits', width: 100 },
-                  { title: 'Trim candidates', key: 'count', width: 200, render: (_: any, r: any) => (
-                    <span>
-                      {r.neverCount ? <Tag color="red">{r.neverCount} never</Tag> : null}
-                      {r.rareCount ? <Tag color="orange">{r.rareCount} rare</Tag> : null}
-                    </span>
-                  ) },
-                  { title: '', key: 'go', width: 60, render: (_: any, r: any) => <Button type="link" size="small" onClick={(e: any) => { e.stopPropagation(); history.push(`/pre-agg-monitor/${encodeURIComponent(r.id)}`); }}>open</Button> },
-                ]}
-              />
-            </TabPane>
-          </Tabs>
+        <TabPane tab={`Recommendations (${actions.length})`} key="recs">
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="Action Center"
+            description="One ranked list of pre-aggregation actions: create a rollup for slow uncovered queries, edit a rollup (add the fields it's missing, drop rarely-used ones), fix a rollup that covers a query but doesn't accelerate it, or drop an unused rollup. Granularity- and additivity-aware. Ranked by benefit (data-source time addressed) × confidence (how often the query runs). Expand a row for the reason and the queries behind it."
+          />
+          <Row align="middle" gutter={[8, 8]} style={{ marginBottom: 12 }}>
+            <Col style={{ color: '#888' }}>Slowness ≥</Col>
+            <Col>
+              <Radio.Group value={recPct} onChange={(e: any) => setRecPct(e.target.value)} optionType="button" size="small">
+                <Radio.Button value={0.5}>p50</Radio.Button>
+                <Radio.Button value={0.75}>p75</Radio.Button>
+                <Radio.Button value={0.9}>p90</Radio.Button>
+                <Radio.Button value={0.95}>p95</Radio.Button>
+                <Radio.Button value={0.99}>p99</Radio.Button>
+              </Radio.Group>
+            </Col>
+            {thresholds?.slownessMs != null && (
+              <Col style={{ color: '#888' }}>≈ <b>{fmtMs(thresholds.slownessMs)}</b></Col>
+            )}
+            <Col style={{ color: '#888', marginLeft: 16 }}>Rare ≤</Col>
+            <Col>
+              <Radio.Group value={rarityPct} onChange={(e: any) => setRarityPct(e.target.value)} optionType="button" size="small">
+                <Radio.Button value={0.05}>p5</Radio.Button>
+                <Radio.Button value={0.1}>p10</Radio.Button>
+                <Radio.Button value={0.25}>p25</Radio.Button>
+              </Radio.Group>
+            </Col>
+            {thresholds?.rarityUses != null && (
+              <Col style={{ color: '#888' }}>≈ <b>{thresholds.rarityUses}×</b></Col>
+            )}
+          </Row>
+          <Row style={{ marginBottom: 12 }}>
+            <Radio.Group value={actionType} onChange={(e: any) => setActionType(e.target.value)} optionType="button" size="small">
+              <Radio.Button value="all">All ({actions.length})</Radio.Button>
+              <Radio.Button value="create">New ({actionCounts.create})</Radio.Button>
+              <Radio.Button value="edit">Edit ({actionCounts.edit})</Radio.Button>
+              <Radio.Button value="fix">Fix ({actionCounts.fix})</Radio.Button>
+              <Radio.Button value="drop">Drop ({actionCounts.drop})</Radio.Button>
+            </Radio.Group>
+          </Row>
+          <Table
+            rowKey={(a: any, i?: number) => `${a.type}-${a.rollup || a.proposedName}-${i}`}
+            dataSource={filteredActions}
+            columns={actionColumns}
+            size="small"
+            loading={loading}
+            pagination={{ defaultPageSize: 25, showSizeChanger: true }}
+            expandable={actionExpandable}
+          />
         </TabPane>
 
         <TabPane tab={`Errors (${errors.length})`} key="errors">
