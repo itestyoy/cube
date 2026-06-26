@@ -12,9 +12,14 @@ export function PreAggDetailPage() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any | null>(null);
 
+  // Partitions are a heavy orchestrator call — load lazily on first tab open.
+  const [parts, setParts] = useState<any | null>(null);
+  const [partsLoading, setPartsLoading] = useState(false);
+
   useEffect(() => {
     let active = true;
     setLoading(true);
+    setParts(null);
     getJson(`playground/pre-agg-monitor/preagg?id=${encodeURIComponent(id)}`)
       .then((r) => {
         if (active) setData(r && r.found ? r : null);
@@ -24,6 +29,30 @@ export function PreAggDetailPage() {
       active = false;
     };
   }, [id]);
+
+  const loadPartitions = () => {
+    if (parts || partsLoading) return;
+    setPartsLoading(true);
+    getJson(`playground/pre-agg-monitor/preagg-partitions?id=${encodeURIComponent(id)}`)
+      .then((r) => setParts(r || { partitions: [] }))
+      .finally(() => setPartsLoading(false));
+  };
+
+  const partStatusTag = (s: string) => {
+    if (s === 'ready') return <Tag color="green">ready</Tag>;
+    if (s === 'building') return <Tag color="processing">building</Tag>;
+    return <Tag color="default">not built</Tag>;
+  };
+
+  const partitionColumns = [
+    { title: 'Status', dataIndex: 'status', key: 'status', width: 110, render: (s: string) => partStatusTag(s) },
+    { title: 'Partition table', dataIndex: 'tableName', key: 'tableName', ellipsis: true },
+    { title: 'Range start', dataIndex: 'buildRangeStart', key: 'buildRangeStart', width: 200, render: (v: string) => v || '—' },
+    { title: 'Range end', dataIndex: 'buildRangeEnd', key: 'buildRangeEnd', width: 200, render: (v: string) => v || '—' },
+    { title: 'Last built', dataIndex: 'lastBuilt', key: 'lastBuilt', width: 180, render: fmtTs },
+    { title: 'Versions', dataIndex: 'versionCount', key: 'versionCount', width: 90, render: (v: number) => v || '—' },
+    { title: 'TZ', dataIndex: 'timezone', key: 'timezone', width: 80 },
+  ];
 
   const p = data ? data.preAgg : null;
 
@@ -79,7 +108,7 @@ export function PreAggDetailPage() {
             <Col span={6}><Card><Statistic title="Avg build" value={p.avg_build_ms ?? 0} suffix="ms" /></Card></Col>
           </Row>
 
-          <Tabs defaultActiveKey="overview">
+          <Tabs defaultActiveKey="overview" onChange={(k) => k === 'partitions' && loadPartitions()}>
             <TabPane tab="Overview" key="overview">
               <Descriptions bordered size="small" column={2}>
                 <Descriptions.Item label="Id">{p.id}</Descriptions.Item>
@@ -128,6 +157,46 @@ export function PreAggDetailPage() {
                 pagination={{ defaultPageSize: 15, showSizeChanger: true, pageSizeOptions: ["10","15","25","50","100"] }}
                 onRow={(record) => ({ onClick: () => history.push(`/query-history/${record.id}`), style: { cursor: 'pointer' } })}
               />
+            </TabPane>
+
+            <TabPane tab="Partitions" key="partitions">
+              {partsLoading ? (
+                <div style={{ textAlign: 'center', padding: 32 }}><Spin /></div>
+              ) : !parts || !parts.found ? (
+                <Empty description="Partition info unavailable." />
+              ) : (
+                <>
+                  <div style={{ marginBottom: 12 }}>
+                    <Tag color="blue">{parts.total || 0} partitions</Tag>
+                    <Tag color="green">{parts.ready || 0} ready</Tag>
+                    {parts.building ? <Tag color="processing">{parts.building} building</Tag> : null}
+                    {parts.partitionGranularity ? (
+                      <span style={{ color: '#888', marginLeft: 8 }}>partitioned by <b>{parts.partitionGranularity}</b></span>
+                    ) : (
+                      <span style={{ color: '#888', marginLeft: 8 }}>single (non-partitioned) rollup</span>
+                    )}
+                  </div>
+                  <Table
+                    rowKey={(r: any) => r.tableName}
+                    dataSource={parts.partitions || []}
+                    columns={partitionColumns}
+                    size="small"
+                    pagination={{ defaultPageSize: 25, showSizeChanger: true, pageSizeOptions: ["10","25","50","100"] }}
+                    expandable={{
+                      expandedRowRender: (r: any) => (
+                        <Descriptions size="small" column={2} bordered>
+                          <Descriptions.Item label="Table">{r.tableName}</Descriptions.Item>
+                          <Descriptions.Item label="Type">{r.type}</Descriptions.Item>
+                          <Descriptions.Item label="Data source">{r.dataSource || '—'}</Descriptions.Item>
+                          <Descriptions.Item label="Built">{String(r.built)}</Descriptions.Item>
+                          <Descriptions.Item label="Content version">{r.contentVersion || '—'}</Descriptions.Item>
+                          <Descriptions.Item label="Structure version">{r.structureVersion || '—'}</Descriptions.Item>
+                        </Descriptions>
+                      ),
+                    }}
+                  />
+                </>
+              )}
             </TabPane>
 
             <TabPane tab={`Build History (${data.builds.length})`} key="builds">

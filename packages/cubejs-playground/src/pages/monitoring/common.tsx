@@ -206,7 +206,13 @@ export function QueryChips({ query, max = 6 }: { query: any; max?: number }) {
   (query.timeDimensions || []).forEach((t: any, i: number) =>
     chips.push(<MemberTag key={`t${i}`} member={`${t.dimension}${t.granularity ? ` · ${t.granularity}` : ''}`} color="geekblue" />));
   (query.segments || []).forEach((s: string) => chips.push(<MemberTag key={`s${s}`} member={s} />));
-  collectFilterMembers(query.filters).forEach((m, i) => chips.push(<MemberTag key={`f${i}`} member={m} color="orange" />));
+  // A multi-value filter emits one clause per value (and OR groups repeat the
+  // member) — collapse duplicates into a single chip with a "×N" count so the
+  // same field isn't shown many times.
+  const filterCounts = new Map<string, number>();
+  collectFilterMembers(query.filters).forEach((m) => filterCounts.set(m, (filterCounts.get(m) || 0) + 1));
+  Array.from(filterCounts.entries()).forEach(([m, n], i) =>
+    chips.push(<MemberTag key={`f${i}`} member={n > 1 ? `${m} ×${n}` : m} color="orange" />));
 
   return (
     <ChipList chips={chips} max={max} extra={query.limit != null ? <Tag color="default">LIMIT {query.limit}</Tag> : null} />

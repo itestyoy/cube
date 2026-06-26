@@ -506,6 +506,110 @@ export class DevServer {
       });
     }));
 
+    // Detailed per-partition state for a single pre-aggregation: every
+    // partition that should exist (from the refresh scheduler) merged with its
+    // built version entries (Cube Store) and current build/queue activity.
+    app.get('/playground/pre-agg-monitor/preagg-partitions', catchErrors(async (req, res) => {
+      const id = String(req.query.id || '');
+      const ctx = { authInfo: null, securityContext: {}, requestId: getRequestIdFromRequest(req) } as any;
+      const compilerApi = await this.cubejsServer.getCompilerApi(ctx);
+      const defined: any[] = await compilerApi.preAggregations();
+      const nk = normKey(id);
+      const p =
+        defined.find((x: any) => x.id === id || normKey(x.id) === nk) ||
+        defined.find((x: any) => { const xk = normKey(x.id); return nk && (xk.includes(nk) || nk.includes(xk)); }) ||
+        defined.find((x: any) => { const xn = normKey(x.preAggregationName); return xn && nk.includes(xn); });
+      if (!p) {
+        res.json({ found: false, partitions: [] });
+        return;
+      }
+
+      const def = p.preAggregation || {};
+      // Non-partitioned rollups have a single partition; partitioned ones are
+      // partitioned by the partitionGranularity over the time dimension.
+      const partitioned = Boolean(def.partitionGranularity);
+
+      try {
+        // eslint-disable-next-line global-require
+        const { RefreshScheduler } = require('./RefreshScheduler');
+        const scheduler = new RefreshScheduler(this.cubejsServer);
+        const orchestratorApi = await this.cubejsServer.getOrchestratorApi(ctx);
+
+        const partInfo: any[] = await scheduler.preAggregationPartitions(ctx, {
+          metadata: {},
+          timezones: ['UTC'],
+          preAggregations: [{ id: p.id, cacheOnly: true }],
+        });
+        const entry = partInfo.find((e: any) => {
+          const eid = e?.preAggregation?.preAggregationId || e?.preAggregation?.id;
+          return eid === p.id || normKey(eid) === normKey(p.id);
+        }) || partInfo[0];
+        const rawPartitions: any[] = (entry && entry.partitions) || [];
+
+        // Built version entries per table (Cube Store), keyed by table name.
+        let versionsByTable: Record<string, any[]> = {};
+        try {
+          const ve = await orchestratorApi.getPreAggregationVersionEntries(
+            ctx,
+            [entry].filter(Boolean),
+            compilerApi.preAggregationsSchema,
+          );
+          versionsByTable = (ve && ve.versionEntriesByTableName) || {};
+        } catch (e) {
+          versionsByTable = {};
+        }
+
+        // Currently building/queued partitions matched by table name.
+        let queue: any[] = [];
+        try {
+          const queueRaw = await orchestratorApi.getPreAggregationQueueStates();
+          queue = Array.isArray(queueRaw) ? queueRaw : Object.values(queueRaw || {});
+        } catch (e) {
+          queue = [];
+        }
+        const isBuilding = (table: string) => {
+          const k = normKey(table);
+          return queue.some((item: any) => {
+            const t2 = item?.query?.newVersionEntry?.table_name || item?.query?.preAggregation?.tableName || '';
+            return k && normKey(t2).includes(k);
+          });
+        };
+
+        const partitions = rawPartitions.map((part: any) => {
+          const table = part.tableName || '';
+          const versions = versionsByTable[table] || [];
+          const lastUpdated = versions.reduce((mx: number, v: any) => Math.max(mx, v.last_updated_at || 0), 0);
+          const building = isBuilding(table);
+          return {
+            tableName: table,
+            timezone: part.timezone || 'UTC',
+            buildRangeStart: part.buildRangeStart || (part.dataRange && part.dataRange[0]) || null,
+            buildRangeEnd: part.buildRangeEnd || (part.dataRange && part.dataRange[1]) || null,
+            dataSource: part.dataSource || null,
+            type: part.type || def.type || 'rollup',
+            built: versions.length > 0,
+            versionCount: versions.length,
+            lastBuilt: lastUpdated ? new Date(lastUpdated).toISOString() : null,
+            contentVersion: versions[0]?.content_version || null,
+            structureVersion: versions[0]?.structure_version || null,
+            status: building ? 'building' : (versions.length > 0 ? 'ready' : 'not built'),
+          };
+        });
+
+        res.json({
+          found: true,
+          partitioned,
+          partitionGranularity: def.partitionGranularity || null,
+          total: partitions.length,
+          ready: partitions.filter((x) => x.status === 'ready').length,
+          building: partitions.filter((x) => x.status === 'building').length,
+          partitions,
+        });
+      } catch (e: any) {
+        res.json({ found: true, partitioned, partitions: [], error: e?.message || String(e) });
+      }
+    }));
+
     // ----- Insights (query analytics) -------------------------------------
     app.get('/playground/insights/top-queries', catchErrors(async (req, res) => {
       const t = telemetry();
