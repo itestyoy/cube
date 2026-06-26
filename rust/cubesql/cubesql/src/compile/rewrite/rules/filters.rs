@@ -1715,6 +1715,69 @@ impl RewriteRules for FilterRules {
                     "?filter_values",
                 ),
             ),
+            // General `col LIKE 'pattern' ESCAPE 'c'` (and the LOWER(col) form):
+            // a LikeExpr node carrying an explicit escape char isn't handled by
+            // the BinaryExpr LIKE path, and the rules above only match the
+            // ThoughtSpot `!`-escaped concat shape. Resolve the pattern with its
+            // real escape char and turn it into the matching Cube filter op so
+            // escaped wildcards (e.g. `l\_l%` ESCAPE '\' → startsWith "l_l")
+            // work like plain LIKE does.
+            transforming_rewrite(
+                "filter-like-expr-escape-column",
+                filter_replacer(
+                    like_expr(
+                        "?like_type",
+                        "?negated",
+                        column_expr("?column"),
+                        literal_expr("?literal"),
+                        "?escape_char",
+                    ),
+                    "?alias_to_cube",
+                    "?members",
+                    "?filter_aliases",
+                ),
+                filter_member("?filter_member", "?filter_op", "?filter_values"),
+                self.transform_like_expr_to_filter(
+                    "?negated",
+                    "?column",
+                    "?literal",
+                    "?escape_char",
+                    "?alias_to_cube",
+                    "?members",
+                    "?filter_aliases",
+                    "?filter_member",
+                    "?filter_op",
+                    "?filter_values",
+                ),
+            ),
+            transforming_rewrite(
+                "filter-like-expr-escape-lower-column",
+                filter_replacer(
+                    like_expr(
+                        "?like_type",
+                        "?negated",
+                        self.fun_expr("Lower", vec![column_expr("?column")]),
+                        literal_expr("?literal"),
+                        "?escape_char",
+                    ),
+                    "?alias_to_cube",
+                    "?members",
+                    "?filter_aliases",
+                ),
+                filter_member("?filter_member", "?filter_op", "?filter_values"),
+                self.transform_like_expr_to_filter(
+                    "?negated",
+                    "?column",
+                    "?literal",
+                    "?escape_char",
+                    "?alias_to_cube",
+                    "?members",
+                    "?filter_aliases",
+                    "?filter_member",
+                    "?filter_op",
+                    "?filter_values",
+                ),
+            ),
             rewrite(
                 "filter-thoughtspot-date-add-column-comp-date",
                 filter_replacer(
@@ -5738,6 +5801,118 @@ impl FilterRules {
 
                                     return true;
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+            false
+        }
+    }
+
+    /// Convert a general `LikeExpr` (LIKE / ILIKE with an explicit ESCAPE char)
+    /// into a Cube filter, resolving the pattern with its real escape char via
+    /// `parse_like_pattern`. Mirrors the BinaryExpr LIKE path but for the
+    /// LikeExpr node shape (which carries the escape char and is produced when
+    /// the SQL has an `ESCAPE` clause).
+    fn transform_like_expr_to_filter(
+        &self,
+        negated_var: &'static str,
+        column_var: &'static str,
+        literal_var: &'static str,
+        escape_char_var: &'static str,
+        alias_to_cube_var: &'static str,
+        members_var: &'static str,
+        filter_aliases_var: &'static str,
+        filter_member_var: &'static str,
+        filter_op_var: &'static str,
+        filter_values_var: &'static str,
+    ) -> impl Fn(&mut CubeEGraph, &mut Subst) -> bool {
+        let negated_var = var!(negated_var);
+        let column_var = var!(column_var);
+        let literal_var = var!(literal_var);
+        let escape_char_var = var!(escape_char_var);
+        let alias_to_cube_var = var!(alias_to_cube_var);
+        let members_var = var!(members_var);
+        let filter_aliases_var = var!(filter_aliases_var);
+        let filter_member_var = var!(filter_member_var);
+        let filter_op_var = var!(filter_op_var);
+        let filter_values_var = var!(filter_values_var);
+        let meta_context = self.meta_context.clone();
+        move |egraph, subst| {
+            let escape_chars: Vec<Option<char>> =
+                var_iter!(egraph[subst[escape_char_var]], LikeExprEscapeChar)
+                    .cloned()
+                    .collect();
+            let literals: Vec<ScalarValue> =
+                var_iter!(egraph[subst[literal_var]], LiteralExprValue)
+                    .cloned()
+                    .collect();
+            let negateds: Vec<bool> = var_iter!(egraph[subst[negated_var]], LikeExprNegated)
+                .cloned()
+                .collect();
+            // Only handle an explicit ESCAPE char here; plain LIKE (no escape)
+            // goes through the BinaryExpr path.
+            for escape_char in escape_chars.into_iter().flatten() {
+                for literal in literals.iter() {
+                    let pattern = match literal {
+                        ScalarValue::Utf8(Some(value)) => value,
+                        _ => continue,
+                    };
+                    let Some((shape, unescaped)) = parse_like_pattern(pattern, escape_char) else {
+                        continue;
+                    };
+                    let aliases_es: Vec<_> =
+                        var_iter!(egraph[subst[filter_aliases_var]], FilterReplacerAliases)
+                            .cloned()
+                            .collect();
+                    for aliases in aliases_es {
+                        if let Some((member_name, cube)) = Self::filter_member_name(
+                            egraph,
+                            subst,
+                            &meta_context,
+                            alias_to_cube_var,
+                            column_var,
+                            members_var,
+                            &aliases,
+                        ) {
+                            if !(cube.lookup_measure_by_member_name(&member_name).is_some()
+                                || cube.lookup_dimension_by_member_name(&member_name).is_some())
+                            {
+                                continue;
+                            }
+                            for negated in negateds.iter().cloned() {
+                                let op = match (shape, negated) {
+                                    (LikePatternShape::Equals, false) => "equals",
+                                    (LikePatternShape::StartsWith, false) => "startsWith",
+                                    (LikePatternShape::EndsWith, false) => "endsWith",
+                                    (LikePatternShape::Contains, false) => "contains",
+                                    (LikePatternShape::Equals, true) => "notEquals",
+                                    (LikePatternShape::StartsWith, true) => "notStartsWith",
+                                    (LikePatternShape::EndsWith, true) => "notEndsWith",
+                                    (LikePatternShape::Contains, true) => "notContains",
+                                };
+
+                                subst.insert(
+                                    filter_member_var,
+                                    egraph.add(LogicalPlanLanguage::FilterMemberMember(
+                                        FilterMemberMember(member_name.to_string()),
+                                    )),
+                                );
+                                subst.insert(
+                                    filter_op_var,
+                                    egraph.add(LogicalPlanLanguage::FilterMemberOp(
+                                        FilterMemberOp(op.to_string()),
+                                    )),
+                                );
+                                subst.insert(
+                                    filter_values_var,
+                                    egraph.add(LogicalPlanLanguage::FilterMemberValues(
+                                        FilterMemberValues(vec![unescaped.clone()]),
+                                    )),
+                                );
+
+                                return true;
                             }
                         }
                     }
