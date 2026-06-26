@@ -354,7 +354,7 @@ export function InsightsPage() {
       <Tabs defaultActiveKey="top">
         <TabPane tab="Top Queries" key="top">
           <div style={{ marginBottom: 12 }}>
-            <Radio.Group value={order} onChange={(e) => setOrder(e.target.value)} optionType="button">
+            <Radio.Group value={order} onChange={(e) => setOrder(e.target.value)} optionType="button" size="small">
               <Radio.Button value="total">By total time</Radio.Button>
               <Radio.Button value="count">By executions</Radio.Button>
             </Radio.Group>
