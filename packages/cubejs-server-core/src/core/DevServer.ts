@@ -584,7 +584,7 @@ export class DevServer {
           const ve = await orchestratorApi.getPreAggregationVersionEntries(
             ctx,
             [entry].filter(Boolean),
-            compilerApi.preAggregationsSchema,
+            (compilerApi as any).preAggregationsSchema,
           );
           versionsByTable = (ve && ve.versionEntriesByTableName) || {};
         } catch (e) {
