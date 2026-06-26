@@ -140,12 +140,14 @@ export function InsightsPage() {
       }
       return (
         <div>
-          <span style={{ color: '#888', marginRight: 8 }}>Most often queried together ({data.coQueries} queries):</span>
-          {data.rows.map((c: any) => (
-            <Tag key={c.member} style={{ margin: 2 }}>
-              {c.member} <span style={{ opacity: 0.6 }}>{c.pct}%</span>
-            </Tag>
-          ))}
+          <div style={{ color: '#888', marginBottom: 8 }}>Most often queried together ({data.coQueries} queries):</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+            {data.rows.map((c: any) => (
+              <Tag key={c.member} style={{ margin: 0 }}>
+                {c.member} <span style={{ opacity: 0.6 }}>{c.pct}%</span>
+              </Tag>
+            ))}
+          </div>
         </div>
       );
     },
