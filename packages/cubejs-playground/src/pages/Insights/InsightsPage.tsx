@@ -382,33 +382,24 @@ export function InsightsPage() {
             message="Action Center"
             description="One ranked list of pre-aggregation actions: create a rollup for slow uncovered queries, edit a rollup (add the fields it's missing, drop rarely-used ones), fix a rollup that covers a query but doesn't accelerate it, or drop an unused rollup. Granularity- and additivity-aware. Ranked by benefit (data-source time addressed) × confidence (how often the query runs). Expand a row for the reason and the queries behind it."
           />
-          <Row align="middle" gutter={[8, 8]} style={{ marginBottom: 12 }}>
-            <Col style={{ color: '#888' }}>Slowness ≥</Col>
-            <Col>
-              <Radio.Group value={recPct} onChange={(e: any) => setRecPct(e.target.value)} optionType="button" size="small">
-                <Radio.Button value={0.5}>p50</Radio.Button>
-                <Radio.Button value={0.75}>p75</Radio.Button>
-                <Radio.Button value={0.9}>p90</Radio.Button>
-                <Radio.Button value={0.95}>p95</Radio.Button>
-                <Radio.Button value={0.99}>p99</Radio.Button>
-              </Radio.Group>
-            </Col>
-            {thresholds?.slownessMs != null && (
-              <Col style={{ color: '#888' }}>≈ <b>{fmtMs(thresholds.slownessMs)}</b></Col>
-            )}
-            <Col style={{ color: '#888', marginLeft: 16 }}>Rare ≤</Col>
-            <Col>
-              <Radio.Group value={rarityPct} onChange={(e: any) => setRarityPct(e.target.value)} optionType="button" size="small">
-                <Radio.Button value={0.05}>p5</Radio.Button>
-                <Radio.Button value={0.1}>p10</Radio.Button>
-                <Radio.Button value={0.25}>p25</Radio.Button>
-              </Radio.Group>
-            </Col>
-            {thresholds?.rarityUses != null && (
-              <Col style={{ color: '#888' }}>≈ <b>{thresholds.rarityUses}×</b></Col>
-            )}
-          </Row>
-          <Row style={{ marginBottom: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+            <span style={{ color: '#888' }}>Slowness ≥</span>
+            <Radio.Group value={recPct} onChange={(e: any) => setRecPct(e.target.value)} optionType="button" size="small">
+              <Radio.Button value={0.5}>p50</Radio.Button>
+              <Radio.Button value={0.75}>p75</Radio.Button>
+              <Radio.Button value={0.9}>p90</Radio.Button>
+              <Radio.Button value={0.95}>p95</Radio.Button>
+              <Radio.Button value={0.99}>p99</Radio.Button>
+            </Radio.Group>
+            {thresholds?.slownessMs != null && <span style={{ color: '#888' }}>≈ <b>{fmtMs(thresholds.slownessMs)}</b></span>}
+            <span style={{ color: '#888', marginLeft: 8 }}>Rare ≤</span>
+            <Radio.Group value={rarityPct} onChange={(e: any) => setRarityPct(e.target.value)} optionType="button" size="small">
+              <Radio.Button value={0.05}>p5</Radio.Button>
+              <Radio.Button value={0.1}>p10</Radio.Button>
+              <Radio.Button value={0.25}>p25</Radio.Button>
+            </Radio.Group>
+            {thresholds?.rarityUses != null && <span style={{ color: '#888' }}>≈ <b>{thresholds.rarityUses}×</b></span>}
+            <span style={{ width: 1, alignSelf: 'stretch', background: '#f0f0f0', margin: '0 8px' }} />
             <Radio.Group value={actionType} onChange={(e: any) => setActionType(e.target.value)} optionType="button" size="small">
               <Radio.Button value="all">All ({actions.length})</Radio.Button>
               <Radio.Button value="create">New ({actionCounts.create})</Radio.Button>
@@ -416,7 +407,7 @@ export function InsightsPage() {
               <Radio.Button value="fix">Fix ({actionCounts.fix})</Radio.Button>
               <Radio.Button value="drop">Drop ({actionCounts.drop})</Radio.Button>
             </Radio.Group>
-          </Row>
+          </div>
           <Table
             rowKey={(a: any, i?: number) => `${a.type}-${a.rollup || a.proposedName}-${i}`}
             dataSource={filteredActions}
