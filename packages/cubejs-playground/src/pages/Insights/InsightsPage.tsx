@@ -12,6 +12,16 @@ const fmtTotal = (ms: number) => fmtMs(ms);
 
 const shortName = (id: string) => { const i = String(id).indexOf('.'); return i >= 0 ? String(id).slice(i + 1) : id; };
 
+// Co-occurrence strength → colour, split into 5 buckets (hotter = used together
+// more often).
+const coocColor = (pct: number) => {
+  if (pct >= 50) return 'red';
+  if (pct >= 30) return 'volcano';
+  if (pct >= 15) return 'orange';
+  if (pct >= 5) return 'blue';
+  return 'default';
+};
+
 const ACTION_META: Record<string, { color: string; label: string }> = {
   create: { color: 'green', label: 'New rollup' },
   edit: { color: 'blue', label: 'Edit rollup' },
@@ -143,7 +153,7 @@ export function InsightsPage() {
           <div style={{ color: '#888', marginBottom: 8 }}>Most often queried together ({data.coQueries} queries):</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
             {data.rows.map((c: any) => (
-              <Tag key={c.member} style={{ margin: 0 }}>
+              <Tag key={c.member} color={coocColor(c.pct)} style={{ margin: 0 }}>
                 {c.member} <span style={{ opacity: 0.6 }}>{c.pct}%</span>
               </Tag>
             ))}
