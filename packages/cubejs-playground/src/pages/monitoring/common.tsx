@@ -1,5 +1,5 @@
 import { CSSProperties, useState } from 'react';
-import { Tag } from 'antd';
+import { Radio, Tag } from 'antd';
 import styled from 'styled-components';
 import { ThunderboltFilled } from '@ant-design/icons';
 // Prism core must load before the grammar components register on it.
@@ -65,6 +65,32 @@ export const fmtMs = (v: number | null | undefined) => {
 export const fmtSecs = fmtMs;
 
 export const fmtTs = (v: string | null | undefined) => (v ? new Date(v).toLocaleString() : '—');
+
+/**
+ * Selectable latency percentiles, shared by every analytics view so the
+ * displayed "pXX latency" is never a hard-coded number — the user picks which
+ * percentile to look at, the same way the recommendation thresholds work.
+ */
+export const PERCENTILE_OPTIONS = [0.5, 0.75, 0.9, 0.95, 0.99];
+export const pctLabel = (p: number) => `p${Math.round(p * 100)}`;
+
+export function PercentilePicker({
+  value,
+  onChange,
+  size = 'small',
+}: {
+  value: number;
+  onChange: (p: number) => void;
+  size?: 'small' | 'middle' | 'large';
+}) {
+  return (
+    <Radio.Group value={value} onChange={(e: any) => onChange(e.target.value)} optionType="button" size={size}>
+      {PERCENTILE_OPTIONS.map((p) => (
+        <Radio.Button key={p} value={p}>{pctLabel(p)}</Radio.Button>
+      ))}
+    </Radio.Group>
+  );
+}
 
 export async function getJson(url: string) {
   const res = await playgroundFetch(url);

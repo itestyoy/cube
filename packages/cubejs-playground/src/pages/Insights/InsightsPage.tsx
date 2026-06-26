@@ -3,7 +3,7 @@ import { useHistory } from 'react-router-dom';
 import { Alert, Button, Col, Radio, Row, Switch, Table, Tabs, Tag } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 
-import { ChipList, CodeBlock, DEFAULT_RANGE, MemberTag, QueryChips, Range, ShapeChips, cacheTag, fmtMs, fmtTs, getJson, rangeParams } from '../monitoring/common';
+import { ChipList, CodeBlock, DEFAULT_RANGE, MemberTag, PercentilePicker, QueryChips, Range, ShapeChips, cacheTag, fmtMs, fmtTs, getJson, pctLabel, rangeParams } from '../monitoring/common';
 import { TimeWindow } from '../monitoring/TimeWindow';
 
 const { TabPane } = Tabs;
@@ -37,6 +37,7 @@ export function InsightsPage() {
   const [loading, setLoading] = useState(true);
   const [enabled, setEnabled] = useState(true);
   const [order, setOrder] = useState<'total' | 'count'>('total');
+  const [latencyPct, setLatencyPct] = useState(0.95);
   const [onlyUnused, setOnlyUnused] = useState(false);
   // Recommendation engine knobs (quantile-based, no magic thresholds):
   // slowness = a shape is a candidate when avg duration ≥ this percentile of
@@ -73,7 +74,7 @@ export function InsightsPage() {
     try {
       const w = rangeParams(range);
       const [t, r, e, mu] = await Promise.all([
-        getJson(`playground/insights/top-queries?${w}&order=${order}`),
+        getJson(`playground/insights/top-queries?${w}&order=${order}&percentile=${latencyPct}`),
         getJson(`playground/insights/recommendations?${w}&percentile=${recPct}&rarityPct=${rarityPct}`),
         getJson(`playground/insights/errors?${w}`),
         getJson(`playground/insights/model-usage?${w}`),
@@ -88,7 +89,7 @@ export function InsightsPage() {
     } finally {
       setLoading(false);
     }
-  }, [range, order, recPct, rarityPct]);
+  }, [range, order, recPct, rarityPct, latencyPct]);
 
   useEffect(() => {
     load();
@@ -187,7 +188,7 @@ export function InsightsPage() {
     { title: 'Query (fields)', key: 'shape', render: (_: any, r: any) => <ShapeChips shape={r.shape} /> },
     { title: 'Executions', dataIndex: 'executions', key: 'executions', width: 110, sorter: (a: any, b: any) => a.executions - b.executions },
     { title: 'Avg', dataIndex: 'avg_ms', key: 'avg_ms', width: 90, render: fmtMs },
-    { title: 'p95', dataIndex: 'p95_ms', key: 'p95_ms', width: 90, render: fmtMs },
+    { title: pctLabel(latencyPct), dataIndex: 'p_ms', key: 'p_ms', width: 90, render: fmtMs },
     { title: 'Total time', dataIndex: 'total_ms', key: 'total_ms', width: 110, render: (v: number) => fmtTotal(Number(v)), sorter: (a: any, b: any) => Number(a.total_ms) - Number(b.total_ms) },
     { title: 'Hit-rate', dataIndex: 'hit_rate', key: 'hit_rate', width: 100, render: (v: number) => <Tag color={v >= 80 ? 'green' : v > 0 ? 'orange' : 'red'}>{v}%</Tag> },
     { title: 'Errors', dataIndex: 'errors', key: 'errors', width: 80, render: (v: number) => (v ? <Tag color="red">{v}</Tag> : '—') },
@@ -345,6 +346,7 @@ export function InsightsPage() {
               <Radio.Button value="total">By total time</Radio.Button>
               <Radio.Button value="count">By executions</Radio.Button>
             </Radio.Group>
+            <span style={{ marginLeft: 12 }}><PercentilePicker value={latencyPct} onChange={setLatencyPct} /></span>
             <span style={{ color: '#888', marginLeft: 12 }}>
               Identical query shapes (same fields, any filter values) are grouped — find the heaviest recurring queries.
             </span>

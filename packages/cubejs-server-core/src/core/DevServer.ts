@@ -152,6 +152,12 @@ export class DevServer {
       return Number.isFinite(h) && h > 0 ? h : 24;
     };
 
+    // Selectable display latency percentile (0..1), default p95.
+    const telemetryPercentile = (req: Request): number => {
+      const p = parseFloat(String(req.query.percentile || '0.95'));
+      return Number.isFinite(p) && p > 0 && p < 1 ? p : 0.95;
+    };
+
     app.get('/playground/pre-agg-monitor/summary', catchErrors(async (req, res) => {
       const t = telemetry();
       res.json({
@@ -346,7 +352,7 @@ export class DevServer {
       const defined: any[] = await compilerApi.preAggregations();
 
       const t = telemetry();
-      const usage = t ? await t.getPreAggUsage(windowHours) : [];
+      const usage = t ? await t.getPreAggUsage(windowHours, telemetryPercentile(req)) : [];
       const builds = t ? await t.getPreAggBuildStats(windowHours) : [];
 
       const matchStat = (id: string, name: string, stats: any[]) => {
@@ -372,8 +378,7 @@ export class DevServer {
           // usage
           usageKey: u ? u.pre_aggregation : null,
           hits: u ? u.query_count : 0,
-          p50_ms: u ? u.p50_ms : null,
-          p95_ms: u ? u.p95_ms : null,
+          p_ms: u ? u.p_ms : null,
           last_used: u ? u.last_used : null,
           // builds
           build_count: b ? b.build_count : 0,
@@ -452,7 +457,7 @@ export class DevServer {
         });
 
       const t = telemetry();
-      const usage = t ? await t.getPreAggUsage(windowHours) : [];
+      const usage = t ? await t.getPreAggUsage(windowHours, telemetryPercentile(req)) : [];
       const buildStats = t ? await t.getPreAggBuildStats(windowHours) : [];
       const u = match(usage);
       const b = match(buildStats);
@@ -521,8 +526,7 @@ export class DevServer {
           references: p.references || null,
           usageKey,
           hits: u ? u.query_count : 0,
-          p50_ms: u ? u.p50_ms : null,
-          p95_ms: u ? u.p95_ms : null,
+          p_ms: u ? u.p_ms : null,
           last_used: u ? u.last_used : null,
           build_count: b ? b.build_count : 0,
           avg_build_ms: b ? b.avg_ms : null,
@@ -642,7 +646,7 @@ export class DevServer {
     app.get('/playground/insights/top-queries', catchErrors(async (req, res) => {
       const t = telemetry();
       const order = req.query.order === 'count' ? 'count' : 'total';
-      res.json({ enabled: Boolean(t), rows: t ? await t.getTopQueries(telemetryWindow(req), order) : [] });
+      res.json({ enabled: Boolean(t), rows: t ? await t.getTopQueries(telemetryWindow(req), order, 100, telemetryPercentile(req)) : [] });
     }));
 
     // Unified recommendation engine (Action Center): turns the workload + the
@@ -820,7 +824,7 @@ export class DevServer {
     // Time-bucketed series for the Query History charts.
     app.get('/playground/query-history/timeseries', catchErrors(async (req, res) => {
       const t = telemetry();
-      res.json({ enabled: Boolean(t), rows: t ? await t.getTimeSeries(telemetryWindow(req)) : [] });
+      res.json({ enabled: Boolean(t), rows: t ? await t.getTimeSeries(telemetryWindow(req), telemetryPercentile(req)) : [] });
     }));
 
     // Pre-aggregation advice: which pre-aggs to REMOVE (defined but never hit)

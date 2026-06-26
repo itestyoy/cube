@@ -15,7 +15,7 @@ import {
   YAxis,
 } from 'recharts';
 
-import { DEFAULT_RANGE, QueryChips, Range, cacheTag, fmtMs, fmtTs, getJson, rangeParams } from '../monitoring/common';
+import { DEFAULT_RANGE, PercentilePicker, QueryChips, Range, cacheTag, fmtMs, fmtTs, getJson, pctLabel, rangeParams } from '../monitoring/common';
 import { TimeWindow } from '../monitoring/TimeWindow';
 
 const fmtBucket = (v: string) => {
@@ -35,6 +35,7 @@ export function QueryHistoryPage() {
   const [showCharts, setShowCharts] = useState(true);
 
   const [range, setRange] = useState<Range>(DEFAULT_RANGE);
+  const [latencyPct, setLatencyPct] = useState(0.95);
   const [order, setOrder] = useState<'recent' | 'top'>('recent');
   const [status, setStatus] = useState<string | undefined>(undefined);
   const [cache, setCache] = useState<string | undefined>(undefined);
@@ -52,7 +53,7 @@ export function QueryHistoryPage() {
       const qs = `${rangeParams(range)}&${params.toString()}`;
       const [json, ts] = await Promise.all([
         getJson(`playground/query-history?${qs}`),
-        getJson(`playground/query-history/timeseries?${rangeParams(range)}`).catch(() => ({ rows: [] })),
+        getJson(`playground/query-history/timeseries?${rangeParams(range)}&percentile=${latencyPct}`).catch(() => ({ rows: [] })),
       ]);
       setEnabled(Boolean(json.enabled));
       setRows(json.rows || []);
@@ -60,7 +61,7 @@ export function QueryHistoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [range, order, status, cache, apiType, minDuration]);
+  }, [range, order, status, cache, apiType, minDuration, latencyPct]);
 
   useEffect(() => {
     load();
@@ -88,6 +89,7 @@ export function QueryHistoryPage() {
           <h1 style={{ margin: 0 }}>Query History</h1>
         </Col>
         <Col>
+          <span style={{ marginRight: 8 }}><PercentilePicker value={latencyPct} onChange={setLatencyPct} /></span>
           <TimeWindow value={range} onChange={setRange} />
           <Button
             icon={<LineChartOutlined />}
@@ -147,7 +149,7 @@ export function QueryHistoryPage() {
                     <Legend />
                     <Line type="monotone" dataKey="avg_ms_accelerated" name="Pre-agg" stroke="#52c41a" dot={false} />
                     <Line type="monotone" dataKey="avg_ms_not_accelerated" name="Raw DB" stroke="#7A77FF" dot={false} />
-                    <Line type="monotone" dataKey="p95_ms" name="p95 (all)" stroke="#faad14" strokeDasharray="4 2" dot={false} />
+                    <Line type="monotone" dataKey="p_ms" name={`${pctLabel(latencyPct)} (all)`} stroke="#faad14" strokeDasharray="4 2" dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>

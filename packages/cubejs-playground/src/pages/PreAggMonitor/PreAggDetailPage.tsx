@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useHistory, useParams } from 'react-router-dom';
 import { Card, Col, Descriptions, Empty, PageHeader, Row, Spin, Statistic, Table, Tabs, Tag } from 'antd';
 
-import { CodeBlock, QueryChips, fmtMs, fmtTs, getJson, preAggStatusTag } from '../monitoring/common';
+import { CodeBlock, PercentilePicker, QueryChips, fmtMs, fmtTs, getJson, pctLabel, preAggStatusTag } from '../monitoring/common';
 
 const { TabPane } = Tabs;
 
@@ -11,6 +11,7 @@ export function PreAggDetailPage() {
   const history = useHistory();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any | null>(null);
+  const [latencyPct, setLatencyPct] = useState(0.95);
 
   // Partitions are a heavy orchestrator call — load lazily on first tab open.
   const [parts, setParts] = useState<any | null>(null);
@@ -20,7 +21,7 @@ export function PreAggDetailPage() {
     let active = true;
     setLoading(true);
     setParts(null);
-    getJson(`playground/pre-agg-monitor/preagg?id=${encodeURIComponent(id)}`)
+    getJson(`playground/pre-agg-monitor/preagg?id=${encodeURIComponent(id)}&percentile=${latencyPct}`)
       .then((r) => {
         if (active) setData(r && r.found ? r : null);
       })
@@ -28,7 +29,7 @@ export function PreAggDetailPage() {
     return () => {
       active = false;
     };
-  }, [id]);
+  }, [id, latencyPct]);
 
   const loadPartitions = () => {
     if (parts || partsLoading) return;
@@ -91,6 +92,7 @@ export function PreAggDetailPage() {
         title={p ? p.cube : 'Pre-Aggregation'}
         subTitle={p ? p.name : id}
         tags={p ? (preAggStatusTag(p) ?? undefined) : undefined}
+        extra={<PercentilePicker key="pct" value={latencyPct} onChange={setLatencyPct} />}
       />
 
       {loading ? (
@@ -103,7 +105,7 @@ export function PreAggDetailPage() {
         <>
           <Row gutter={16} style={{ marginBottom: 24 }}>
             <Col span={6}><Card><Statistic title="Hits" value={p.hits} /></Card></Col>
-            <Col span={6}><Card><Statistic title="p50 latency" value={(p.p50_ms ?? 0) / 1000} precision={2} suffix="s" /></Card></Col>
+            <Col span={6}><Card><Statistic title={`${pctLabel(latencyPct)} latency`} value={(p.p_ms ?? 0) / 1000} precision={2} suffix="s" /></Card></Col>
             <Col span={6}><Card><Statistic title="Builds" value={p.build_count} /></Card></Col>
             <Col span={6}><Card><Statistic title="Avg build" value={(p.avg_build_ms ?? 0) / 1000} precision={2} suffix="s" /></Card></Col>
           </Row>

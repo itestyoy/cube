@@ -631,12 +631,13 @@ export class PostgresLogTransport {
    * Time-bucketed series for charts: request volume (total/errors/accelerated)
    * and average duration over the window.
    */
-  public async getTimeSeries(window: number | TimeRange = 24): Promise<any[]> {
+  public async getTimeSeries(window: number | TimeRange = 24, percentile = 0.95): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
     }
     const { from, to } = this.timeBounds(window);
+    const p = Math.min(Math.max(percentile, 0), 0.999);
     const spanMin = (new Date(to).getTime() - new Date(from).getTime()) / 60000;
     const bucketMinutes = Math.max(1, Math.round(spanMin / 48));
     const { rows } = await this.pool.query(
@@ -648,12 +649,12 @@ export class PostgresLogTransport {
               coalesce(round(avg(duration_ms)),0)::int                               AS avg_ms,
               coalesce(round(avg(duration_ms) FILTER (WHERE coalesce(queries_with_pre_aggregations,0) > 0)),0)::int AS avg_ms_accelerated,
               coalesce(round(avg(duration_ms) FILTER (WHERE coalesce(queries_with_pre_aggregations,0) = 0)),0)::int AS avg_ms_not_accelerated,
-              coalesce(percentile_disc(0.95) within group (order by duration_ms),0)::int AS p95_ms
+              coalesce(percentile_disc($4) within group (order by duration_ms),0)::int AS p_ms
        FROM ${this.schema}.query_log
        WHERE ts >= $1 AND ts < $2
        GROUP BY bucket
        ORDER BY bucket`,
-      [from, to, bucketMinutes],
+      [from, to, bucketMinutes, p],
     );
     return rows;
   }
@@ -778,17 +779,17 @@ export class PostgresLogTransport {
    * pre-aggregation key as it appears in usedPreAggregations. Used to join
    * against the defined pre-aggregation catalog (so unused ones show 0 hits).
    */
-  public async getPreAggUsage(window: number | TimeRange = 24): Promise<any[]> {
+  public async getPreAggUsage(window: number | TimeRange = 24, percentile = 0.95): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
     }
     const { from, to } = this.timeBounds(window);
+    const p = Math.min(Math.max(percentile, 0), 0.999);
     const { rows } = await this.pool.query(
       `SELECT pre_agg AS pre_aggregation,
               count(*)::int AS query_count,
-              coalesce(percentile_disc(0.5) within group (order by duration_ms),0)::int  AS p50_ms,
-              coalesce(percentile_disc(0.95) within group (order by duration_ms),0)::int AS p95_ms,
+              coalesce(percentile_disc($3) within group (order by duration_ms),0)::int AS p_ms,
               max(ts) AS last_used
        FROM (
          SELECT ts, duration_ms, jsonb_object_keys(coalesce(used_pre_aggregations,'{}'::jsonb)) AS pre_agg
@@ -798,7 +799,7 @@ export class PostgresLogTransport {
        ) t
        GROUP BY pre_agg
        ORDER BY query_count DESC`,
-      [from, to],
+      [from, to, p],
     );
     return rows;
   }
@@ -892,18 +893,19 @@ export class PostgresLogTransport {
    * Queries grouped by field-level fingerprint: how heavy each distinct query
    * shape is. orderBy 'total' (sum duration — biggest cost) or 'count'.
    */
-  public async getTopQueries(window: number | TimeRange = 24, orderBy: 'total' | 'count' = 'total', limit = 100): Promise<any[]> {
+  public async getTopQueries(window: number | TimeRange = 24, orderBy: 'total' | 'count' = 'total', limit = 100, percentile = 0.95): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
     }
     const { from, to } = this.timeBounds(window);
+    const p = Math.min(Math.max(percentile, 0), 0.999);
     const order = orderBy === 'count' ? 'executions DESC' : 'total_ms DESC';
     const { rows } = await this.pool.query(
       `SELECT query_hash,
               count(*)::int                                                              AS executions,
               coalesce(round(avg(duration_ms)),0)::int                                   AS avg_ms,
-              coalesce(percentile_disc(0.95) within group (order by duration_ms),0)::int AS p95_ms,
+              coalesce(percentile_disc($4) within group (order by duration_ms),0)::int   AS p_ms,
               coalesce(sum(duration_ms),0)::bigint                                        AS total_ms,
               round(100.0 * sum(CASE WHEN coalesce(queries_with_pre_aggregations,0) > 0 THEN 1 ELSE 0 END) / count(*))::int AS hit_rate,
               sum(CASE WHEN status='error' THEN 1 ELSE 0 END)::int                        AS errors,
@@ -916,7 +918,7 @@ export class PostgresLogTransport {
        GROUP BY query_hash
        ORDER BY ${order}
        LIMIT $3`,
-      [from, to, Math.min(limit, 500)],
+      [from, to, Math.min(limit, 500), p],
     );
     return rows;
   }

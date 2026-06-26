@@ -12,7 +12,7 @@ import {
   YAxis,
 } from 'recharts';
 
-import { DEFAULT_RANGE, Range, fmtMs, fmtTs, getJson, preAggStatusTag, rangeParams } from '../monitoring/common';
+import { DEFAULT_RANGE, PercentilePicker, Range, fmtMs, fmtTs, getJson, pctLabel, preAggStatusTag, rangeParams } from '../monitoring/common';
 import { TimeWindow } from '../monitoring/TimeWindow';
 
 const { TabPane } = Tabs;
@@ -27,6 +27,7 @@ type Summary = {
 export function PreAggMonitorPage() {
   const history = useHistory();
   const [range, setRange] = useState<Range>(DEFAULT_RANGE);
+  const [latencyPct, setLatencyPct] = useState(0.95);
   const [loading, setLoading] = useState<boolean>(true);
   const [enabled, setEnabled] = useState<boolean>(true);
   const [summary, setSummary] = useState<Summary>(null);
@@ -41,7 +42,7 @@ export function PreAggMonitorPage() {
       const w = `?${rangeParams(range)}`;
       const [s, c, b, qq] = await Promise.all([
         getJson(`playground/pre-agg-monitor/summary${w}`),
-        getJson(`playground/pre-agg-monitor/catalog${w}`),
+        getJson(`playground/pre-agg-monitor/catalog${w}&percentile=${latencyPct}`),
         getJson(`playground/pre-agg-monitor/build-history${w}`),
         getJson('playground/pre-agg-monitor/queue').catch(() => ({ queue: [] })),
       ]);
@@ -53,7 +54,7 @@ export function PreAggMonitorPage() {
     } finally {
       setLoading(false);
     }
-  }, [range]);
+  }, [range, latencyPct]);
 
   useEffect(() => {
     load();
@@ -116,7 +117,7 @@ export function PreAggMonitorPage() {
       defaultSortOrder: 'descend' as const,
       sorter: (a: any, b: any) => a.hits - b.hits,
     },
-    { title: 'p50', dataIndex: 'p50_ms', key: 'p50_ms', width: 90, render: fmtMs },
+    { title: pctLabel(latencyPct), dataIndex: 'p_ms', key: 'p_ms', width: 90, render: fmtMs },
     { title: 'Last used', dataIndex: 'last_used', key: 'last_used', width: 180, render: fmtTs },
     {
       title: 'Builds',
@@ -173,6 +174,7 @@ export function PreAggMonitorPage() {
           <h1 style={{ margin: 0 }}>Pre-Aggregations</h1>
         </Col>
         <Col>
+          <span style={{ marginRight: 8 }}><PercentilePicker value={latencyPct} onChange={setLatencyPct} /></span>
           <TimeWindow value={range} onChange={setRange} />
           <Button icon={<ReloadOutlined />} onClick={() => { load(); loadPartState(); }} loading={loading} style={{ marginLeft: 8 }}>
             Refresh
