@@ -394,9 +394,11 @@ export function InsightsPage() {
             {thresholds?.slownessMs != null && <span style={{ color: '#888' }}>≈ <b>{fmtMs(thresholds.slownessMs)}</b></span>}
             <span style={{ color: '#888', marginLeft: 8 }}>Rare ≤</span>
             <Radio.Group value={rarityPct} onChange={(e: any) => setRarityPct(e.target.value)} optionType="button" size="small">
+              <Radio.Button value={0.01}>p1</Radio.Button>
               <Radio.Button value={0.05}>p5</Radio.Button>
               <Radio.Button value={0.1}>p10</Radio.Button>
               <Radio.Button value={0.25}>p25</Radio.Button>
+              <Radio.Button value={0.5}>p50</Radio.Button>
             </Radio.Group>
             {thresholds?.rarityUses != null && <span style={{ color: '#888' }}>≈ <b>{thresholds.rarityUses}×</b></span>}
             <span style={{ width: 1, alignSelf: 'stretch', background: '#f0f0f0', margin: '0 8px' }} />
