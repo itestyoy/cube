@@ -644,7 +644,10 @@ export class PostgresLogTransport {
               count(*)::int                                                          AS total,
               sum(CASE WHEN status='error' THEN 1 ELSE 0 END)::int                   AS errors,
               sum(CASE WHEN coalesce(queries_with_pre_aggregations,0) > 0 THEN 1 ELSE 0 END)::int AS accelerated,
+              sum(CASE WHEN coalesce(queries_with_pre_aggregations,0) = 0 THEN 1 ELSE 0 END)::int AS not_accelerated,
               coalesce(round(avg(duration_ms)),0)::int                               AS avg_ms,
+              coalesce(round(avg(duration_ms) FILTER (WHERE coalesce(queries_with_pre_aggregations,0) > 0)),0)::int AS avg_ms_accelerated,
+              coalesce(round(avg(duration_ms) FILTER (WHERE coalesce(queries_with_pre_aggregations,0) = 0)),0)::int AS avg_ms_not_accelerated,
               coalesce(percentile_disc(0.95) within group (order by duration_ms),0)::int AS p95_ms
        FROM ${this.schema}.query_log
        WHERE ts >= $1 AND ts < $2

@@ -49,7 +49,7 @@ export function BuildDetailPage() {
                 />
               </Card>
             </Col>
-            <Col span={6}><Card><Statistic title="Duration" value={row.duration_ms ?? 0} suffix="ms" /></Card></Col>
+            <Col span={6}><Card><Statistic title="Duration" value={(row.duration_ms ?? 0) / 1000} precision={2} suffix="s" /></Card></Col>
             <Col span={6}>
               <Card>
                 <div style={{ color: 'rgba(0,0,0,0.45)', fontSize: 14 }}>Build started at</div>

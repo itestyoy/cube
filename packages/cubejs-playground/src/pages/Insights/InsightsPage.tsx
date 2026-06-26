@@ -8,7 +8,7 @@ import { TimeWindow } from '../monitoring/TimeWindow';
 
 const { TabPane } = Tabs;
 
-const fmtTotal = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`);
+const fmtTotal = (ms: number) => fmtMs(ms);
 
 const shortName = (id: string) => { const i = String(id).indexOf('.'); return i >= 0 ? String(id).slice(i + 1) : id; };
 
@@ -326,7 +326,7 @@ export function InsightsPage() {
                 </Col>
                 {recThreshold != null && (
                   <Col style={{ color: '#888' }}>
-                    = queries slower than <b>{recThreshold} ms</b>
+                    = queries slower than <b>{fmtMs(recThreshold)}</b>
                   </Col>
                 )}
               </Row>

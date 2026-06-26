@@ -217,9 +217,9 @@ export function PreAggMonitorPage() {
                 <BarChart data={buildChartData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="name" hide />
-                  <YAxis unit="ms" />
-                  <RechartsTooltip />
-                  <Bar dataKey="duration" fill="#7A77FF" />
+                  <YAxis unit="s" tickFormatter={(v: number) => `${Math.round(v / 1000)}`} />
+                  <RechartsTooltip formatter={(v: any) => fmtMs(Number(v))} />
+                  <Bar dataKey="duration" name="Build time" fill="#7A77FF" />
                 </BarChart>
               </ResponsiveContainer>
             </div>

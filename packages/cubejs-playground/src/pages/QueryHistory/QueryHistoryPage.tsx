@@ -4,8 +4,9 @@ import { Alert, Button, Card, Col, InputNumber, Radio, Row, Select, Table } from
 import { ReloadOutlined, LineChartOutlined } from '@ant-design/icons';
 import {
   Bar,
-  BarChart,
   CartesianGrid,
+  ComposedChart,
+  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -21,6 +22,9 @@ const fmtBucket = (v: string) => {
   const d = new Date(v);
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
+
+// Recharts Y-axis ticks are in ms; render them as seconds.
+const fmtSecAxis = (v: number) => `${Math.round(v / 1000)}`;
 
 export function QueryHistoryPage() {
   const history = useHistory();
@@ -44,7 +48,7 @@ export function QueryHistoryPage() {
       if (status) params.set('status', status);
       if (cache) params.set('cache', cache);
       if (apiType) params.set('apiType', apiType);
-      if (minDuration != null) params.set('minDurationMs', String(minDuration));
+      if (minDuration != null) params.set('minDurationMs', String(Math.round(minDuration * 1000)));
       const qs = `${rangeParams(range)}&${params.toString()}`;
       const [json, ts] = await Promise.all([
         getJson(`playground/query-history?${qs}`),
@@ -113,32 +117,37 @@ export function QueryHistoryPage() {
       {showCharts && series.length > 0 && (
         <Row gutter={16} style={{ marginBottom: 24 }}>
           <Col span={12}>
-            <Card title="Requests" size="small">
+            <Card title="Requests — pre-agg vs raw DB" size="small">
               <div style={{ height: 200 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={series}>
+                  <ComposedChart data={series}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="bucket" tickFormatter={fmtBucket} minTickGap={40} />
                     <YAxis allowDecimals={false} />
                     <RechartsTooltip labelFormatter={fmtBucket} />
-                    <Bar dataKey="total" name="Requests" fill="#7A77FF" stackId="a" />
-                    <Bar dataKey="errors" name="Errors" fill="#e0245e" stackId="a" />
-                  </BarChart>
+                    <Legend />
+                    {/* covered (accelerated) vs not covered, stacked = total */}
+                    <Bar dataKey="accelerated" name="Pre-agg" fill="#52c41a" stackId="a" />
+                    <Bar dataKey="not_accelerated" name="Raw DB" fill="#7A77FF" stackId="a" />
+                    <Line type="monotone" dataKey="errors" name="Errors" stroke="#e0245e" dot={false} />
+                  </ComposedChart>
                 </ResponsiveContainer>
               </div>
             </Card>
           </Col>
           <Col span={12}>
-            <Card title="Average response time" size="small">
+            <Card title="Avg response time — pre-agg vs raw DB (s)" size="small">
               <div style={{ height: 200 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={series}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="bucket" tickFormatter={fmtBucket} minTickGap={40} />
-                    <YAxis unit="ms" />
-                    <RechartsTooltip labelFormatter={fmtBucket} />
-                    <Line type="monotone" dataKey="avg_ms" name="Avg" stroke="#7A77FF" dot={false} />
-                    <Line type="monotone" dataKey="p95_ms" name="p95" stroke="#faad14" dot={false} />
+                    <YAxis unit="s" tickFormatter={fmtSecAxis} />
+                    <RechartsTooltip labelFormatter={fmtBucket} formatter={(v: any) => `${(Number(v) / 1000).toFixed(2)} s`} />
+                    <Legend />
+                    <Line type="monotone" dataKey="avg_ms_accelerated" name="Pre-agg" stroke="#52c41a" dot={false} />
+                    <Line type="monotone" dataKey="avg_ms_not_accelerated" name="Raw DB" stroke="#7A77FF" dot={false} />
+                    <Line type="monotone" dataKey="p95_ms" name="p95 (all)" stroke="#faad14" strokeDasharray="4 2" dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -167,7 +176,7 @@ export function QueryHistoryPage() {
             options={[{ label: 'load', value: 'load' }, { label: 'sql', value: 'sql' }, { label: 'graphql', value: 'graphql' }]} />
         </Col>
         <Col>
-          <InputNumber placeholder="Min ms" value={minDuration} onChange={(v) => setMinDuration(typeof v === 'number' ? v : undefined)} style={{ width: 110 }} min={0} />
+          <InputNumber placeholder="Min s" value={minDuration} onChange={(v) => setMinDuration(typeof v === 'number' ? v : undefined)} style={{ width: 110 }} min={0} step={0.1} />
         </Col>
       </Row>
 

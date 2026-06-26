@@ -103,9 +103,9 @@ export function PreAggDetailPage() {
         <>
           <Row gutter={16} style={{ marginBottom: 24 }}>
             <Col span={6}><Card><Statistic title="Hits" value={p.hits} /></Card></Col>
-            <Col span={6}><Card><Statistic title="p50 latency" value={p.p50_ms ?? 0} suffix="ms" /></Card></Col>
+            <Col span={6}><Card><Statistic title="p50 latency" value={(p.p50_ms ?? 0) / 1000} precision={2} suffix="s" /></Card></Col>
             <Col span={6}><Card><Statistic title="Builds" value={p.build_count} /></Card></Col>
-            <Col span={6}><Card><Statistic title="Avg build" value={p.avg_build_ms ?? 0} suffix="ms" /></Card></Col>
+            <Col span={6}><Card><Statistic title="Avg build" value={(p.avg_build_ms ?? 0) / 1000} precision={2} suffix="s" /></Card></Col>
           </Row>
 
           <Tabs defaultActiveKey="overview" onChange={(k) => k === 'partitions' && loadPartitions()}>

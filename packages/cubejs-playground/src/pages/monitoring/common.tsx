@@ -47,7 +47,22 @@ export function rangeParams(r: Range): string {
   return `windowHours=${r.windowHours ?? 24}`;
 }
 
-export const fmtMs = (v: number | null | undefined) => (v == null ? '—' : `${v} ms`);
+/**
+ * Format a millisecond duration as seconds (the whole monitoring UI shows
+ * seconds). Adaptive precision so sub-second values keep detail and large ones
+ * stay readable; very large totals roll up to minutes.
+ */
+export const fmtMs = (v: number | null | undefined) => {
+  if (v == null) return '—';
+  const s = v / 1000;
+  if (s < 10) return `${s.toFixed(2)} s`;
+  if (s < 100) return `${s.toFixed(1)} s`;
+  if (s < 600) return `${Math.round(s)} s`;
+  return `${(s / 60).toFixed(1)} min`;
+};
+
+/** Same scale as fmtMs; kept as an alias for "total time" call sites. */
+export const fmtSecs = fmtMs;
 
 export const fmtTs = (v: string | null | undefined) => (v ? new Date(v).toLocaleString() : '—');
 
