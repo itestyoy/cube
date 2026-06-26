@@ -215,6 +215,23 @@ export class DevServer {
       res.json({ queue: await orchestratorApi.getPreAggregationQueueStates() });
     }));
 
+    // Data queries currently in the orchestrator queue (live), for the Query
+    // History "In queue" tab.
+    app.get('/playground/query-history/queue', catchErrors(async (req, res) => {
+      const orchestratorApi = await this.cubejsServer.getOrchestratorApi({
+        authInfo: null,
+        securityContext: {},
+        requestId: getRequestIdFromRequest(req),
+      } as any);
+      let queue: any[] = [];
+      try {
+        queue = await orchestratorApi.getQueryQueueStates();
+      } catch (e) {
+        queue = [];
+      }
+      res.json({ queue });
+    }));
+
     // Best-effort partition state per pre-aggregation: total / ready / building.
     // Heavy orchestrator calls, so it's a separate endpoint the catalog merges
     // in lazily; any failure degrades to an empty map (UI shows "—").

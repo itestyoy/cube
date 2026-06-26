@@ -3,10 +3,10 @@ import { useHistory } from 'react-router-dom';
 import { Alert, Button, Card, Col, Row, Statistic, Table, Tabs, Tag, Tooltip } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
   ResponsiveContainer,
+  Scatter,
+  ScatterChart,
   Tooltip as RechartsTooltip,
   XAxis,
   YAxis,
@@ -14,6 +14,26 @@ import {
 
 import { DEFAULT_RANGE, PercentilePicker, Range, fmtMs, fmtTs, getJson, pctLabel, preAggStatusTag, rangeParams } from '../monitoring/common';
 import { TimeWindow } from '../monitoring/TimeWindow';
+
+// Short axis label for a build start time.
+const fmtAxisTime = (v: number) => {
+  const d = new Date(v);
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+// Tooltip for a single build point: which table, when it started, how long.
+const BuildTooltip = ({ active, payload }: any) => {
+  if (!active || !payload || !payload.length) return null;
+  const p = payload[0].payload;
+  return (
+    <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 4, padding: 8, fontSize: 12 }}>
+      <div style={{ fontWeight: 600 }}>{p.preAgg || p.table}</div>
+      {p.table && p.preAgg ? <div style={{ color: '#888' }}>{p.table}</div> : null}
+      <div style={{ color: '#888' }}>{fmtTs(new Date(p.ts).toISOString())}</div>
+      <div>build {fmtMs(p.duration)}</div>
+    </div>
+  );
+};
 
 const { TabPane } = Tabs;
 
@@ -85,12 +105,18 @@ export function PreAggMonitorPage() {
     return Math.round((summary.accelerated_queries / summary.total_queries) * 100);
   }, [summary]);
 
+  // Build activity over time: each point positioned by its start time (x) with
+  // its duration as height (y), so spikes/clusters of long builds are visible.
   const buildChartData = useMemo(
     () =>
       buildHistory
-        .slice(0, 40)
-        .reverse()
-        .map((r, i) => ({ name: r.target_table || String(i), duration: r.duration_ms || 0 })),
+        .filter((r) => r.ts)
+        .map((r) => ({
+          ts: new Date(r.ts).getTime(),
+          duration: r.duration_ms || 0,
+          table: r.target_table,
+          preAgg: r.pre_aggregation,
+        })),
     [buildHistory]
   );
 
@@ -214,15 +240,28 @@ export function PreAggMonitorPage() {
 
         <TabPane tab="Build History" key="build-history">
           {buildChartData.length > 0 && (
-            <div style={{ height: 220, marginBottom: 16 }}>
+            <div style={{ height: 240, marginBottom: 16 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={buildChartData}>
+                <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" hide />
-                  <YAxis unit="s" tickFormatter={(v: number) => `${Math.round(v / 1000)}`} />
-                  <RechartsTooltip formatter={(v: any) => fmtMs(Number(v))} />
-                  <Bar dataKey="duration" name="Build time" fill="#7A77FF" />
-                </BarChart>
+                  <XAxis
+                    dataKey="ts"
+                    type="number"
+                    scale="time"
+                    domain={['dataMin', 'dataMax']}
+                    tickFormatter={fmtAxisTime}
+                    minTickGap={50}
+                    name="start"
+                  />
+                  <YAxis
+                    dataKey="duration"
+                    name="build"
+                    unit="s"
+                    tickFormatter={(v: number) => `${Math.round(v / 1000)}`}
+                  />
+                  <RechartsTooltip content={<BuildTooltip />} cursor={{ strokeDasharray: '3 3' }} />
+                  <Scatter data={buildChartData} fill="#7A77FF" />
+                </ScatterChart>
               </ResponsiveContainer>
             </div>
           )}

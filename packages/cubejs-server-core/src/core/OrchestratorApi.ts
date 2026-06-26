@@ -293,6 +293,10 @@ export class OrchestratorApi {
     return this.orchestrator.getPreAggregationQueueStates();
   }
 
+  public async getQueryQueueStates() {
+    return this.orchestrator.getQueryQueueStates();
+  }
+
   public async cancelPreAggregationQueriesFromQueue(queryKeys: string[], dataSource: string) {
     return this.orchestrator.cancelPreAggregationQueriesFromQueue(queryKeys, dataSource);
   }

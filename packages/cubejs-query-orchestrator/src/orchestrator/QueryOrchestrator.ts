@@ -431,6 +431,16 @@ export class QueryOrchestrator {
     return this.preAggregations.getQueueState(dataSource);
   }
 
+  /**
+   * Currently queued / in-flight data queries across all data-source queues
+   * (orphaned, stalled, active, toProcess), for the playground queue view.
+   */
+  public async getQueryQueueStates() {
+    const queues = Object.values(this.queryCache.getQueues());
+    const all = await Promise.all(queues.map((q) => q.getQueries()));
+    return all.flat();
+  }
+
   public async cancelPreAggregationQueriesFromQueue(queryKeys: string[], dataSource = 'default') {
     return this.preAggregations.cancelQueriesFromQueue(queryKeys, dataSource);
   }

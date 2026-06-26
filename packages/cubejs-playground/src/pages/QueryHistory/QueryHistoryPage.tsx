@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useHistory } from 'react-router-dom';
-import { Alert, Button, Card, Col, InputNumber, Radio, Row, Select, Table } from 'antd';
+import { Alert, Button, Card, Col, InputNumber, Radio, Row, Select, Table, Tabs, Tag } from 'antd';
 import { ReloadOutlined, LineChartOutlined } from '@ant-design/icons';
 import {
   Bar,
@@ -26,6 +26,8 @@ const fmtBucket = (v: string) => {
 // Recharts Y-axis ticks are in ms; render them as seconds.
 const fmtSecAxis = (v: number) => `${Math.round(v / 1000)}`;
 
+const { TabPane } = Tabs;
+
 export function QueryHistoryPage() {
   const history = useHistory();
   const [loading, setLoading] = useState(true);
@@ -33,6 +35,8 @@ export function QueryHistoryPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [series, setSeries] = useState<any[]>([]);
   const [showCharts, setShowCharts] = useState(true);
+  const [queueRows, setQueueRows] = useState<any[]>([]);
+  const [queueLoading, setQueueLoading] = useState(false);
 
   const [range, setRange] = useState<Range>(DEFAULT_RANGE);
   const [latencyPct, setLatencyPct] = useState(0.95);
@@ -66,6 +70,44 @@ export function QueryHistoryPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const loadQueue = useCallback(() => {
+    setQueueLoading(true);
+    getJson('playground/query-history/queue')
+      .then((r) => setQueueRows(Array.isArray(r.queue) ? r.queue : []))
+      .catch(() => setQueueRows([]))
+      .finally(() => setQueueLoading(false));
+  }, []);
+
+  const queueColumns = [
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      key: 'status',
+      width: 200,
+      render: (s: string[]) => (Array.isArray(s) ? s : []).map((x) => (
+        <Tag key={x} color={x === 'active' ? 'processing' : x === 'toProcess' ? 'blue' : x === 'orphaned' ? 'orange' : 'red'}>{x}</Tag>
+      )),
+    },
+    { title: 'Request ID', dataIndex: 'requestId', key: 'requestId', width: 260, ellipsis: true, render: (v: string) => v || '—' },
+    {
+      title: 'Query',
+      key: 'query',
+      render: (_: any, r: any) => {
+        const q = r.query || {};
+        const sql = q.sql || (Array.isArray(q) ? null : q.query);
+        if (typeof sql === 'string') return <code style={{ fontSize: 12 }}>{sql.slice(0, 160)}</code>;
+        return <QueryChips query={q} max={4} />;
+      },
+    },
+    {
+      title: 'In queue',
+      dataIndex: 'addedToQueueTime',
+      key: 'addedToQueueTime',
+      width: 170,
+      render: (v: number) => (v ? fmtTs(new Date(v).toISOString()) : '—'),
+    },
+  ];
 
   const columns = [
     { title: 'Time', dataIndex: 'ts', key: 'ts', render: fmtTs, width: 175 },
@@ -116,6 +158,8 @@ export function QueryHistoryPage() {
         />
       )}
 
+      <Tabs defaultActiveKey="history" onChange={(k) => k === 'queue' && loadQueue()}>
+        <TabPane tab="Query history" key="history">
       {showCharts && series.length > 0 && (
         <Row gutter={16} style={{ marginBottom: 24 }}>
           <Col span={12}>
@@ -191,6 +235,24 @@ export function QueryHistoryPage() {
         pagination={{ defaultPageSize: 25, showSizeChanger: true, pageSizeOptions: ['10', '25', '50', '100'] }}
         onRow={(record) => ({ onClick: () => history.push(`/query-history/${record.id}`), style: { cursor: 'pointer' } })}
       />
+        </TabPane>
+
+        <TabPane tab={`In queue (${queueRows.length})`} key="queue">
+          <div style={{ marginBottom: 12 }}>
+            <Button icon={<ReloadOutlined />} onClick={loadQueue} loading={queueLoading}>Refresh</Button>
+            <span style={{ color: '#888', marginLeft: 12 }}>Data queries currently queued or executing in the orchestrator.</span>
+          </div>
+          <Table
+            rowKey={(r: any, i?: number) => `${r.requestId || 'q'}-${i}`}
+            dataSource={queueRows}
+            columns={queueColumns}
+            size="small"
+            loading={queueLoading}
+            locale={{ emptyText: 'Queue is empty.' }}
+            pagination={{ defaultPageSize: 25, showSizeChanger: true }}
+          />
+        </TabPane>
+      </Tabs>
     </div>
   );
 }
