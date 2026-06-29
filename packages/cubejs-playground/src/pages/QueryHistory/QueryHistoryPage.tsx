@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useHistory } from 'react-router-dom';
-import { Alert, Button, Card, Col, InputNumber, Radio, Row, Select, Table, Tabs, Tag } from 'antd';
+import { Alert, Button, Card, Col, InputNumber, Popconfirm, Radio, Row, Select, Table, Tabs, Tag, message } from 'antd';
 import { ReloadOutlined, LineChartOutlined } from '@ant-design/icons';
 import {
   Bar,
@@ -15,7 +15,7 @@ import {
   YAxis,
 } from 'recharts';
 
-import { CodeBlock, DEFAULT_RANGE, PercentilePicker, QueryChips, Range, cacheTag, fmtMs, fmtTs, getJson, pctLabel, rangeParams } from '../monitoring/common';
+import { CodeBlock, DEFAULT_RANGE, PercentilePicker, QueryChips, Range, cacheTag, fmtMs, fmtTs, getJson, pctLabel, postJson, rangeParams } from '../monitoring/common';
 import { TimeWindow } from '../monitoring/TimeWindow';
 
 const fmtBucket = (v: string) => {
@@ -71,6 +71,15 @@ export function QueryHistoryPage() {
     load();
   }, [load]);
 
+  const cancelQueueQuery = (requestId: string) => {
+    postJson(`playground/query-history/queue/cancel?requestId=${encodeURIComponent(requestId)}`)
+      .then((r) => {
+        message.success(r && r.cancelled ? `Cancelled ${r.cancelled} query(ies)` : 'Cancel requested');
+        loadQueue();
+      })
+      .catch(() => message.error('Failed to cancel query'));
+  };
+
   const loadQueue = useCallback(() => {
     setQueueLoading(true);
     getJson('playground/query-history/queue')
@@ -106,6 +115,23 @@ export function QueryHistoryPage() {
       key: 'addedToQueueTime',
       width: 170,
       render: (v: number) => (v ? fmtTs(new Date(v).toISOString()) : '—'),
+    },
+    {
+      title: '',
+      key: 'cancel',
+      width: 90,
+      render: (_: any, r: any) =>
+        r.requestId ? (
+          <Popconfirm
+            title="Cancel this query?"
+            okText="Cancel query"
+            okButtonProps={{ danger: true }}
+            cancelText="No"
+            onConfirm={() => cancelQueueQuery(r.requestId)}
+          >
+            <Button danger type="link" size="small">Cancel</Button>
+          </Popconfirm>
+        ) : null,
     },
   ];
 

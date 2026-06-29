@@ -97,6 +97,11 @@ export async function getJson(url: string) {
   return res.json();
 }
 
+export async function postJson(url: string) {
+  const res = await playgroundFetch(url, { method: 'POST' });
+  return res.json();
+}
+
 /**
  * Wraps PrismCode and forces the code to wrap to the container width. The Prism
  * theme sets `white-space: pre` on `code[class*="language-"]`, which overrides

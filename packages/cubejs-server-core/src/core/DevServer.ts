@@ -232,6 +232,26 @@ export class DevServer {
       res.json({ queue });
     }));
 
+    // Cancel a queued / in-flight data query by its requestId.
+    app.post('/playground/query-history/queue/cancel', catchErrors(async (req, res) => {
+      const requestId = String((req.body && req.body.requestId) || req.query.requestId || '');
+      if (!requestId) {
+        res.status(400).json({ error: 'requestId required' });
+        return;
+      }
+      const orchestratorApi = await this.cubejsServer.getOrchestratorApi({
+        authInfo: null,
+        securityContext: {},
+        requestId: getRequestIdFromRequest(req),
+      } as any);
+      try {
+        const cancelled = await orchestratorApi.cancelQueryByRequestId(requestId);
+        res.json({ cancelled: Array.isArray(cancelled) ? cancelled.length : 0 });
+      } catch (e: any) {
+        res.status(500).json({ error: e?.message || String(e) });
+      }
+    }));
+
     // Best-effort partition state per pre-aggregation: total / ready / building.
     // Heavy orchestrator calls, so it's a separate endpoint the catalog merges
     // in lazily; any failure degrades to an empty map (UI shows "—").
