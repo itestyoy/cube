@@ -141,7 +141,21 @@ export function CodeBlock({
   let pretty = code;
   if (language === 'sql' && code) {
     try {
-      pretty = formatSql(code);
+      // Cube prefixes generated SQL with a `/* Cube Query: {json} */` comment.
+      // The embedded JSON makes sql-formatter bail (leaving an ugly one-liner),
+      // so split it off, pretty-print the JSON, then format the SQL body.
+      const m = code.match(/^\s*\/\*\s*Cube Query:\s*([\s\S]*?)\*\/\s*([\s\S]*)$/);
+      if (m) {
+        let head = m[1].trim();
+        try {
+          head = JSON.stringify(JSON.parse(head), null, 2);
+        } catch (e) {
+          /* leave the comment body as-is if it isn't valid JSON */
+        }
+        pretty = `/* Cube Query:\n${head}\n*/\n\n${formatSql(m[2])}`;
+      } else {
+        pretty = formatSql(code);
+      }
     } catch (e) {
       pretty = code; // best-effort (e.g. BigQuery backticks the formatter dislikes)
     }
