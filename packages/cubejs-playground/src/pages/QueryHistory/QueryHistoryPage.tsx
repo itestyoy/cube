@@ -45,11 +45,17 @@ export function QueryHistoryPage() {
   const [cache, setCache] = useState<string | undefined>(undefined);
   const [apiType, setApiType] = useState<string | undefined>(undefined);
   const [minDuration, setMinDuration] = useState<number | undefined>(undefined);
+  const PAGE_SIZE = 25;
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+
+  // Reset to the first page whenever a filter narrows/changes the result set.
+  const resetPage = () => setPage(1);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ order, limit: '300' });
+      const params = new URLSearchParams({ order, limit: String(PAGE_SIZE), offset: String((page - 1) * PAGE_SIZE) });
       if (status) params.set('status', status);
       if (cache) params.set('cache', cache);
       if (apiType) params.set('apiType', apiType);
@@ -61,11 +67,12 @@ export function QueryHistoryPage() {
       ]);
       setEnabled(Boolean(json.enabled));
       setRows(json.rows || []);
+      setTotal(typeof json.total === 'number' ? json.total : (json.rows || []).length);
       setSeries(ts.rows || []);
     } finally {
       setLoading(false);
     }
-  }, [range, order, status, cache, apiType, minDuration, latencyPct]);
+  }, [range, order, status, cache, apiType, minDuration, latencyPct, page]);
 
   useEffect(() => {
     load();
@@ -230,25 +237,25 @@ export function QueryHistoryPage() {
 
       <Row gutter={8} style={{ marginBottom: 16 }} align="middle">
         <Col>
-          <Radio.Group value={order} onChange={(e) => setOrder(e.target.value)} optionType="button">
+          <Radio.Group value={order} onChange={(e) => { setOrder(e.target.value); resetPage(); }} optionType="button">
             <Radio.Button value="recent">All (recent)</Radio.Button>
             <Radio.Button value="top">Top (slowest)</Radio.Button>
           </Radio.Group>
         </Col>
         <Col>
-          <Select allowClear placeholder="Status" value={status} onChange={setStatus} style={{ width: 120 }}
+          <Select allowClear placeholder="Status" value={status} onChange={(v) => { setStatus(v); resetPage(); }} style={{ width: 120 }}
             options={[{ label: 'Success', value: 'success' }, { label: 'Error', value: 'error' }]} />
         </Col>
         <Col>
-          <Select allowClear placeholder="Cache" value={cache} onChange={setCache} style={{ width: 150 }}
+          <Select allowClear placeholder="Cache" value={cache} onChange={(v) => { setCache(v); resetPage(); }} style={{ width: 150 }}
             options={[{ label: 'Pre-aggregation', value: 'preagg' }, { label: 'Raw DB', value: 'raw' }]} />
         </Col>
         <Col>
-          <Select allowClear placeholder="API type" value={apiType} onChange={setApiType} style={{ width: 120 }}
+          <Select allowClear placeholder="API type" value={apiType} onChange={(v) => { setApiType(v); resetPage(); }} style={{ width: 120 }}
             options={[{ label: 'load', value: 'load' }, { label: 'sql', value: 'sql' }, { label: 'graphql', value: 'graphql' }]} />
         </Col>
         <Col>
-          <InputNumber placeholder="Min s" value={minDuration} onChange={(v) => setMinDuration(typeof v === 'number' ? v : undefined)} style={{ width: 110 }} min={0} step={0.1} />
+          <InputNumber placeholder="Min s" value={minDuration} onChange={(v) => { setMinDuration(typeof v === 'number' ? v : undefined); resetPage(); }} style={{ width: 110 }} min={0} step={0.1} />
         </Col>
       </Row>
 
@@ -258,7 +265,7 @@ export function QueryHistoryPage() {
         columns={columns}
         size="small"
         loading={loading}
-        pagination={{ defaultPageSize: 25, showSizeChanger: true, pageSizeOptions: ['10', '25', '50', '100'] }}
+        pagination={{ current: page, pageSize: PAGE_SIZE, total, showSizeChanger: false, onChange: (pg: number) => setPage(pg) }}
         onRow={(record) => ({ onClick: () => history.push(`/query-history/${record.id}`), style: { cursor: 'pointer' } })}
       />
         </TabPane>

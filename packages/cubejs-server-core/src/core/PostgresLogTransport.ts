@@ -75,6 +75,19 @@ export type TelemetryEvent = { msg: string; params: Record<string, any> };
 /** Relative window (last N hours, fractional ok) or an absolute [from, to). */
 export type TimeRange = { windowHours?: number; from?: string; to?: string };
 
+export type QueryHistoryFilters = {
+  limit?: number;
+  offset?: number;
+  order?: 'recent' | 'top';
+  status?: 'success' | 'error';
+  cache?: 'preagg' | 'raw';
+  apiType?: string;
+  minDurationMs?: number;
+  windowHours?: number;
+  from?: string;
+  to?: string;
+};
+
 type QueryLogRow = {
   ts: Date;
   requestId: string | null;
@@ -675,61 +688,61 @@ export class PostgresLogTransport {
     return rows;
   }
 
-  public async getQueryHistory(filters: {
-    limit?: number;
-    order?: 'recent' | 'top';
-    status?: 'success' | 'error';
-    cache?: 'preagg' | 'raw';
-    apiType?: string;
-    minDurationMs?: number;
-    windowHours?: number;
-    from?: string;
-    to?: string;
-  } = {}): Promise<any[]> {
-    await this.init();
-    if (this.disabled || !this.pool) {
-      return [];
-    }
+  /** Build the shared WHERE clause + params (from,to first) for query history. */
+  private buildQueryHistoryWhere(filters: QueryHistoryFilters): { where: string; params: any[] } {
     const where: string[] = [];
     const params: any[] = [];
     const add = (clause: string, value: any) => {
       params.push(value);
       where.push(clause.replace('$?', `$${params.length}`));
     };
-
     const { from, to } = this.timeBounds({ windowHours: filters.windowHours, from: filters.from, to: filters.to });
     params.push(from, to);
     where.push('ts >= $1 AND ts < $2');
-    if (filters.status) {
-      add('status = $?', filters.status);
-    }
-    if (filters.apiType) {
-      add('api_type = $?', filters.apiType);
-    }
-    if (typeof filters.minDurationMs === 'number') {
-      add('duration_ms >= $?', filters.minDurationMs);
-    }
-    if (filters.cache === 'preagg') {
-      where.push('coalesce(queries_with_pre_aggregations,0) > 0');
-    } else if (filters.cache === 'raw') {
-      where.push('coalesce(queries_with_pre_aggregations,0) = 0');
-    }
+    if (filters.status) add('status = $?', filters.status);
+    if (filters.apiType) add('api_type = $?', filters.apiType);
+    if (typeof filters.minDurationMs === 'number') add('duration_ms >= $?', filters.minDurationMs);
+    if (filters.cache === 'preagg') where.push('coalesce(queries_with_pre_aggregations,0) > 0');
+    else if (filters.cache === 'raw') where.push('coalesce(queries_with_pre_aggregations,0) = 0');
+    return { where: where.join(' AND '), params };
+  }
 
+  public async getQueryHistory(filters: QueryHistoryFilters = {}): Promise<any[]> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return [];
+    }
+    const { where, params } = this.buildQueryHistoryWhere(filters);
     const orderBy = filters.order === 'top' ? 'duration_ms DESC NULLS LAST' : 'ts DESC';
-    const limit = Math.min(filters.limit || 200, 1000);
-    params.push(limit);
+    const limit = Math.min(filters.limit || 50, 200);
+    const offset = Math.max(filters.offset || 0, 0);
+    params.push(limit, offset);
 
     const { rows } = await this.pool.query(
       `SELECT id, ts, request_id, api_type, duration_ms, queries, queries_with_pre_aggregations,
               used_pre_aggregations, db_type, is_playground, status, error, external, security_context,
               query, sql, generated_sql
        FROM ${this.schema}.query_log
-       WHERE ${where.join(' AND ')}
+       WHERE ${where}
        ORDER BY ${orderBy}
-       LIMIT $${params.length}`,
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
     return rows;
+  }
+
+  /** Total rows matching the query-history filters (for pagination). */
+  public async countQueryHistory(filters: QueryHistoryFilters = {}): Promise<number> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return 0;
+    }
+    const { where, params } = this.buildQueryHistoryWhere(filters);
+    const { rows } = await this.pool.query(
+      `SELECT count(*)::int AS n FROM ${this.schema}.query_log WHERE ${where}`,
+      params,
+    );
+    return rows[0] ? rows[0].n : 0;
   }
 
   public async getBuildHistory(window: number | TimeRange = 24, limit = 500): Promise<any[]> {

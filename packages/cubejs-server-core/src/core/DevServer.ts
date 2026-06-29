@@ -192,9 +192,8 @@ export class DevServer {
       const num = (v: any) => (v != null && v !== '' ? parseInt(String(v), 10) : undefined);
       const status = q.status === 'error' ? 'error' : q.status === 'success' ? 'success' : undefined;
       const cache = q.cache === 'preagg' ? 'preagg' : q.cache === 'raw' ? 'raw' : undefined;
-      const rows = await t.getQueryHistory({
-        limit: num(q.limit),
-        order: q.order === 'top' ? 'top' : 'recent',
+      const filters = {
+        order: (q.order === 'top' ? 'top' : 'recent') as 'top' | 'recent',
         status,
         cache,
         apiType: q.apiType ? String(q.apiType) : undefined,
@@ -202,8 +201,12 @@ export class DevServer {
         windowHours: q.windowHours ? parseFloat(String(q.windowHours)) : undefined,
         from: q.from ? String(q.from) : undefined,
         to: q.to ? String(q.to) : undefined,
-      });
-      res.json({ enabled: true, rows });
+      };
+      const [rows, total] = await Promise.all([
+        t.getQueryHistory({ ...filters, limit: num(q.limit), offset: num(q.offset) }),
+        t.countQueryHistory(filters),
+      ]);
+      res.json({ enabled: true, rows, total });
     }));
 
     app.get('/playground/pre-agg-monitor/queue', catchErrors(async (req, res) => {
