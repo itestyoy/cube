@@ -179,7 +179,19 @@ export class DevServer {
 
     app.get('/playground/pre-agg-monitor/build-history', catchErrors(async (req, res) => {
       const t = telemetry();
-      res.json({ enabled: Boolean(t), rows: t ? await t.getBuildHistory(telemetryWindow(req)) : [] });
+      if (!t) {
+        res.json({ enabled: false, rows: [], total: 0 });
+        return;
+      }
+      const w = telemetryWindow(req);
+      const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 25;
+      const offset = req.query.offset ? parseInt(String(req.query.offset), 10) : 0;
+      const preAgg = req.query.preAgg ? String(req.query.preAgg) : undefined;
+      const [rows, total] = await Promise.all([
+        t.getBuildHistory(w, limit, offset, preAgg),
+        t.countBuildHistory(w, preAgg),
+      ]);
+      res.json({ enabled: true, rows, total });
     }));
 
     app.get('/playground/query-history', catchErrors(async (req, res) => {
@@ -512,9 +524,8 @@ export class DevServer {
       // The "Used By" list is server-paginated via /preagg-queries; the field
       // usage below comes from getMemberUsageForPreAgg (full aggregation), so we
       // no longer ship a bounded queries[] in the detail payload.
-      const allBuilds = t ? await t.getBuildHistory(windowHours, 500) : [];
-      const builds = allBuilds.filter((bh: any) =>
-        cand.some((c) => c && (normKey(bh.pre_aggregation).includes(c) || normKey(bh.target_table).includes(c))));
+      // Build History for this pre-agg is server-paginated via /build-history
+      // (?preAgg=name); not shipped inline here.
 
       // Field-level usage: how many of this pre-aggregation's served queries
       // reference each member, aggregated in SQL over ALL served queries (not
@@ -574,7 +585,6 @@ export class DevServer {
           max_build_ms: b ? b.max_ms : null,
           last_build: b ? b.last_build : null,
         },
-        builds,
       });
     }));
 

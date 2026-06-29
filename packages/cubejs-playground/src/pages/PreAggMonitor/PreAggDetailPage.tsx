@@ -22,9 +22,9 @@ export function PreAggDetailPage() {
   // "Used By" is server-paginated (the served-query set can be huge).
   const USEDBY_PAGE = 25;
   const [activeTab, setActiveTab] = useState('overview');
-  const [usedBy, setUsedBy] = useState<{ rows: any[]; total: number; page: number; loading: boolean }>(
-    { rows: [], total: 0, page: 1, loading: false }
-  );
+  const emptyPage = { rows: [] as any[], total: 0, page: 1, loading: false };
+  const [usedBy, setUsedBy] = useState(emptyPage);
+  const [builds, setBuilds] = useState(emptyPage);
 
   useEffect(() => {
     let active = true;
@@ -43,9 +43,9 @@ export function PreAggDetailPage() {
   // (Re)load the Used By page whenever its tab is active and the underlying
   // data (pre-agg / window) changes — back to page 1.
   useEffect(() => {
-    if (activeTab === 'used-by' && data && data.preAgg && data.preAgg.usageKey) {
-      loadUsedBy(1);
-    }
+    if (!data || !data.preAgg) return;
+    if (activeTab === 'used-by' && data.preAgg.usageKey) loadUsedBy(1);
+    if (activeTab === 'builds') loadBuilds(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, data]);
 
@@ -67,6 +67,18 @@ export function PreAggDetailPage() {
     getJson(`playground/pre-agg-monitor/preagg-queries?key=${encodeURIComponent(key)}&${rangeParams(range)}&limit=${USEDBY_PAGE}&offset=${(page - 1) * USEDBY_PAGE}`)
       .then((r) => setUsedBy({ rows: r.rows || [], total: r.total || 0, page, loading: false }))
       .catch(() => setUsedBy((s) => ({ ...s, loading: false })));
+  };
+
+  const loadBuilds = (page: number) => {
+    const name = data && data.preAgg && data.preAgg.name;
+    if (!name) {
+      setBuilds({ rows: [], total: 0, page: 1, loading: false });
+      return;
+    }
+    setBuilds((s) => ({ ...s, loading: true }));
+    getJson(`playground/pre-agg-monitor/build-history?preAgg=${encodeURIComponent(name)}&${rangeParams(range)}&limit=${USEDBY_PAGE}&offset=${(page - 1) * USEDBY_PAGE}`)
+      .then((r) => setBuilds({ rows: r.rows || [], total: r.total || 0, page, loading: false }))
+      .catch(() => setBuilds((s) => ({ ...s, loading: false })));
   };
 
   const partStatusTag = (s: string) => {
@@ -247,13 +259,20 @@ export function PreAggDetailPage() {
               )}
             </TabPane>
 
-            <TabPane tab={`Build History (${data.builds.length})`} key="builds">
+            <TabPane tab={`Build History (${p.build_count ?? 0})`} key="builds">
               <Table
                 rowKey={(r: any) => r.id}
-                dataSource={data.builds}
+                dataSource={builds.rows}
                 columns={buildColumns}
                 size="small"
-                pagination={{ defaultPageSize: 15, showSizeChanger: true, pageSizeOptions: ["10","15","25","50","100"] }}
+                loading={builds.loading}
+                pagination={{
+                  current: builds.page,
+                  pageSize: USEDBY_PAGE,
+                  total: builds.total || p.build_count || 0,
+                  showSizeChanger: false,
+                  onChange: (pg: number) => loadBuilds(pg),
+                }}
                 onRow={(record) => ({ onClick: () => history.push(`/builds/${record.id}`), style: { cursor: 'pointer' } })}
               />
             </TabPane>

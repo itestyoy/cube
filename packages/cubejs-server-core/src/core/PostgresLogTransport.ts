@@ -745,21 +745,48 @@ export class PostgresLogTransport {
     return rows[0] ? rows[0].n : 0;
   }
 
-  public async getBuildHistory(window: number | TimeRange = 24, limit = 500): Promise<any[]> {
+  /** WHERE clause + params for build history, optionally scoped to a pre-agg name. */
+  private buildBuildHistoryWhere(window: number | TimeRange, preAggName?: string): { where: string; params: any[] } {
+    const { from, to } = this.timeBounds(window);
+    const params: any[] = [from, to];
+    let where = 'ts >= $1 AND ts < $2 AND status = \'completed\'';
+    if (preAggName) {
+      params.push(preAggName);
+      where += ` AND (strpos(lower(pre_aggregation), lower($${params.length})) > 0 OR strpos(lower(target_table), lower($${params.length})) > 0)`;
+    }
+    return { where, params };
+  }
+
+  public async getBuildHistory(window: number | TimeRange = 24, limit = 50, offset = 0, preAggName?: string): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
     }
-    const { from, to } = this.timeBounds(window);
+    const { where, params } = this.buildBuildHistoryWhere(window, preAggName);
+    params.push(Math.min(limit, 2000), Math.max(offset, 0));
     const { rows } = await this.pool.query(
       `SELECT id, ts, request_id, target_table, pre_aggregation, build_range_end, duration_ms, status
        FROM ${this.schema}.preagg_build_log
-       WHERE ts >= $1 AND ts < $2 AND status = 'completed'
+       WHERE ${where}
        ORDER BY ts DESC
-       LIMIT $3`,
-      [from, to, Math.min(limit, 2000)],
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params,
     );
     return rows;
+  }
+
+  /** Total completed builds in the window (optionally for one pre-agg). */
+  public async countBuildHistory(window: number | TimeRange = 24, preAggName?: string): Promise<number> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return 0;
+    }
+    const { where, params } = this.buildBuildHistoryWhere(window, preAggName);
+    const { rows } = await this.pool.query(
+      `SELECT count(*)::int AS n FROM ${this.schema}.preagg_build_log WHERE ${where}`,
+      params,
+    );
+    return rows[0] ? rows[0].n : 0;
   }
 
   public async getUsedBy(limit = 1000): Promise<any[]> {

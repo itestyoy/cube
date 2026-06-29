@@ -52,29 +52,46 @@ export function PreAggMonitorPage() {
   const [enabled, setEnabled] = useState<boolean>(true);
   const [summary, setSummary] = useState<Summary>(null);
   const [catalog, setCatalog] = useState<any[]>([]);
-  const [buildHistory, setBuildHistory] = useState<any[]>([]);
   const [queue, setQueue] = useState<any[]>([]);
   const [partState, setPartState] = useState<Record<string, any>>({});
+
+  // Build History: a bounded recent sample for the activity chart + a
+  // server-paginated table (the full set can be large).
+  const BUILDS_PAGE = 25;
+  const [buildChart, setBuildChart] = useState<any[]>([]);
+  const [builds, setBuilds] = useState<{ rows: any[]; total: number; page: number; loading: boolean }>(
+    { rows: [], total: 0, page: 1, loading: false }
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const w = `?${rangeParams(range)}`;
-      const [s, c, b, qq] = await Promise.all([
+      const [s, c, qq] = await Promise.all([
         getJson(`playground/pre-agg-monitor/summary${w}`),
         getJson(`playground/pre-agg-monitor/catalog${w}&percentile=${latencyPct}`),
-        getJson(`playground/pre-agg-monitor/build-history${w}`),
         getJson('playground/pre-agg-monitor/queue').catch(() => ({ queue: [] })),
       ]);
       setEnabled(Boolean(s.enabled));
       setSummary(s.summary || null);
       setCatalog(c.rows || []);
-      setBuildHistory(b.rows || []);
       setQueue(Array.isArray(qq.queue) ? qq.queue : []);
     } finally {
       setLoading(false);
     }
   }, [range, latencyPct]);
+
+  const loadBuilds = useCallback((page: number) => {
+    const w = rangeParams(range);
+    setBuilds((s) => ({ ...s, loading: true }));
+    getJson(`playground/pre-agg-monitor/build-history?${w}&limit=${BUILDS_PAGE}&offset=${(page - 1) * BUILDS_PAGE}`)
+      .then((r) => setBuilds({ rows: r.rows || [], total: r.total || 0, page, loading: false }))
+      .catch(() => setBuilds((s) => ({ ...s, loading: false })));
+    // Larger sample for the activity scatter (viz only).
+    getJson(`playground/pre-agg-monitor/build-history?${w}&limit=500`)
+      .then((r) => setBuildChart(r.rows || []))
+      .catch(() => setBuildChart([]));
+  }, [range]);
 
   useEffect(() => {
     load();
@@ -91,6 +108,12 @@ export function PreAggMonitorPage() {
   useEffect(() => {
     loadPartState();
   }, [loadPartState]);
+
+  // Reload Build History on range change if it's already been opened.
+  useEffect(() => {
+    if (builds.total || builds.rows.length) loadBuilds(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range]);
 
   const stats = useMemo(() => {
     const defined = catalog.length;
@@ -109,7 +132,7 @@ export function PreAggMonitorPage() {
   // its duration as height (y), so spikes/clusters of long builds are visible.
   const buildChartData = useMemo(
     () =>
-      buildHistory
+      buildChart
         .filter((r) => r.ts)
         .map((r) => ({
           ts: new Date(r.ts).getTime(),
@@ -117,7 +140,7 @@ export function PreAggMonitorPage() {
           table: r.target_table,
           preAgg: r.pre_aggregation,
         })),
-    [buildHistory]
+    [buildChart]
   );
 
   const catalogColumns = [
@@ -225,7 +248,7 @@ export function PreAggMonitorPage() {
         <Col span={6}><Card><Statistic title="Pre-Agg hit rate" value={hitRate} suffix="%" /></Card></Col>
       </Row>
 
-      <Tabs defaultActiveKey="catalog">
+      <Tabs defaultActiveKey="catalog" onChange={(k) => k === 'build-history' && loadBuilds(1)}>
         <TabPane tab="Catalog" key="catalog">
           <Table
             rowKey={(r: any) => r.id}
@@ -267,11 +290,17 @@ export function PreAggMonitorPage() {
           )}
           <Table
             rowKey={(r: any) => r.id}
-            dataSource={buildHistory}
+            dataSource={builds.rows}
             columns={buildColumns}
             size="small"
-            loading={loading}
-            pagination={{ defaultPageSize: 25, showSizeChanger: true, pageSizeOptions: ["10","15","25","50","100"] }}
+            loading={builds.loading}
+            pagination={{
+              current: builds.page,
+              pageSize: BUILDS_PAGE,
+              total: builds.total,
+              showSizeChanger: false,
+              onChange: (pg: number) => loadBuilds(pg),
+            }}
             onRow={(record) => ({ onClick: () => history.push(`/builds/${record.id}`), style: { cursor: 'pointer' } })}
           />
         </TabPane>
