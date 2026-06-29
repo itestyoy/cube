@@ -499,31 +499,23 @@ export class DevServer {
       const u = match(usage);
       const b = match(buildStats);
       const usageKey = u ? u.pre_aggregation : null;
-      const queries = t && usageKey ? await t.getQueriesForPreAgg(usageKey, windowHours) : [];
+      const queries = t && usageKey ? await t.getQueriesForPreAgg(usageKey, windowHours, 500) : [];
       const allBuilds = t ? await t.getBuildHistory(windowHours, 500) : [];
       const builds = allBuilds.filter((bh: any) =>
         cand.some((c) => c && (normKey(bh.pre_aggregation).includes(c) || normKey(bh.target_table).includes(c))));
 
-      // Field-level usage: count how often each member appears across the
-      // queries this pre-aggregation actually served (its "Used By" set). A
-      // field never requested by any of those queries is dead weight here.
-      // Count member usage across this pre-agg's served queries, canonicalizing
-      // each queried (often view) member to its underlying cube member so it
-      // lines up with the pre-aggregation's cube-based references.
+      // Field-level usage: how many of this pre-aggregation's served queries
+      // reference each member, aggregated in SQL over ALL served queries (not
+      // the truncated "Used By" sample — otherwise fields look "never used"
+      // just because they didn't appear in the first N rows). Canonicalize each
+      // queried (often view) member to its underlying cube member so it lines
+      // up with the pre-aggregation's cube-based references.
       const canonical = await buildAliasMap(req);
+      const rawMemberUsage = t && usageKey ? await t.getMemberUsageForPreAgg(usageKey, windowHours) : {};
       const memberMap: Record<string, number> = {};
-      (queries || []).forEach((qr: any) => {
-        const qq = qr.query || {};
-        const members = [
-          ...(qq.measures || []),
-          ...(qq.dimensions || []),
-          ...(qq.segments || []),
-          ...((qq.timeDimensions || []).map((td: any) => td && td.dimension)),
-        ].filter(Boolean);
-        new Set(members).forEach((m: any) => {
-          const c = canonical(m);
-          memberMap[c] = (memberMap[c] || 0) + 1;
-        });
+      Object.entries(rawMemberUsage).forEach(([m, n]) => {
+        const c = canonical(m);
+        memberMap[c] = (memberMap[c] || 0) + (n as number);
       });
       const usesOf = (m: string) => memberMap[m] || memberMap[canonical(m)] || 0;
       const refs: any = p.references || {};

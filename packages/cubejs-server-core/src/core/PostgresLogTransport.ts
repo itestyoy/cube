@@ -887,6 +887,49 @@ export class PostgresLogTransport {
     return rows;
   }
 
+  /**
+   * Per-member usage across ALL queries this pre-aggregation served in the
+   * window (not the truncated "Used By" sample), so the per-field "never used"
+   * annotation is accurate. Counts distinct queries that referenced each
+   * member (measure / dimension / segment / time-dimension). Returns raw
+   * (possibly view) member names — the caller canonicalizes to cube members.
+   */
+  public async getMemberUsageForPreAgg(key: string, window: number | TimeRange = 24): Promise<Record<string, number>> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return {};
+    }
+    const { from, to } = this.timeBounds(window);
+    const { rows } = await this.pool.query(
+      `WITH served AS (
+         SELECT id, query
+         FROM ${this.schema}.query_log
+         WHERE used_pre_aggregations ? $3
+           AND ts >= $1 AND ts < $2
+           AND jsonb_typeof(query) = 'object'
+       ),
+       members AS (
+         SELECT id, jsonb_array_elements_text(query->'measures')   AS member FROM served WHERE jsonb_typeof(query->'measures')   = 'array'
+         UNION ALL
+         SELECT id, jsonb_array_elements_text(query->'dimensions') AS member FROM served WHERE jsonb_typeof(query->'dimensions') = 'array'
+         UNION ALL
+         SELECT id, jsonb_array_elements_text(query->'segments')   AS member FROM served WHERE jsonb_typeof(query->'segments')   = 'array'
+         UNION ALL
+         SELECT s.id, (td->>'dimension') AS member
+         FROM served s, jsonb_array_elements(s.query->'timeDimensions') td
+         WHERE jsonb_typeof(s.query->'timeDimensions') = 'array'
+       )
+       SELECT member, count(DISTINCT id)::int AS uses
+       FROM members
+       WHERE member IS NOT NULL
+       GROUP BY member`,
+      [from, to, key],
+    );
+    const map: Record<string, number> = {};
+    rows.forEach((r: any) => { map[r.member] = r.uses; });
+    return map;
+  }
+
   // ----- Analytics (Insights) -------------------------------------------
 
   /**
