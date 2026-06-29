@@ -202,8 +202,8 @@ export class DevServer {
       }
       const q = req.query;
       const num = (v: any) => (v != null && v !== '' ? parseInt(String(v), 10) : undefined);
-      const status = q.status === 'error' ? 'error' : q.status === 'success' ? 'success' : undefined;
-      const cache = q.cache === 'preagg' ? 'preagg' : q.cache === 'raw' ? 'raw' : undefined;
+      const status = (q.status === 'error' ? 'error' : q.status === 'success' ? 'success' : undefined) as 'error' | 'success' | undefined;
+      const cache = (q.cache === 'preagg' ? 'preagg' : q.cache === 'raw' ? 'raw' : undefined) as 'preagg' | 'raw' | undefined;
       const filters = {
         order: (q.order === 'top' ? 'top' : 'recent') as 'top' | 'recent',
         status,
