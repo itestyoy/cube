@@ -19,6 +19,13 @@ export function PreAggDetailPage() {
   const [parts, setParts] = useState<any | null>(null);
   const [partsLoading, setPartsLoading] = useState(false);
 
+  // "Used By" is server-paginated (the served-query set can be huge).
+  const USEDBY_PAGE = 25;
+  const [activeTab, setActiveTab] = useState('overview');
+  const [usedBy, setUsedBy] = useState<{ rows: any[]; total: number; page: number; loading: boolean }>(
+    { rows: [], total: 0, page: 1, loading: false }
+  );
+
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -33,12 +40,33 @@ export function PreAggDetailPage() {
     };
   }, [id, latencyPct, range]);
 
+  // (Re)load the Used By page whenever its tab is active and the underlying
+  // data (pre-agg / window) changes — back to page 1.
+  useEffect(() => {
+    if (activeTab === 'used-by' && data && data.preAgg && data.preAgg.usageKey) {
+      loadUsedBy(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, data]);
+
   const loadPartitions = () => {
     if (parts || partsLoading) return;
     setPartsLoading(true);
     getJson(`playground/pre-agg-monitor/preagg-partitions?id=${encodeURIComponent(id)}`)
       .then((r) => setParts(r || { partitions: [] }))
       .finally(() => setPartsLoading(false));
+  };
+
+  const loadUsedBy = (page: number) => {
+    const key = data && data.preAgg && data.preAgg.usageKey;
+    if (!key) {
+      setUsedBy({ rows: [], total: 0, page: 1, loading: false });
+      return;
+    }
+    setUsedBy((s) => ({ ...s, loading: true }));
+    getJson(`playground/pre-agg-monitor/preagg-queries?key=${encodeURIComponent(key)}&${rangeParams(range)}&limit=${USEDBY_PAGE}&offset=${(page - 1) * USEDBY_PAGE}`)
+      .then((r) => setUsedBy({ rows: r.rows || [], total: r.total || 0, page, loading: false }))
+      .catch(() => setUsedBy((s) => ({ ...s, loading: false })));
   };
 
   const partStatusTag = (s: string) => {
@@ -115,7 +143,13 @@ export function PreAggDetailPage() {
             <Col span={6}><Card><Statistic title="Avg build" value={(p.avg_build_ms ?? 0) / 1000} precision={2} suffix="s" /></Card></Col>
           </Row>
 
-          <Tabs defaultActiveKey="overview" onChange={(k) => k === 'partitions' && loadPartitions()}>
+          <Tabs
+            defaultActiveKey="overview"
+            onChange={(k) => {
+              setActiveTab(k);
+              if (k === 'partitions') loadPartitions();
+            }}
+          >
             <TabPane tab="Overview" key="overview">
               <Descriptions bordered size="small" column={2}>
                 <Descriptions.Item label="Id">{p.id}</Descriptions.Item>
@@ -155,13 +189,20 @@ export function PreAggDetailPage() {
               />
             </TabPane>
 
-            <TabPane tab={`Used By (${data.queries.length})`} key="used-by">
+            <TabPane tab={`Used By (${p.hits ?? 0})`} key="used-by">
               <Table
                 rowKey={(r: any) => r.id}
-                dataSource={data.queries}
+                dataSource={usedBy.rows}
                 columns={queryColumns}
                 size="small"
-                pagination={{ defaultPageSize: 15, showSizeChanger: true, pageSizeOptions: ["10","15","25","50","100"] }}
+                loading={usedBy.loading}
+                pagination={{
+                  current: usedBy.page,
+                  pageSize: USEDBY_PAGE,
+                  total: usedBy.total || p.hits || 0,
+                  showSizeChanger: false,
+                  onChange: (pg: number) => loadUsedBy(pg),
+                }}
                 onRow={(record) => ({ onClick: () => history.push(`/query-history/${record.id}`), style: { cursor: 'pointer' } })}
               />
             </TabPane>

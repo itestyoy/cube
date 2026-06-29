@@ -869,7 +869,7 @@ export class PostgresLogTransport {
    * Recent queries that were accelerated by a specific pre-aggregation
    * (matched on the exact key stored in usedPreAggregations).
    */
-  public async getQueriesForPreAgg(key: string, window: number | TimeRange = 24, limit = 100): Promise<any[]> {
+  public async getQueriesForPreAgg(key: string, window: number | TimeRange = 24, limit = 100, offset = 0): Promise<any[]> {
     await this.init();
     if (this.disabled || !this.pool) {
       return [];
@@ -881,10 +881,26 @@ export class PostgresLogTransport {
        WHERE used_pre_aggregations ? $3
          AND ts >= $1 AND ts < $2
        ORDER BY ts DESC
-       LIMIT $4`,
-      [from, to, key, Math.min(limit, 500)],
+       LIMIT $4 OFFSET $5`,
+      [from, to, key, Math.min(limit, 200), Math.max(offset, 0)],
     );
     return rows;
+  }
+
+  /** Total queries this pre-aggregation served in the window (for pagination). */
+  public async countQueriesForPreAgg(key: string, window: number | TimeRange = 24): Promise<number> {
+    await this.init();
+    if (this.disabled || !this.pool) {
+      return 0;
+    }
+    const { from, to } = this.timeBounds(window);
+    const { rows } = await this.pool.query(
+      `SELECT count(*)::int AS n
+       FROM ${this.schema}.query_log
+       WHERE used_pre_aggregations ? $3 AND ts >= $1 AND ts < $2`,
+      [from, to, key],
+    );
+    return rows[0] ? rows[0].n : 0;
   }
 
   /**

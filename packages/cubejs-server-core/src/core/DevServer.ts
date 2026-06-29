@@ -433,10 +433,17 @@ export class DevServer {
       const t = telemetry();
       const key = String(req.query.key || '');
       if (!t || !key) {
-        res.json({ enabled: Boolean(t), rows: [] });
+        res.json({ enabled: Boolean(t), rows: [], total: 0 });
         return;
       }
-      res.json({ enabled: true, rows: await t.getQueriesForPreAgg(key, telemetryWindow(req)) });
+      const w = telemetryWindow(req);
+      const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 25;
+      const offset = req.query.offset ? parseInt(String(req.query.offset), 10) : 0;
+      const [rows, total] = await Promise.all([
+        t.getQueriesForPreAgg(key, w, limit, offset),
+        t.countQueriesForPreAgg(key, w),
+      ]);
+      res.json({ enabled: true, rows, total });
     }));
 
     // Single query log row (Query History detail view).
@@ -499,7 +506,9 @@ export class DevServer {
       const u = match(usage);
       const b = match(buildStats);
       const usageKey = u ? u.pre_aggregation : null;
-      const queries = t && usageKey ? await t.getQueriesForPreAgg(usageKey, windowHours, 500) : [];
+      // The "Used By" list is server-paginated via /preagg-queries; the field
+      // usage below comes from getMemberUsageForPreAgg (full aggregation), so we
+      // no longer ship a bounded queries[] in the detail payload.
       const allBuilds = t ? await t.getBuildHistory(windowHours, 500) : [];
       const builds = allBuilds.filter((bh: any) =>
         cand.some((c) => c && (normKey(bh.pre_aggregation).includes(c) || normKey(bh.target_table).includes(c))));
@@ -562,7 +571,6 @@ export class DevServer {
           max_build_ms: b ? b.max_ms : null,
           last_build: b ? b.last_build : null,
         },
-        queries,
         builds,
       });
     }));
