@@ -3,7 +3,7 @@ import { useHistory } from 'react-router-dom';
 import { Alert, Button, Col, Radio, Row, Switch, Table, Tabs, Tag } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 
-import { ChipList, CodeBlock, DEFAULT_RANGE, MemberTag, PercentilePicker, QueryChips, Range, ShapeChips, cacheTag, fmtMs, fmtTs, getJson, pctLabel, rangeParams } from '../monitoring/common';
+import { ChipList, CodeBlock, MemberTag, PercentilePicker, QueryChips, ShapeChips, cacheTag, fmtMs, fmtTs, getJson, pctLabel, rangeParams, useSharedRange } from '../monitoring/common';
 import { TimeWindow } from '../monitoring/TimeWindow';
 
 const { TabPane } = Tabs;
@@ -47,7 +47,7 @@ function ActionChange({ a }: { a: any }) {
 
 export function InsightsPage() {
   const history = useHistory();
-  const [range, setRange] = useState<Range>(DEFAULT_RANGE);
+  const [range, setRange] = useSharedRange();
   const [loading, setLoading] = useState(true);
   const [enabled, setEnabled] = useState(true);
   const [order, setOrder] = useState<'total' | 'count'>('total');

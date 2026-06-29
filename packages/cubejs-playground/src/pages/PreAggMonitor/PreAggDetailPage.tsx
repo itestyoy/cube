@@ -2,13 +2,15 @@ import { useEffect, useState } from 'react';
 import { useHistory, useParams } from 'react-router-dom';
 import { Card, Col, Descriptions, Empty, PageHeader, Row, Spin, Statistic, Table, Tabs, Tag } from 'antd';
 
-import { CodeBlock, PercentilePicker, QueryChips, fmtMs, fmtTs, getJson, pctLabel, preAggStatusTag } from '../monitoring/common';
+import { CodeBlock, PercentilePicker, QueryChips, fmtMs, fmtTs, getJson, pctLabel, preAggStatusTag, rangeParams, useSharedRange } from '../monitoring/common';
+import { TimeWindow } from '../monitoring/TimeWindow';
 
 const { TabPane } = Tabs;
 
 export function PreAggDetailPage() {
   const { id } = useParams<{ id: string }>();
   const history = useHistory();
+  const [range, setRange] = useSharedRange();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any | null>(null);
   const [latencyPct, setLatencyPct] = useState(0.95);
@@ -21,7 +23,7 @@ export function PreAggDetailPage() {
     let active = true;
     setLoading(true);
     setParts(null);
-    getJson(`playground/pre-agg-monitor/preagg?id=${encodeURIComponent(id)}&percentile=${latencyPct}`)
+    getJson(`playground/pre-agg-monitor/preagg?id=${encodeURIComponent(id)}&percentile=${latencyPct}&${rangeParams(range)}`)
       .then((r) => {
         if (active) setData(r && r.found ? r : null);
       })
@@ -29,7 +31,7 @@ export function PreAggDetailPage() {
     return () => {
       active = false;
     };
-  }, [id, latencyPct]);
+  }, [id, latencyPct, range]);
 
   const loadPartitions = () => {
     if (parts || partsLoading) return;
@@ -92,7 +94,10 @@ export function PreAggDetailPage() {
         title={p ? p.cube : 'Pre-Aggregation'}
         subTitle={p ? p.name : id}
         tags={p ? (preAggStatusTag(p) ?? undefined) : undefined}
-        extra={<PercentilePicker key="pct" value={latencyPct} onChange={setLatencyPct} />}
+        extra={[
+          <PercentilePicker key="pct" value={latencyPct} onChange={setLatencyPct} />,
+          <TimeWindow key="tw" value={range} onChange={setRange} />,
+        ]}
       />
 
       {loading ? (

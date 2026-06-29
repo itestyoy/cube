@@ -15,7 +15,7 @@ import {
   YAxis,
 } from 'recharts';
 
-import { CodeBlock, DEFAULT_RANGE, PercentilePicker, QueryChips, Range, cacheTag, fmtMs, fmtTs, getJson, pctLabel, postJson, rangeParams } from '../monitoring/common';
+import { CodeBlock, PercentilePicker, QueryChips, cacheTag, fmtMs, fmtTs, getJson, pctLabel, postJson, rangeParams, useSharedRange } from '../monitoring/common';
 import { TimeWindow } from '../monitoring/TimeWindow';
 
 const fmtBucket = (v: string) => {
@@ -38,7 +38,7 @@ export function QueryHistoryPage() {
   const [queueRows, setQueueRows] = useState<any[]>([]);
   const [queueLoading, setQueueLoading] = useState(false);
 
-  const [range, setRange] = useState<Range>(DEFAULT_RANGE);
+  const [range, setRange] = useSharedRange();
   const [latencyPct, setLatencyPct] = useState(0.95);
   const [order, setOrder] = useState<'recent' | 'top'>('recent');
   const [status, setStatus] = useState<string | undefined>(undefined);

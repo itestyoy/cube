@@ -39,6 +39,34 @@ export type Range = { windowHours?: number; from?: string; to?: string; label: s
 
 export const DEFAULT_RANGE: Range = { windowHours: 24, label: 'Last 24 hours' };
 
+/**
+ * Analytics time range shared across every monitoring page and persisted to
+ * localStorage, so picking a range on one page carries to the others (and
+ * survives a reload) instead of resetting to the default.
+ */
+const RANGE_STORAGE_KEY = 'cubePlaygroundMonitoringRange';
+
+export function useSharedRange(): [Range, (r: Range) => void] {
+  const [range, setRangeState] = useState<Range>(() => {
+    try {
+      const saved = localStorage.getItem(RANGE_STORAGE_KEY);
+      if (saved) return JSON.parse(saved) as Range;
+    } catch (e) {
+      /* ignore unavailable/corrupt storage */
+    }
+    return DEFAULT_RANGE;
+  });
+  const setRange = (r: Range) => {
+    setRangeState(r);
+    try {
+      localStorage.setItem(RANGE_STORAGE_KEY, JSON.stringify(r));
+    } catch (e) {
+      /* ignore */
+    }
+  };
+  return [range, setRange];
+}
+
 /** Build the query string a range maps to for the monitoring endpoints. */
 export function rangeParams(r: Range): string {
   if (r.from && r.to) {

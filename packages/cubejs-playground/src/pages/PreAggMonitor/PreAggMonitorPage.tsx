@@ -12,7 +12,7 @@ import {
   YAxis,
 } from 'recharts';
 
-import { DEFAULT_RANGE, PercentilePicker, Range, fmtMs, fmtTs, getJson, pctLabel, preAggStatusTag, rangeParams } from '../monitoring/common';
+import { PercentilePicker, Range, fmtMs, fmtTs, getJson, pctLabel, preAggStatusTag, rangeParams, useSharedRange } from '../monitoring/common';
 import { TimeWindow } from '../monitoring/TimeWindow';
 
 // Short axis label for a build start time.
@@ -46,7 +46,7 @@ type Summary = {
 
 export function PreAggMonitorPage() {
   const history = useHistory();
-  const [range, setRange] = useState<Range>(DEFAULT_RANGE);
+  const [range, setRange] = useSharedRange();
   const [latencyPct, setLatencyPct] = useState(0.95);
   const [loading, setLoading] = useState<boolean>(true);
   const [enabled, setEnabled] = useState<boolean>(true);
