@@ -63,7 +63,7 @@ export type Thresholds = {
 };
 
 export type Action = {
-  type: 'create' | 'edit' | 'fix' | 'drop';
+  type: 'create' | 'edit' | 'fix' | 'drop' | 'reorder';
   rollup?: string;
   cube?: string;
   proposedName?: string;
@@ -71,6 +71,9 @@ export type Action = {
   remove?: { member: string; kind: string; uses: number }[];
   granularity?: string | null;
   reason?: string;
+  /** reorder: id/name of the larger rollup this one should be moved before. */
+  reorderBefore?: string;
+  reorderBeforeName?: string;
   benefitMs: number;
   executions: number;
   shapesCovered: number;
@@ -398,6 +401,53 @@ export function buildRecommendations(input: EngineInput): EngineOutput {
       detail: r.buildCount > 0
         ? `Built ${r.buildCount}× but never used in this window — costs build time/storage for nothing.`
         : 'No usage and no builds in this window.',
+    });
+  });
+
+  // ---- REORDER: Cube uses the FIRST covering rollup in declaration order ----
+  // If a smaller rollup that also covers the query is declared later, Cube
+  // scans a bigger rollup than necessary. Recommend moving the smaller one
+  // earlier. Only for shapes Cube already accelerates (hitRate > 0).
+  const rollupSize = (r: RollupDef) => r.dimensions.size + r.measures.size;
+  const orderIndex = new Map(rollups.map((r, i) => [r.id, i] as const));
+  const reorderMap = new Map<string, { used: RollupDef; smaller: RollupDef; benefitMs: number; executions: number; shapes: number; sampleHash: string }>();
+  for (const s of shapes) {
+    if (s.hitRate <= 0) continue;
+    const servers = rollups.filter((r) => serves(r, s.shape, canonical, additive).ok);
+    if (servers.length < 2) continue;
+    // What Cube picks today: earliest in declaration order.
+    const used = servers.reduce((a, b) => ((orderIndex.get(b.id) ?? 0) < (orderIndex.get(a.id) ?? 0) ? b : a));
+    // Smallest covering rollup (fewest members), tie-break earliest.
+    const smaller = servers.reduce((a, b) => {
+      const d = rollupSize(b) - rollupSize(a);
+      return d < 0 || (d === 0 && (orderIndex.get(b.id) ?? 0) < (orderIndex.get(a.id) ?? 0)) ? b : a;
+    });
+    if (smaller.id === used.id) continue;
+    if (rollupSize(smaller) >= rollupSize(used)) continue;
+    if (used.cube !== smaller.cube) continue; // declaration order is per-cube
+    const key = `${used.id}>>${smaller.id}`;
+    const acc = reorderMap.get(key) || { used, smaller, benefitMs: 0, executions: 0, shapes: 0, sampleHash: s.queryHash };
+    acc.benefitMs += s.totalMs;
+    acc.executions += s.executions;
+    acc.shapes += 1;
+    reorderMap.set(key, acc);
+  }
+  reorderMap.forEach((v) => {
+    const confidence = confidenceOf(v.executions, confidenceAt);
+    actions.push({
+      type: 'reorder',
+      rollup: v.smaller.id,
+      cube: v.smaller.cube,
+      reorderBefore: v.used.id,
+      reorderBeforeName: v.used.name,
+      benefitMs: v.benefitMs,
+      executions: v.executions,
+      shapesCovered: v.shapes,
+      confidence,
+      score: v.benefitMs * confidence,
+      cost: null,
+      detail: `Cube uses the larger ${v.used.name} (${rollupSize(v.used)} members) for ${v.shapes} query shape(s) that the smaller ${v.smaller.name} (${rollupSize(v.smaller)} members) also covers — because it's declared earlier. Move ${v.smaller.name} before ${v.used.name} so Cube picks the cheaper rollup.`,
+      sampleHash: v.sampleHash,
     });
   });
 

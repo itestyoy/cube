@@ -27,11 +27,15 @@ const ACTION_META: Record<string, { color: string; label: string }> = {
   edit: { color: 'blue', label: 'Edit rollup' },
   fix: { color: 'orange', label: 'Fix rollup' },
   drop: { color: 'red', label: 'Drop rollup' },
+  reorder: { color: 'purple', label: 'Reorder' },
 };
 
 // The member diff an action proposes: +added (green/blue) and −removed (red),
 // all expandable via the shared ChipList so long diffs don't flood the row.
 function ActionChange({ a }: { a: any }) {
+  if (a.type === 'reorder') {
+    return <Tag color="purple">↑ before {shortName(a.reorderBeforeName || a.reorderBefore || '')}</Tag>;
+  }
   const chips: any[] = [];
   (a.add || []).forEach((m: any) =>
     chips.push(<MemberTag key={`+${m.member}`} member={`+ ${m.member}`} color={m.kind === 'measure' ? 'green' : 'blue'} />));
@@ -55,7 +59,7 @@ export function InsightsPage() {
   // percentile of member usage.
   const [recPct, setRecPct] = useState(0.9);
   const [rarityPct, setRarityPct] = useState(0.1);
-  const [actionType, setActionType] = useState<'all' | 'create' | 'edit' | 'fix' | 'drop'>('all');
+  const [actionType, setActionType] = useState<'all' | 'create' | 'edit' | 'fix' | 'drop' | 'reorder'>('all');
 
   const [top, setTop] = useState<any[]>([]);
   const [actions, setActions] = useState<any[]>([]);
@@ -293,7 +297,7 @@ export function InsightsPage() {
     [actions, actionType]
   );
   const actionCounts = useMemo(() => {
-    const c: Record<string, number> = { create: 0, edit: 0, fix: 0, drop: 0 };
+    const c: Record<string, number> = { create: 0, edit: 0, fix: 0, drop: 0, reorder: 0 };
     actions.forEach((a) => { c[a.type] = (c[a.type] || 0) + 1; });
     return c;
   }, [actions]);
@@ -380,7 +384,7 @@ export function InsightsPage() {
             showIcon
             style={{ marginBottom: 12 }}
             message="Action Center"
-            description="One ranked list of pre-aggregation actions: create a rollup for slow uncovered queries, edit a rollup (add the fields it's missing, drop rarely-used ones), fix a rollup that covers a query but doesn't accelerate it, or drop an unused rollup. Granularity- and additivity-aware. Ranked by benefit (data-source time addressed) × confidence (how often the query runs). Expand a row for the reason and the queries behind it."
+            description="One ranked list of pre-aggregation actions: create a rollup for slow uncovered queries, edit a rollup (add the fields it's missing, drop rarely-used ones), fix a rollup that covers a query but doesn't accelerate it, reorder a smaller rollup ahead of a larger one (Cube uses the first matching rollup in declaration order), or drop an unused rollup. Granularity- and additivity-aware. Ranked by benefit (data-source time addressed) × confidence (how often the query runs). Expand a row for the reason and the queries behind it."
           />
           <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
             <span style={{ color: '#888' }}>Slowness ≥</span>
@@ -407,6 +411,7 @@ export function InsightsPage() {
               <Radio.Button value="create">New ({actionCounts.create})</Radio.Button>
               <Radio.Button value="edit">Edit ({actionCounts.edit})</Radio.Button>
               <Radio.Button value="fix">Fix ({actionCounts.fix})</Radio.Button>
+              <Radio.Button value="reorder">Reorder ({actionCounts.reorder})</Radio.Button>
               <Radio.Button value="drop">Drop ({actionCounts.drop})</Radio.Button>
             </Radio.Group>
           </div>
