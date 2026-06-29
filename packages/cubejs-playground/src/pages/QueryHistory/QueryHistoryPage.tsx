@@ -15,7 +15,7 @@ import {
   YAxis,
 } from 'recharts';
 
-import { DEFAULT_RANGE, PercentilePicker, QueryChips, Range, cacheTag, fmtMs, fmtTs, getJson, pctLabel, rangeParams } from '../monitoring/common';
+import { CodeBlock, DEFAULT_RANGE, PercentilePicker, QueryChips, Range, cacheTag, fmtMs, fmtTs, getJson, pctLabel, rangeParams } from '../monitoring/common';
 import { TimeWindow } from '../monitoring/TimeWindow';
 
 const fmtBucket = (v: string) => {
@@ -250,6 +250,20 @@ export function QueryHistoryPage() {
             loading={queueLoading}
             locale={{ emptyText: 'Queue is empty.' }}
             pagination={{ defaultPageSize: 25, showSizeChanger: true }}
+            expandable={{
+              expandedRowRender: (r: any) => {
+                const q = r.query || {};
+                const sql = q.sql || (Array.isArray(q) ? null : q.query);
+                return (
+                  <>
+                    {typeof sql === 'string'
+                      ? <CodeBlock code={sql} language="sql" />
+                      : <CodeBlock code={JSON.stringify(q, null, 2)} language="json" />}
+                    {r.requestId ? <div style={{ color: '#888', marginTop: 8 }}>requestId: {r.requestId}</div> : null}
+                  </>
+                );
+              },
+            }}
           />
         </TabPane>
       </Tabs>
