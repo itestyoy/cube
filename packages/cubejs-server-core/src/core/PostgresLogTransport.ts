@@ -683,7 +683,7 @@ export class PostgresLogTransport {
        FROM ${this.schema}.query_log
        ORDER BY ts DESC
        LIMIT $1`,
-      [Math.min(limit, 1000)],
+      [Math.min(limit, 5000)],
     );
     return rows;
   }
@@ -1017,7 +1017,7 @@ export class PostgresLogTransport {
        GROUP BY query_hash
        ORDER BY ${order}
        LIMIT $3`,
-      [from, to, Math.min(limit, 500), p],
+      [from, to, Math.min(limit, 5000), p],
     );
     return rows;
   }
@@ -1068,7 +1068,7 @@ export class PostgresLogTransport {
        HAVING avg(duration_ms) >= (SELECT v FROM thresh)
        ORDER BY total_ms DESC
        LIMIT $4`,
-      [from, to, p, Math.min(limit, 500)],
+      [from, to, p, Math.min(limit, 5000)],
     );
     return { thresholdMs: rows[0] ? rows[0].threshold_ms : 0, percentile: p, rows };
   }
@@ -1095,7 +1095,7 @@ export class PostgresLogTransport {
        GROUP BY error
        ORDER BY count DESC
        LIMIT $3`,
-      [from, to, Math.min(limit, 500)],
+      [from, to, Math.min(limit, 5000)],
     );
     return rows;
   }
@@ -1185,7 +1185,7 @@ export class PostgresLogTransport {
          AND ts >= $1 AND ts < $2
        ORDER BY ts DESC
        LIMIT $4`,
-      [from, to, hash, Math.min(limit, 500)],
+      [from, to, hash, Math.min(limit, 5000)],
     );
     return rows;
   }
@@ -1207,7 +1207,7 @@ export class PostgresLogTransport {
          AND ts >= $1 AND ts < $2
        ORDER BY ts DESC
        LIMIT $4`,
-      [from, to, error, Math.min(limit, 1000)],
+      [from, to, error, Math.min(limit, 5000)],
     );
     return rows;
   }

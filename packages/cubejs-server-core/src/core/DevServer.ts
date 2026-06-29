@@ -696,7 +696,7 @@ export class DevServer {
     app.get('/playground/insights/top-queries', catchErrors(async (req, res) => {
       const t = telemetry();
       const order = req.query.order === 'count' ? 'count' : 'total';
-      res.json({ enabled: Boolean(t), rows: t ? await t.getTopQueries(telemetryWindow(req), order, 100, telemetryPercentile(req)) : [] });
+      res.json({ enabled: Boolean(t), rows: t ? await t.getTopQueries(telemetryWindow(req), order, 2000, telemetryPercentile(req)) : [] });
     }));
 
     // Unified recommendation engine (Action Center): turns the workload + the
@@ -780,7 +780,7 @@ export class DevServer {
 
     app.get('/playground/insights/errors', catchErrors(async (req, res) => {
       const t = telemetry();
-      res.json({ enabled: Boolean(t), rows: t ? await t.getErrorStats(telemetryWindow(req)) : [] });
+      res.json({ enabled: Boolean(t), rows: t ? await t.getErrorStats(telemetryWindow(req), 2000) : [] });
     }));
 
     app.get('/playground/insights/model-usage', catchErrors(async (req, res) => {
@@ -862,13 +862,13 @@ export class DevServer {
     app.get('/playground/insights/hash-queries', catchErrors(async (req, res) => {
       const t = telemetry();
       const hash = String(req.query.hash || '');
-      res.json({ enabled: Boolean(t), rows: t && hash ? await t.getQueriesForHash(hash, telemetryWindow(req)) : [] });
+      res.json({ enabled: Boolean(t), rows: t && hash ? await t.getQueriesForHash(hash, telemetryWindow(req), 2000) : [] });
     }));
 
     app.get('/playground/insights/error-queries', catchErrors(async (req, res) => {
       const t = telemetry();
       const error = String(req.query.error || '');
-      res.json({ enabled: Boolean(t), rows: t && error ? await t.getQueriesForError(error, telemetryWindow(req)) : [] });
+      res.json({ enabled: Boolean(t), rows: t && error ? await t.getQueriesForError(error, telemetryWindow(req), 2000) : [] });
     }));
 
     // Time-bucketed series for the Query History charts.
