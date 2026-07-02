@@ -535,6 +535,7 @@ export class PreAggregationLoader {
         {
           streamOffset: this.preAggregation.streamOffset,
           outputColumnTypes: this.preAggregation.outputColumnTypes,
+          clusteredBy: this.preAggregation.clusteredBy,
           ...queryOptions
         }
       ));

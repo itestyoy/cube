@@ -508,6 +508,109 @@ describe('pre-aggregations', () => {
     expect(createTableIndexes[0].columns).toContain('"orders__status"');
   });
 
+  it('pre-aggregation with clustered_by description', async () => {
+    const { compiler, cubeEvaluator, joinGraph } = prepareJsCompiler(
+      `
+        cube('Orders', {
+          sql: \`SELECT * FROM orders\`,
+
+          measures: {
+            count: {
+              type: 'count',
+            },
+          },
+
+          dimensions: {
+            created_at: {
+              sql: \`created_at\`,
+              type: 'time',
+            },
+            status: {
+              sql: \`status\`,
+              type: 'string',
+            },
+            app_name: {
+              sql: \`app_name\`,
+              type: 'string',
+            },
+          },
+
+          preAggregations: {
+            ordersByDay: {
+              measures: (CUBE) => [CUBE.count],
+              dimensions: (CUBE) => [CUBE.status, CUBE.app_name],
+              timeDimension: (CUBE) => CUBE.created_at,
+              granularity: 'day',
+              clustered_by: (CUBE) => [CUBE.app_name, CUBE.status],
+            },
+          },
+        });
+
+        cube('OrdersPlain', {
+          sql: \`SELECT * FROM orders\`,
+
+          measures: {
+            count: {
+              type: 'count',
+            },
+          },
+
+          dimensions: {
+            created_at: {
+              sql: \`created_at\`,
+              type: 'time',
+            },
+          },
+
+          preAggregations: {
+            ordersByDayPlain: {
+              measures: (CUBE) => [CUBE.count],
+              timeDimension: (CUBE) => CUBE.created_at,
+              granularity: 'day',
+            },
+          },
+        });
+      `
+    );
+
+    await compiler.compile();
+
+    const query = new PostgresQuery({ joinGraph, cubeEvaluator, compiler }, {
+      measures: ['Orders.count'],
+      timeDimensions: [{
+        dimension: 'Orders.created_at',
+        granularity: 'day',
+        dateRange: ['2023-01-01', '2023-01-10']
+      }],
+      dimensions: ['Orders.status', 'Orders.app_name']
+    });
+
+    const preAggregationsDescription: any = query.preAggregations?.preAggregationsDescription();
+    expect(preAggregationsDescription.length).toBeGreaterThan(0);
+    expect(preAggregationsDescription[0].preAggregationId).toEqual('Orders.ordersByDay');
+
+    // Member references are resolved to physical (unescaped) rollup column
+    // names, preserving the order they were declared in.
+    expect(preAggregationsDescription[0].clusteredBy).toEqual([
+      'orders__app_name',
+      'orders__status',
+    ]);
+
+    const plainQuery = new PostgresQuery({ joinGraph, cubeEvaluator, compiler }, {
+      measures: ['OrdersPlain.count'],
+      timeDimensions: [{
+        dimension: 'OrdersPlain.created_at',
+        granularity: 'day',
+        dateRange: ['2023-01-01', '2023-01-10']
+      }]
+    });
+
+    const plainDescription: any = plainQuery.preAggregations?.preAggregationsDescription();
+    const plain = plainDescription.find((p: any) => p.preAggregationId === 'OrdersPlain.ordersByDayPlain');
+    expect(plain).toBeDefined();
+    expect(plain.clusteredBy).toBeUndefined();
+  });
+
   it('pre-aggregation with FILTER_PARAMS', async () => {
     const { compiler, cubeEvaluator, joinGraph } = prepareYamlCompiler(
       createSchemaYaml({

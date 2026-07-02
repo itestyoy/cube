@@ -63,6 +63,9 @@ interface BigQueryDriverOptions extends BigQueryOptions {
 type BigQueryDriverOptionsInitialized =
   Required<BigQueryDriverOptions, 'pollTimeout' | 'pollMaxInterval'>;
 
+// BigQuery allows at most 4 clustering columns per table
+const BQ_MAX_CLUSTERING_FIELDS = 4;
+
 // BigQuery type mappings for types not in the base DbTypeToGenericType
 const BigQueryToGenericType: Record<string, string> = {
   bignumeric: 'decimal',
@@ -422,6 +425,18 @@ export class BigQueryDriver extends BaseDriver implements DriverInterface {
       createDisposition: 'CREATE_IF_NEEDED',
       useLegacySql: false
     };
+
+    const clusteredBy: string[] | undefined = options?.clusteredBy;
+    if (clusteredBy && clusteredBy.length > 0) {
+      if (clusteredBy.length > BQ_MAX_CLUSTERING_FIELDS) {
+        throw new Error(
+          `BigQuery supports at most ${BQ_MAX_CLUSTERING_FIELDS} clustering fields, ` +
+          `but \`clustered_by\` for pre-aggregation table ${preAggregationTableName} ` +
+          `contains ${clusteredBy.length}: ${clusteredBy.join(', ')}`
+        );
+      }
+      bigQueryQuery.clustering = { fields: clusteredBy };
+    }
 
     return this.runQueryJob(bigQueryQuery, options, false);
   }

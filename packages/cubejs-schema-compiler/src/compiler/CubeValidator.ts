@@ -612,6 +612,9 @@ const BasePreAggregationWithoutPartitionGranularity = {
   },
   readOnly: Joi.boolean().strict(),
   streamOffset: Joi.any().valid('earliest', 'latest'),
+  // Member references resolved to physical rollup columns; used by drivers
+  // that support clustered tables (e.g. BigQuery). Ignored by other drivers.
+  clusteredBy: Joi.func(),
   outputColumnTypes: Joi.array().items(Joi.object().keys({
     member: Joi.func().required(),
     type: Joi.string().required()

@@ -6721,7 +6721,19 @@ export class BaseQuery {
   }
 
   evaluateIndexColumns(cube, index) {
-    const columns = this.cubeEvaluator.evaluateReferences(cube, index.columns, { originalSorting: true });
+    return this.evaluateColumnsAsPhysical(cube, index.columns).map(c => this.escapeColumnName(c));
+  }
+
+  /**
+   * Resolves member references (e.g. `CUBE.app_name` or `'app_name'`) to
+   * physical pre-aggregation column names (e.g. `query__app_name`) without
+   * escaping them.
+   * @param {string} cube
+   * @param {Function|Array<string>} columnsRef
+   * @returns {Array<string>}
+   */
+  evaluateColumnsAsPhysical(cube, columnsRef) {
+    const columns = this.cubeEvaluator.evaluateReferences(cube, columnsRef, { originalSorting: true });
     return columns.map(column => {
       const path = column.split('.');
       if (path[0] &&
@@ -6747,7 +6759,19 @@ export class BaseQuery {
       } else {
         return column;
       }
-    }).map(c => this.escapeColumnName(c));
+    });
+  }
+
+  /**
+   * Resolves `clusteredBy` member references of a pre-aggregation to physical
+   * (unescaped) rollup column names. Used by drivers that support clustered
+   * tables (e.g. BigQuery); other drivers ignore the result.
+   * @param {string} cube
+   * @param {Object} preAggregation
+   * @returns {Array<string>}
+   */
+  evaluateClusteredByColumns(cube, preAggregation) {
+    return this.evaluateColumnsAsPhysical(cube, preAggregation.clusteredBy);
   }
 
   createIndexSql(indexName, tableName, escapedColumns) {

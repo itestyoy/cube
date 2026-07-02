@@ -79,6 +79,7 @@ type BasePreAggregationDefinition = {
   indexes?: Record<string, any>;
   refreshKey?: CubeRefreshKey;
   ownedByCube?: boolean;
+  clusteredBy?: (...args: any[]) => ToString[];
 };
 
 export type PreAggregationDefinitionOriginalSql = BasePreAggregationDefinition & {

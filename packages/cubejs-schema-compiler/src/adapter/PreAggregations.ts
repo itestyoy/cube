@@ -439,6 +439,9 @@ export class PreAggregations {
             };
           }
         ),
+      clusteredBy: preAggregation.clusteredBy
+        ? queryForSqlEvaluation.evaluateClusteredByColumns(cube, preAggregation)
+        : undefined,
       readOnly: preAggregation.readOnly || queryForSqlEvaluation.preAggregationReadOnly(cube, preAggregation),
       streamOffset: preAggregation.streamOffset,
       unionWithSourceData: preAggregation.unionWithSourceData,
