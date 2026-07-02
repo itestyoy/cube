@@ -615,6 +615,10 @@ const BasePreAggregationWithoutPartitionGranularity = {
   // Member references resolved to physical rollup columns; used by drivers
   // that support clustered tables (e.g. BigQuery). Ignored by other drivers.
   clusteredBy: Joi.func(),
+  // Single member reference resolved to a physical rollup column; used by
+  // drivers that support natively partitioned tables (e.g. BigQuery time
+  // partitioning). Ignored by other drivers.
+  partitionedBy: Joi.func(),
   outputColumnTypes: Joi.array().items(Joi.object().keys({
     member: Joi.func().required(),
     type: Joi.string().required()

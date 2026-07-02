@@ -80,6 +80,7 @@ type BasePreAggregationDefinition = {
   refreshKey?: CubeRefreshKey;
   ownedByCube?: boolean;
   clusteredBy?: (...args: any[]) => ToString[];
+  partitionedBy?: (...args: any[]) => ToString[];
 };
 
 export type PreAggregationDefinitionOriginalSql = BasePreAggregationDefinition & {

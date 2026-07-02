@@ -85,6 +85,9 @@ export function getStructureVersion(preAggregation) {
   if (preAggregation.clusteredBy?.length) {
     versionArray.push(preAggregation.clusteredBy);
   }
+  if (preAggregation.partitionedBy) {
+    versionArray.push(preAggregation.partitionedBy);
+  }
 
   return version(versionArray.length === 1 ? versionArray[0] : versionArray);
 }
@@ -197,6 +200,10 @@ export type PreAggregationDescription = {
   // Physical rollup column names to cluster the pre-aggregation table by.
   // Only honored by drivers that support clustered tables (e.g. BigQuery).
   clusteredBy?: string[];
+  // Physical rollup column name to natively partition the pre-aggregation
+  // table by. Only honored by drivers that support partitioned tables
+  // (e.g. BigQuery time partitioning).
+  partitionedBy?: string;
   rollupLambdaId?: string;
   lastRollupLambda?: boolean;
   usageMapping?: Record<string, { dateRange?: QueryDateRange }>;

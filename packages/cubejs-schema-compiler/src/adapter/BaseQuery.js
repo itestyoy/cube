@@ -6774,6 +6774,26 @@ export class BaseQuery {
     return this.evaluateColumnsAsPhysical(cube, preAggregation.clusteredBy);
   }
 
+  /**
+   * Resolves the `partitionedBy` member reference of a pre-aggregation to a
+   * single physical (unescaped) rollup column name. Used by drivers that
+   * support natively partitioned tables (e.g. BigQuery time partitioning);
+   * other drivers ignore the result. Throws if more than one column is
+   * referenced.
+   * @param {string} cube
+   * @param {Object} preAggregation
+   * @returns {string|undefined}
+   */
+  evaluatePartitionedByColumn(cube, preAggregation) {
+    const columns = this.evaluateColumnsAsPhysical(cube, preAggregation.partitionedBy);
+    if (columns.length > 1) {
+      throw new UserError(
+        `'partitioned_by' must reference exactly one column, but ${columns.length} were provided: ${columns.join(', ')}`
+      );
+    }
+    return columns[0];
+  }
+
   createIndexSql(indexName, tableName, escapedColumns) {
     return `CREATE INDEX ${indexName} ON ${tableName} (${escapedColumns.join(', ')})`;
   }

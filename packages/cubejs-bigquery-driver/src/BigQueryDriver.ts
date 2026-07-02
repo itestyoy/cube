@@ -438,6 +438,14 @@ export class BigQueryDriver extends BaseDriver implements DriverInterface {
       bigQueryQuery.clustering = { fields: clusteredBy };
     }
 
+    const partitionedBy: string | undefined = options?.partitionedBy;
+    if (partitionedBy) {
+      bigQueryQuery.timePartitioning = {
+        type: 'DAY',
+        field: partitionedBy,
+      };
+    }
+
     return this.runQueryJob(bigQueryQuery, options, false);
   }
 
